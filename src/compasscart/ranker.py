@@ -64,7 +64,14 @@ class ConstraintRanker:
         scored.sort(key=lambda item: (-item.score, item.parent_asin))
         limit = len(scored) if top_k is None else min(max(top_k, 0), len(scored))
         if state.route == "browsing" and limit:
-            return self._mmr(scored, limit)
+            diversity_limit = min(limit, 10)
+            diverse = self._mmr(scored, diversity_limit)
+            if top_k is not None:
+                return diverse
+            selected = {item.parent_asin for item in diverse}
+            return diverse + [
+                item for item in scored if item.parent_asin not in selected
+            ]
         return scored[:limit]
 
     def _coverage(self, identifier: str, constraints: list[Constraint]) -> float:

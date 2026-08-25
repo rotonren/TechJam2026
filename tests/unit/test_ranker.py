@@ -57,3 +57,24 @@ def test_browsing_mmr_adds_category_diversity(fixture_catalog_path):
         len({index.attributes[item.parent_asin]["category"][-1] for item in ranked})
         == 3
     )
+
+
+def test_browsing_only_applies_mmr_to_final_top10(fixture_catalog_path):
+    class CountingRanker(ConstraintRanker):
+        calls = 0
+
+        def _similarity(self, left: str, right: str) -> float:
+            self.calls += 1
+            return super()._similarity(left, right)
+
+    index = CatalogIndex(fixture_catalog_path)
+    candidates = [
+        Candidate(parent_asin=f"FAKE{position:02d}", score=40.0 - position)
+        for position in range(40)
+    ]
+    ranker = CountingRanker(index)
+
+    ranked = ranker.rank(candidates, SessionState("s1", route="browsing"))
+
+    assert len(ranked) == 40
+    assert ranker.calls < 2_000

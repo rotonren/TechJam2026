@@ -36,6 +36,9 @@ class SessionStore:
         self._trim()
         return state
 
+    def get(self, session_id: str) -> SessionState | None:
+        return self._sessions.get(session_id)
+
     def update(
         self,
         session_id: str,
