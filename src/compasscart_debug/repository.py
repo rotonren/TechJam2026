@@ -800,10 +800,13 @@ def _user_objects(connection: sqlite3.Connection) -> dict[str, tuple[str, str]]:
     rows = connection.execute(
         """
         SELECT type, name, sql FROM sqlite_master
-        WHERE name NOT LIKE 'sqlite_%'
         """
     ).fetchall()
-    return {str(row["name"]): (str(row["type"]), str(row["sql"] or "")) for row in rows}
+    return {
+        str(row["name"]): (str(row["type"]), str(row["sql"] or ""))
+        for row in rows
+        if not str(row["name"]).lower().startswith("sqlite_")
+    }
 
 
 def _validate_existing_v1(connection: sqlite3.Connection) -> int:
@@ -1031,15 +1034,9 @@ def _sql_keywords(sql: str) -> Iterator[str]:
         if quote_end is not None:
             index = quote_end
             continue
-        if sql.startswith("--", index):
-            line_end = sql.find("\n", index + 2)
-            index = len(sql) if line_end == -1 else line_end + 1
-            continue
-        if sql.startswith("/*", index):
-            comment_end = sql.find("*/", index + 2)
-            if comment_end == -1:
-                raise RepositoryVersionError("The database schema is incompatible.")
-            index = comment_end + 2
+        comment_end = _skip_sql_comment(sql, index)
+        if comment_end is not None:
+            index = comment_end
             continue
         if not _is_sql_identifier_character(sql[index]):
             index += 1
@@ -1051,7 +1048,36 @@ def _sql_keywords(sql: str) -> Iterator[str]:
 
 
 def _normalize_sql(value: str) -> str:
-    return "".join(value.lower().split())
+    normalized: list[str] = []
+    index = 0
+    while index < len(value):
+        quote_end = _skip_sql_quote(value, index)
+        if quote_end is not None:
+            normalized.append(value[index:quote_end])
+            index = quote_end
+            continue
+        comment_end = _skip_sql_comment(value, index)
+        if comment_end is not None:
+            index = comment_end
+            continue
+        if value[index].isspace():
+            index += 1
+            continue
+        normalized.append(value[index].lower())
+        index += 1
+    return "".join(normalized)
+
+
+def _skip_sql_comment(sql: str, index: int) -> int | None:
+    if sql.startswith("--", index):
+        line_end = sql.find("\n", index + 2)
+        return len(sql) if line_end == -1 else line_end + 1
+    if not sql.startswith("/*", index):
+        return None
+    comment_end = sql.find("*/", index + 2)
+    if comment_end == -1:
+        raise RepositoryVersionError("The database schema is incompatible.")
+    return comment_end + 2
 
 
 def _normalize_default(value: object) -> str | None:

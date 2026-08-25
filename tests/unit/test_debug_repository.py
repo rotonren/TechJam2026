@@ -343,6 +343,9 @@ def _replace_turns_table(
     connection: sqlite3.Connection,
     *,
     request_id_declaration: str = "request_id TEXT NOT NULL",
+    status_declaration: str = (
+        "status TEXT NOT NULL CHECK (status IN ('pending','completed','failed'))"
+    ),
     unique_constraint: str = "UNIQUE (session_id,request_id)",
     extra_constraint: str = "",
 ) -> None:
@@ -352,7 +355,7 @@ def _replace_turns_table(
         f"""
         CREATE TABLE turns (
             session_id TEXT NOT NULL, turn INTEGER NOT NULL CHECK (turn BETWEEN 1 AND 10),
-            {request_id_declaration}, status TEXT NOT NULL CHECK (status IN ('pending','completed','failed')),
+            {request_id_declaration}, {status_declaration},
             user_message TEXT NOT NULL, response_json TEXT, products_json TEXT,
             state_json TEXT, trace_json TEXT, error_json TEXT,
             created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
@@ -362,6 +365,88 @@ def _replace_turns_table(
         )
         """
     )
+
+
+def test_initialize_rejects_changed_turn_status_check_literal_case(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "uppercase-status-check.sqlite3"
+    repository = _repository(path)
+    repository.initialize()
+    connection = _raw_connection(path)
+    try:
+        _replace_turns_table(
+            connection,
+            status_declaration=(
+                "status TEXT NOT NULL CHECK "
+                "(status IN ('PENDING','COMPLETED','FAILED'))"
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    before = _database_dump(path)
+
+    with pytest.raises(_repository_module().RepositoryVersionError):
+        _repository(path).initialize()
+
+    assert _database_dump(path) == before
+    assert _repository(path).health() is False
+
+
+def test_initialize_accepts_commented_spacing_only_turn_status_check(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "commented-status-check.sqlite3"
+    repository = _repository(path)
+    repository.initialize()
+    connection = _raw_connection(path)
+    try:
+        _replace_turns_table(
+            connection,
+            status_declaration="""
+            status TEXT NOT NULL CHECK (
+                status /* allowed values */ IN ( 'pending' , 'completed' , 'failed' )
+            )
+            """,
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    _repository(path).initialize()
+    assert _repository(path).health() is True
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "CREATE TABLE sqliteX_extra (value TEXT)",
+        """
+        CREATE TRIGGER sqliteX_block_sessions BEFORE INSERT ON sessions
+        BEGIN SELECT RAISE(FAIL, 'blocked'); END
+        """,
+    ],
+)
+def test_initialize_rejects_disguised_sqlite_prefix_object(
+    tmp_path: Path, statement: str
+) -> None:
+    path = tmp_path / "disguised-sqlite-object.sqlite3"
+    repository = _repository(path)
+    repository.initialize()
+    connection = _raw_connection(path)
+    try:
+        connection.execute(statement)
+        connection.commit()
+    finally:
+        connection.close()
+    before = _database_dump(path)
+
+    with pytest.raises(_repository_module().RepositoryVersionError):
+        _repository(path).initialize()
+
+    assert _database_dump(path) == before
+    assert _repository(path).health() is False
 
 
 def test_initialize_rejects_sessions_without_required_default(tmp_path: Path) -> None:
