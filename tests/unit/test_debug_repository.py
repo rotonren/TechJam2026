@@ -327,8 +327,12 @@ def test_initialize_rejects_foreign_key_with_on_update_cascade(tmp_path: Path) -
     assert _repository(path).health() is False
 
 
-def test_initialize_rejects_foreign_key_with_match_full_without_mutation(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    "match_clause",
+    ["MATCH FULL", "MATCH [FULL]", "MATCH `FULL`", "MATCH 'FULL'", "mAtCh\n fUlL"],
+)
+def test_initialize_rejects_explicit_foreign_key_match_without_mutation(
+    tmp_path: Path, match_clause: str
 ) -> None:
     path = tmp_path / "match-full.sqlite3"
     repository = _repository(path)
@@ -339,8 +343,8 @@ def test_initialize_rejects_foreign_key_with_match_full_without_mutation(
             connection,
             """
             FOREIGN KEY (source_session_id) REFERENCES sessions(session_id)
-            MATCH FULL
-            """,
+            """
+            + match_clause,
         )
         connection.commit()
     finally:

@@ -31,9 +31,7 @@ _FEEDBACK_REASONS = frozenset(
         "other",
     }
 )
-_EXPLICIT_MATCH_CLAUSE = re.compile(
-    r"\bmatch\b\s+(?:[a-z_][a-z0-9_]*|\"[^\"]+\")", re.IGNORECASE
-)
+_EXPLICIT_MATCH_CLAUSE = re.compile(r"\bmatch\b", re.IGNORECASE)
 _REQUIRED_TABLES = {"metadata", "sessions", "turns", "product_feedback"}
 _TABLE_COLUMNS = {
     "metadata": (
