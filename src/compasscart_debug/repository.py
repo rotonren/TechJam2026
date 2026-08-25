@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -115,12 +116,17 @@ class FeedbackRecord:
 
 class DebugRepository:
     def __init__(
-        self, path: Path | str, *, clock: Callable[[], datetime] | None = None
+        self,
+        path: Path | str,
+        *,
+        clock: Callable[[], datetime] | None = None,
+        connection_factory: Callable[..., sqlite3.Connection] = sqlite3.connect,
     ) -> None:
         self.path = Path(path)
         if str(self.path) == ":memory:":
             raise ValueError("The debug repository requires a path-backed database.")
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._connection_factory = connection_factory
 
     def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -138,10 +144,8 @@ class DebugRepository:
                         "INSERT INTO metadata(key, value) VALUES ('schema_version', ?)",
                         (str(_SCHEMA_VERSION),),
                     )
-                elif int(row["value"]) > _SCHEMA_VERSION:
-                    raise RepositoryVersionError(
-                        "The database schema is newer than this code."
-                    )
+                else:
+                    _validate_schema_version(row["value"])
                 connection.commit()
             except BaseException:
                 connection.rollback()
@@ -154,7 +158,7 @@ class DebugRepository:
             ).fetchone()
         if row is None:
             raise RepositoryVersionError("The database schema is not initialized.")
-        return int(row["value"])
+        return _validate_schema_version(row["value"])
 
     def health(self) -> bool:
         with self._connect() as connection:
@@ -387,7 +391,7 @@ class DebugRepository:
                 raise
 
     def complete_turn(
-        self, session_id: str, request_id: str, observation: TurnObservation
+        self, session_id: str, turn: int, observation: TurnObservation
     ) -> TurnRecord:
         response = _encode_json(observation.response)
         products = _encode_json(observation.products)
@@ -396,7 +400,7 @@ class DebugRepository:
         with self._connect() as connection:
             self._begin(connection)
             try:
-                row = self._require_request(connection, session_id, request_id)
+                row = self._require_turn(connection, session_id, turn)
                 if row["status"] != "pending":
                     raise ConflictError()
                 result = connection.execute(
@@ -404,7 +408,7 @@ class DebugRepository:
                     UPDATE turns
                     SET status = 'completed', response_json = ?, products_json = ?,
                         state_json = ?, trace_json = ?, error_json = NULL, updated_at = ?
-                    WHERE session_id = ? AND request_id = ? AND status = 'pending'
+                    WHERE session_id = ? AND turn = ? AND status = 'pending'
                     """,
                     (
                         response,
@@ -413,14 +417,14 @@ class DebugRepository:
                         trace,
                         self._timestamp(),
                         session_id,
-                        request_id,
+                        turn,
                     ),
                 )
                 if result.rowcount != 1:
                     raise ConflictError()
                 row = connection.execute(
-                    "SELECT * FROM turns WHERE session_id = ? AND request_id = ?",
-                    (session_id, request_id),
+                    "SELECT * FROM turns WHERE session_id = ? AND turn = ?",
+                    (session_id, turn),
                 ).fetchone()
                 connection.commit()
                 return _decode_turn(row)
@@ -428,26 +432,26 @@ class DebugRepository:
                 connection.rollback()
                 raise
 
-    def fail_turn(self, session_id: str, request_id: str, error: Any) -> TurnRecord:
+    def fail_turn(self, session_id: str, turn: int, error: Any) -> TurnRecord:
         error_json = _encode_json(error)
         with self._connect() as connection:
             self._begin(connection)
             try:
-                row = self._require_request(connection, session_id, request_id)
+                row = self._require_turn(connection, session_id, turn)
                 if row["status"] != "pending":
                     raise ConflictError()
                 result = connection.execute(
                     """
                     UPDATE turns SET status = 'failed', error_json = ?, updated_at = ?
-                    WHERE session_id = ? AND request_id = ? AND status = 'pending'
+                    WHERE session_id = ? AND turn = ? AND status = 'pending'
                     """,
-                    (error_json, self._timestamp(), session_id, request_id),
+                    (error_json, self._timestamp(), session_id, turn),
                 )
                 if result.rowcount != 1:
                     raise ConflictError()
                 row = connection.execute(
-                    "SELECT * FROM turns WHERE session_id = ? AND request_id = ?",
-                    (session_id, request_id),
+                    "SELECT * FROM turns WHERE session_id = ? AND turn = ?",
+                    (session_id, turn),
                 ).fetchone()
                 connection.commit()
                 return _decode_turn(row)
@@ -600,12 +604,16 @@ class DebugRepository:
             raise NotFoundError()
         return row
 
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path, timeout=5)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys=ON")
-        connection.execute("PRAGMA busy_timeout=5000")
-        return connection
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        connection = self._connection_factory(self.path, timeout=5)
+        try:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys=ON")
+            connection.execute("PRAGMA busy_timeout=5000")
+            yield connection
+        finally:
+            connection.close()
 
     @staticmethod
     def _begin(connection: sqlite3.Connection) -> None:
@@ -624,6 +632,12 @@ def _encode_json(value: Any) -> str:
         ensure_ascii=False,
         allow_nan=False,
     )
+
+
+def _validate_schema_version(value: str) -> int:
+    if value != str(_SCHEMA_VERSION):
+        raise RepositoryVersionError("The database schema is incompatible.")
+    return _SCHEMA_VERSION
 
 
 def _decode_session(row: sqlite3.Row) -> SessionRecord:
