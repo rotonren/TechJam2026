@@ -71,6 +71,12 @@ _TABLE_CHECKS = {
     "turns": ("turnbetween1and10", "statusin('pending','completed','failed')"),
     "product_feedback": (),
 }
+_TABLE_OPTIONS = {
+    "metadata": (0, 0),
+    "sessions": (0, 0),
+    "turns": (0, 0),
+    "product_feedback": (0, 0),
+}
 _TABLE_COLUMNS = {
     "metadata": (
         ("key", "TEXT", False, 1, None),
@@ -807,9 +813,25 @@ def _validate_existing_v1(connection: sqlite3.Connection) -> int:
     ):
         raise RepositoryVersionError("The database schema is incompatible.")
     tables = {name: sql for name, (_, sql) in objects.items()}
+    table_options = {
+        str(row["name"]): (int(row["wr"]), int(row["strict"]))
+        for row in connection.execute("PRAGMA table_list").fetchall()
+        if row["schema"] == "main" and row["type"] == "table"
+    }
+    if table_options:
+        for table, expected_options in _TABLE_OPTIONS.items():
+            if table_options.get(table) != expected_options:
+                raise RepositoryVersionError("The database schema is incompatible.")
+    elif any(
+        _has_sql_keyword_sequence(sql, ("strict",))
+        or _has_sql_keyword_sequence(sql, ("without", "rowid"))
+        for sql in tables.values()
+    ):
+        # SQLite before 3.37 returns no rows for the unknown table_list pragma.
+        raise RepositoryVersionError("The database schema is incompatible.")
     for table, expected_columns in _TABLE_COLUMNS.items():
         rows = connection.execute(
-            f"PRAGMA table_info({_quote_identifier(table)})"
+            f"PRAGMA table_xinfo({_quote_identifier(table)})"
         ).fetchall()
         actual_columns = tuple(
             (
@@ -821,7 +843,9 @@ def _validate_existing_v1(connection: sqlite3.Connection) -> int:
             )
             for row in rows
         )
-        if actual_columns != expected_columns:
+        if actual_columns != expected_columns or any(
+            row["hidden"] != 0 for row in rows
+        ):
             raise RepositoryVersionError("The database schema is incompatible.")
     row = connection.execute(
         "SELECT value FROM metadata WHERE key = 'schema_version'"

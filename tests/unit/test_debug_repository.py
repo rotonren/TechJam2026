@@ -123,6 +123,26 @@ def _schema_objects(path: Path) -> list[tuple[str, str]]:
         connection.close()
 
 
+def _database_dump(path: Path) -> tuple[str, ...]:
+    connection = _raw_connection(path)
+    try:
+        return tuple(connection.iterdump())
+    finally:
+        connection.close()
+
+
+def _replace_table_with_option(
+    connection: sqlite3.Connection, table: str, option: str
+) -> None:
+    row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+    ).fetchone()
+    assert row is not None
+    connection.execute("PRAGMA foreign_keys=OFF")
+    connection.execute(f"DROP TABLE {table}")
+    connection.execute(f"{row[0].rstrip().rstrip(';')} {option}")
+
+
 def test_initialize_rejects_newer_delete_journal_database_without_mutation(
     tmp_path: Path,
 ) -> None:
@@ -218,7 +238,67 @@ def test_initialize_and_health_reject_malformed_v1_schema(
     assert _repository(path).health() is False
 
 
-def _replace_sessions_table(connection: sqlite3.Connection, foreign_key: str) -> None:
+@pytest.mark.parametrize(
+    ("table", "source_column"),
+    [
+        ("metadata", "key"),
+        ("sessions", "name"),
+        ("turns", "request_id"),
+        ("product_feedback", "parent_asin"),
+    ],
+)
+def test_initialize_rejects_hidden_generated_column(
+    tmp_path: Path, table: str, source_column: str
+) -> None:
+    path = tmp_path / f"generated-column-{table}.sqlite3"
+    repository = _repository(path)
+    repository.initialize()
+    connection = _raw_connection(path)
+    try:
+        connection.execute(
+            f"""
+            ALTER TABLE {table} ADD COLUMN generated_copy TEXT
+            GENERATED ALWAYS AS ({source_column}) VIRTUAL
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    before = _database_dump(path)
+
+    with pytest.raises(_repository_module().RepositoryVersionError):
+        _repository(path).initialize()
+
+    assert _database_dump(path) == before
+    assert _repository(path).health() is False
+
+
+@pytest.mark.parametrize("table", ["metadata", "sessions", "turns", "product_feedback"])
+@pytest.mark.parametrize("option", ["STRICT", "WITHOUT ROWID"])
+def test_initialize_rejects_noncanonical_table_options(
+    tmp_path: Path, table: str, option: str
+) -> None:
+    path = tmp_path / f"{table}-{option.lower().replace(' ', '-')}.sqlite3"
+    repository = _repository(path)
+    repository.initialize()
+    connection = _raw_connection(path)
+    try:
+        _replace_table_with_option(connection, table, option)
+        connection.commit()
+    finally:
+        connection.close()
+    before = _database_dump(path)
+
+    with pytest.raises(_repository_module().RepositoryVersionError):
+        _repository(path).initialize()
+
+    assert _database_dump(path) == before
+    assert _repository(path).health() is False
+
+
+def _replace_sessions_table(
+    connection: sqlite3.Connection, foreign_key: str, *, extra_column: str = ""
+) -> None:
     connection.execute("PRAGMA foreign_keys=OFF")
     connection.execute("DROP TABLE sessions")
     connection.execute(
@@ -229,11 +309,34 @@ def _replace_sessions_table(connection: sqlite3.Connection, foreign_key: str) ->
             config_sha256 TEXT NOT NULL, assets_sha256 TEXT, source_session_id TEXT,
             archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0,1)),
             dirty INTEGER NOT NULL DEFAULT 0 CHECK (dirty IN (0,1)),
-            read_only_reason TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+            read_only_reason TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL{extra_column},
             {foreign_key}
         )
         """
     )
+
+
+def test_initialize_rejects_stored_generated_sessions_column(tmp_path: Path) -> None:
+    path = tmp_path / "stored-generated-column.sqlite3"
+    repository = _repository(path)
+    repository.initialize()
+    connection = _raw_connection(path)
+    try:
+        _replace_sessions_table(
+            connection,
+            "FOREIGN KEY (source_session_id) REFERENCES sessions(session_id)",
+            extra_column=", name_copy TEXT GENERATED ALWAYS AS (name) STORED",
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    before = _database_dump(path)
+
+    with pytest.raises(_repository_module().RepositoryVersionError):
+        _repository(path).initialize()
+
+    assert _database_dump(path) == before
+    assert _repository(path).health() is False
 
 
 def _replace_turns_table(
@@ -673,6 +776,13 @@ class _WalRefusingConnection(sqlite3.Connection):
         return super().execute(sql, parameters)
 
 
+class _NoTableListConnection(sqlite3.Connection):
+    def execute(self, sql: str, parameters=()):
+        if sql.strip().upper() == "PRAGMA TABLE_LIST":
+            return super().execute("SELECT 1 WHERE 0")
+        return super().execute(sql, parameters)
+
+
 def _blocking_repository(path: Path, gate: _TransactionGate):
     def factory(*args, **kwargs) -> _BlockingImmediateConnection:
         connection = sqlite3.connect(
@@ -839,6 +949,46 @@ def test_health_rejects_database_switched_back_to_delete_journal(
     finally:
         connection.close()
 
+    assert repository.health() is False
+
+
+def test_valid_schema_works_without_table_list_support(tmp_path: Path) -> None:
+    path = tmp_path / "debug.sqlite3"
+
+    def factory(*args, **kwargs) -> _NoTableListConnection:
+        return sqlite3.connect(*args, factory=_NoTableListConnection, **kwargs)
+
+    repository = _repository_module().DebugRepository(path, connection_factory=factory)
+    repository.initialize()
+
+    repository.initialize()
+
+    assert repository.health() is True
+
+
+@pytest.mark.parametrize("option", ["STRICT", "WITHOUT ROWID"])
+def test_noncanonical_table_option_is_rejected_without_table_list_support(
+    tmp_path: Path, option: str
+) -> None:
+    path = tmp_path / f"unsupported-{option.lower().replace(' ', '-')}.sqlite3"
+
+    def factory(*args, **kwargs) -> _NoTableListConnection:
+        return sqlite3.connect(*args, factory=_NoTableListConnection, **kwargs)
+
+    repository = _repository_module().DebugRepository(path, connection_factory=factory)
+    repository.initialize()
+    connection = _raw_connection(path)
+    try:
+        _replace_table_with_option(connection, "turns", option)
+        connection.commit()
+    finally:
+        connection.close()
+    before = _database_dump(path)
+
+    with pytest.raises(_repository_module().RepositoryVersionError):
+        repository.initialize()
+
+    assert _database_dump(path) == before
     assert repository.health() is False
 
 
