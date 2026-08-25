@@ -12,10 +12,10 @@ CV is reported separately to avoid implying that unlike scopes are equivalent.
 | + override pending-state fix | Dev fold 1 | - | - | - | 0.335342 |
 | + bounded versioned query history | Dev fold 1 | 0.500 | 0.182946 | 7.30 | 0.378884 |
 | + answerable clarification policy | Dev fold 1 | 0.575 | 0.194673 | 6.05 | 0.444902 |
-| Selected full system | Dev folds 1-4 | - | - | - | 0.424038 mean |
-| Selected full system | Sealed fold 5, once | 0.450 | 0.254583 | 7.55 | 0.370375 |
-| Selected full system | Full public set | 0.520 | 0.231685 | 6.81 | 0.413305 |
+| Selected v2 system | Dev folds 1-4 | - | - | - | 0.519195 mean |
+| Selected v2 system | Sealed fold 5, once | 0.600 | 0.365893 | 5.75 | 0.514768 |
+| Selected v2 system | Full public set | 0.625 | 0.321365 | 5.53 | 0.518309 |
 
-Selected configuration: commit `dc71a7a`, config hash
+Selected configuration: commit `4c41adf`, tag `compasscart-v2-candidate`, config hash
 `0b6bcec8230b618c71604d2770b49b83495845d59f9ae452e11a607b7127373c`,
-selection score `0.405810`, runtime API cost USD 0.00.
+selection score `0.500756`, runtime API cost USD 0.00.

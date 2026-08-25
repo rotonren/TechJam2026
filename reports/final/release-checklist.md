@@ -3,8 +3,8 @@
 ## Candidate Integrity
 
 - [x] Runtime configuration selected only from stratified development folds 1-4.
-- [x] Candidate tagged `compasscart-audit-candidate` before fold 5 was viewed.
-- [x] Sealed fold 5 executed exactly once; no post-audit tuning performed.
+- [x] Candidate commit `4c41adf` tagged `compasscart-v2-candidate` before fold 5 was viewed.
+- [x] Sealed fold 5 executed exactly once after the candidate tag; no post-audit code tuning performed.
 - [x] Official evaluator, public labels, contract, and catalog were not modified.
 - [x] Final evidence records candidate commit and configuration hash.
 
@@ -26,6 +26,7 @@
 - [x] Extracted package imports `Agent` and produces a fixture response.
 - [x] Clean virtual-environment install and offline smoke command are verified.
 - [x] Data and model attribution notices are included.
+- [x] Apache-2.0 license text for the redistributed ONNX model is included.
 - [x] Final ZIP size and SHA256 are printed by `python -m tools.package_submission`.
 
 ## Submission Materials

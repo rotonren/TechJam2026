@@ -62,16 +62,20 @@ Additional rationale is in `reports/final/architecture.md`.
 ## Measured Results
 
 All measurements use the unchanged official evaluator and frozen public data.
-The starter baseline scored `0.106710`. CompassCart development CV on sealed
-folds 1-4 scored `0.424038 +/- 0.036455` (mean TechnicalScore), with selection
-score `0.405810`. Fold scores were `0.444902`, `0.362723`, `0.431955`, and
-`0.456572`; no runtime fallback occurred. Per-fold P95 response latency ranged
-from 211 ms to 416 ms on the development host.
+The starter baseline scored `0.106710`. The release candidate is commit
+`4c41adf` (`compasscart-v2-candidate`). Development CV on folds 1-4 scored
+`0.519195 +/- 0.036878` (mean TechnicalScore), with selection score `0.500756`.
+Fold scores were `0.479726`, `0.568101`, `0.541363`, and `0.487589`; no runtime
+fallback occurred. Per-fold P95 response latency ranged from 309 ms to 335 ms
+on the development host.
 
-The once-only sealed fold 5 scored `0.370375` with no fallback. The final
-unchanged official 200-session public evaluation scored `0.413305`, with
-HitRate@10 `0.52`, MRR `0.231685`, and MTTC `6.81`. Scenario HitRate@10 was
-`0.60` Boundary, `0.5375` Browsing, `0.575` Buying, and `0.30` Intent Override.
+The sealed fold 5 was run once after the candidate tag and scored `0.514768`
+with no fallback (HitRate@10 `0.60`, MRR `0.365893`, MTTC `5.75`, P95
+`370.616 ms`). The final official 200-session public evaluation from the same
+tagged candidate scored `0.518309` (HitRate@10 `0.625`, MRR `0.321365`, MTTC
+`5.53`). Scenario HitRate@10 was `0.60` Boundary, `0.65` Browsing, `0.625`
+Buying, and `0.566667` Intent Override. Full evidence is in
+`reports/final/final-results.json`.
 
 The agent reports zero prompt and completion tokens. Official runtime API cost
 is USD 0.00 per session and USD 0.00 for the full 800-session private set.
@@ -84,7 +88,9 @@ a one-time CPU process.
   messages may expose only one attribute.
 - Dense quality depends on text metadata; images are intentionally out of scope.
 - First initialization loads the catalog and ONNX assets, so cold-start memory
-  and latency are higher than steady-state response latency.
+  and latency are higher than steady-state response latency. A full-catalog
+  dense smoke measured approximately 504 MiB working set after one response
+  (576 MiB peak); evaluator processes retain additional trace/session state.
 - The default catalog path is relative to the process working directory; pass a
   path to `Agent(...)` when the harness uses a different layout.
 
@@ -101,6 +107,7 @@ The five-person team can map names to these release roles before submission:
 ## Attribution
 
 Amazon Reviews 2023 data terms and attribution are documented in
-`DATA_ATTRIBUTION.md`. The local embedding model notice is in
-`MODEL_ATTRIBUTION.md`. CompassCart source code and generated competition
-artifacts remain subject to the team's chosen submission license.
+`DATA_ATTRIBUTION.md`. The local embedding model notice and Apache-2.0 text are
+in `MODEL_ATTRIBUTION.md` and `licenses/`. CompassCart source code and
+generated competition artifacts remain subject to the team's chosen submission
+license.

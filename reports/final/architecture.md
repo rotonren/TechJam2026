@@ -29,8 +29,8 @@ unavailable.
 | Intent Override | Goal-level overrides clear obsolete text/questions; attribute-level corrections replace only the named slot |
 | Browsing utility | Profile-aware broad recall and conversion-gain clarification |
 | Reliability | Shared hard-filter matcher, disclosed relaxation evidence, bounded state/traces, component fallbacks, valid-ID filtering |
-| Feasibility | CPU ONNX int8 assets, 45 MiB runtime asset set, zero API cost, offline operation |
-| Reproducibility | Deterministic CV, sealed audit fold, checksummed assets, deterministic allowlist ZIP |
+| Feasibility | CPU ONNX int8 assets, 45 MiB runtime asset set, zero API cost, offline operation; full-catalog dense smoke was 504 MiB working set after one response |
+| Reproducibility | Deterministic CV, tagged candidate and sealed audit fold, checksummed assets, deterministic allowlist ZIP |
 
 ## State and Override Semantics
 
@@ -54,7 +54,8 @@ The runtime never sends network requests or reads credentials.
 ## Evaluation Discipline
 
 The 200 public sessions are deterministically stratified by scenario and
-difficulty into five folds. Folds 1-4 select one configuration using
-`mean(TechnicalScore) - 0.5 * std(TechnicalScore)`. Fold 5 remains sealed until
-the selected commit is tagged, then is run once without further tuning. The
-official evaluator and catalog are never modified.
+difficulty into five folds. Folds 1-4 selected commit `4c41adf` using
+`mean(TechnicalScore) - 0.5 * std(TechnicalScore)` (`0.500756`). The candidate
+was tagged `compasscart-v2-candidate` before fold 5 was viewed; fold 5 was then
+run once without further code tuning. The official evaluator and catalog are
+never modified.

@@ -42,19 +42,23 @@ so "Actually, I need leather" cannot accidentally become a category answer.
 
 ## Results
 
-On the unchanged 200-session official public evaluator, CompassCart achieved:
+On the unchanged 200-session official public evaluator, the `compasscart-v2`
+candidate achieved:
 
 | Metric | Starter | CompassCart |
 | --- | ---: | ---: |
-| TechnicalScore | 0.106710 | 0.413305 |
-| HitRate@10 | 0.125 | 0.520 |
-| MRR | 0.068034 | 0.231685 |
-| MTTC | 9.81 | 6.81 |
+| TechnicalScore | 0.106710 | 0.518309 |
+| HitRate@10 | 0.125 | 0.625 |
+| MRR | 0.068034 | 0.321365 |
+| MTTC | 9.81 | 5.53 |
 
-Development folds 1-4 averaged `0.424038 +/- 0.036455`; the once-only sealed
-fold scored `0.370375`. All five folds completed with zero runtime fallback.
-P95 fold latency stayed below 417 ms on the development host. Estimated API
-cost for the 800-session private set is USD 0.00.
+Development folds 1-4 averaged `0.519195 +/- 0.036878` (selection score
+`0.500756`), with fold scores `0.479726`, `0.568101`, `0.541363`, and
+`0.487589`. The tagged candidate's once-only sealed fold 5 scored `0.514768`
+with zero runtime fallback and P95 latency `370.616 ms`. The final public
+metrics are recorded in `final-results.json`. Estimated API cost for the
+800-session private set is USD 0.00. Scenario HitRate@10 was `0.60` Boundary,
+`0.65` Browsing, `0.625` Buying, and `0.566667` Intent Override.
 
 ## Challenges
 

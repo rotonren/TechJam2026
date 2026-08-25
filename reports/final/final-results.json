@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "recorded_at": "2026-08-25T08:50:49Z",
+  "recorded_at": "2026-08-26T05:43:08+08:00",
   "candidate": {
-    "tag": "compasscart-audit-candidate",
-    "commit": "001d7bfd6608d76a89dc7a57e924c686065ae07e",
-    "runtime_commit": "dc71a7a123f67001e563a381ea68e459d19a9f3d",
+    "tag": "compasscart-v2-candidate",
+    "commit": "4c41adf4982e4f5b907e4bbcd3488aa6e8416777",
+    "runtime_commit": "4c41adf4982e4f5b907e4bbcd3488aa6e8416777",
     "config_hash": "0b6bcec8230b618c71604d2770b49b83495845d59f9ae452e11a607b7127373c"
   },
   "official_starter_baseline": {
@@ -16,47 +16,47 @@
   },
   "development_cv": {
     "folds": [1, 2, 3, 4],
-    "technical_scores": [0.444902, 0.362723, 0.431955, 0.456572],
-    "mean_technical_score": 0.424038,
-    "std_technical_score": 0.036455,
-    "selection_score": 0.40581,
+    "technical_scores": [0.479726, 0.568101, 0.541363, 0.487589],
+    "mean_technical_score": 0.519195,
+    "std_technical_score": 0.036878,
+    "selection_score": 0.500756,
     "fallback_count": 0
   },
   "sealed_audit_fold": {
     "fold": 5,
     "run_count": 1,
     "sample_count": 40,
-    "hit_rate_at_10": 0.45,
-    "mrr": 0.254583,
-    "mttc": 7.55,
-    "efficiency": 0.345,
-    "recommended_technical_score": 0.370375,
+    "hit_rate_at_10": 0.6,
+    "mrr": 0.365893,
+    "mttc": 5.75,
+    "efficiency": 0.525,
+    "recommended_technical_score": 0.514768,
     "latency_ms": {
-      "p50": 150.474,
-      "p95": 354.635,
-      "max": 509.251
+      "p50": 164.296,
+      "p95": 370.616,
+      "max": 478.382
     },
     "fallback_count": 0,
     "scenario_metrics": {
-      "boundary": {"hit_rate_at_10": 0.5, "mrr": 0.083333, "mttc": 6.0},
-      "browsing": {"hit_rate_at_10": 0.4375, "mrr": 0.364583, "mttc": 7.9375},
-      "buying": {"hit_rate_at_10": 0.5, "mrr": 0.178125, "mttc": 6.9375},
-      "intent_override": {"hit_rate_at_10": 0.333333, "mrr": 0.222222, "mttc": 8.666667}
+      "boundary": {"hit_rate_at_10": 1.0, "mrr": 0.75, "mttc": 1.0},
+      "browsing": {"hit_rate_at_10": 0.5, "mrr": 0.252679, "mttc": 6.4375},
+      "buying": {"hit_rate_at_10": 0.625, "mrr": 0.349554, "mttc": 5.4375},
+      "intent_override": {"hit_rate_at_10": 0.666667, "mrr": 0.583333, "mttc": 6.333333}
     }
   },
   "official_public_evaluation": {
     "sample_count": 200,
     "evaluated_sessions": 200,
-    "hit_rate_at_10": 0.52,
-    "mrr": 0.231685,
-    "mttc": 6.81,
-    "efficiency": 0.419,
-    "recommended_technical_score": 0.413305,
+    "hit_rate_at_10": 0.625,
+    "mrr": 0.321365,
+    "mttc": 5.53,
+    "efficiency": 0.547,
+    "recommended_technical_score": 0.518309,
     "scenario_metrics": {
-      "boundary": {"sample_count": 10, "hit_rate_at_10": 0.6, "mrr": 0.217619, "mttc": 5.9},
-      "browsing": {"sample_count": 80, "hit_rate_at_10": 0.5375, "mrr": 0.23506, "mttc": 6.7875},
-      "buying": {"sample_count": 80, "hit_rate_at_10": 0.575, "mrr": 0.257158, "mttc": 6.0875},
-      "intent_override": {"sample_count": 30, "hit_rate_at_10": 0.3, "mrr": 0.159444, "mttc": 9.1}
+      "boundary": {"sample_count": 10, "hit_rate_at_10": 0.6, "mrr": 0.207778, "mttc": 5.4},
+      "browsing": {"sample_count": 80, "hit_rate_at_10": 0.65, "mrr": 0.282564, "mttc": 5.1625},
+      "buying": {"sample_count": 80, "hit_rate_at_10": 0.625, "mrr": 0.366022, "mttc": 5.175},
+      "intent_override": {"sample_count": 30, "hit_rate_at_10": 0.566667, "mrr": 0.343611, "mttc": 7.5}
     }
   },
   "usage_and_cost": {
@@ -65,5 +65,10 @@
     "total_tokens": 0,
     "runtime_api_cost_usd": 0.0,
     "private_800_session_estimated_api_cost_usd": 0.0
+  },
+  "resource_measurements": {
+    "full_catalog_dense_smoke_working_set_mib_after_one_response": 503.9,
+    "full_catalog_dense_smoke_peak_working_set_mib": 576.3,
+    "note": "Evaluator processes retain additional trace and session state."
   }
 }
