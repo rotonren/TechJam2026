@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .catalog import CatalogIndex
+from .constraints import matches_constraint
 from .models import Candidate, Constraint, SessionState
 from .normalization import terms
 
@@ -58,20 +59,17 @@ class ConstraintRanker:
                     product=candidate.product,
                     source_scores=dict(candidate.source_scores),
                     score=score,
+                    violations=candidate.violations,
+                    relaxed=candidate.relaxed,
                 )
             )
 
-        scored.sort(key=lambda item: (-item.score, item.parent_asin))
+        scored.sort(key=lambda item: (item.relaxed, -item.score, item.parent_asin))
         limit = len(scored) if top_k is None else min(max(top_k, 0), len(scored))
         if state.route == "browsing" and limit:
-            diversity_limit = min(limit, 10)
-            diverse = self._mmr(scored, diversity_limit)
-            if top_k is not None:
-                return diverse
-            selected = {item.parent_asin for item in diverse}
-            return diverse + [
-                item for item in scored if item.parent_asin not in selected
-            ]
+            exact = [item for item in scored if not item.relaxed]
+            relaxed = [item for item in scored if item.relaxed]
+            return (self._diverse_order(exact) + self._diverse_order(relaxed))[:limit]
         return scored[:limit]
 
     def _coverage(self, identifier: str, constraints: list[Constraint]) -> float:
@@ -82,28 +80,21 @@ class ConstraintRanker:
         )
 
     def _matches(self, identifier: str, constraint: Constraint) -> bool:
-        if constraint.attribute == "budget":
-            try:
-                return float(
-                    self.catalog.product(identifier).get("price", float("inf"))
-                ) <= float(constraint.value)
-            except (TypeError, ValueError):
-                return False
-        values = self.catalog.attributes.get(identifier, {}).get(
-            constraint.attribute, ()
+        return matches_constraint(
+            self.catalog.product(identifier),
+            self.catalog.attributes.get(identifier, {}),
+            constraint,
         )
-        if constraint.attribute == "category":
-            wanted = set(terms(constraint.value))
-            return any(wanted.intersection(terms(value)) for value in values)
-        return constraint.value in values
 
     def _conflicts(self, identifier: str, constraint: Constraint) -> bool:
-        if constraint.attribute == "budget":
-            return not self._matches(identifier, constraint)
-        values = self.catalog.attributes.get(identifier, {}).get(
-            constraint.attribute, ()
-        )
-        return bool(values) and not self._matches(identifier, constraint)
+        return not self._matches(identifier, constraint)
+
+    def _diverse_order(self, candidates: list[Candidate]) -> list[Candidate]:
+        if not candidates:
+            return []
+        diverse = self._mmr(candidates, min(len(candidates), 10))
+        selected = {item.parent_asin for item in diverse}
+        return diverse + [item for item in candidates if item.parent_asin not in selected]
 
     @staticmethod
     def _normalized_source(

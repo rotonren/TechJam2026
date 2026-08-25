@@ -45,6 +45,12 @@ def test_intent_override_replaces_conflicting_old_constraint(fixture_catalog_pat
     assert ("color", "red") not in {
         (item.attribute, item.value) for item in state.active_constraints()
     }
+    assert state.override_scope == "goal"
+    assert not {
+        ("color", "red"),
+        ("material", "cotton"),
+        ("category", "dress"),
+    } & {(item.attribute, item.value) for item in state.active_constraints()}
 
 
 def test_boundary_reply_prevents_repeated_question(tmp_path):
@@ -89,3 +95,16 @@ def test_boundary_reply_prevents_repeated_question(tmp_path):
     state = agent.sessions.get("boundary")
     assert state is not None
     assert state.pending_attribute == second["ask_attribute"]
+
+
+def test_browsing_context_survives_a_follow_up_attribute_answer(fixture_catalog_path):
+    agent = Agent(fixture_catalog_path)
+    agent.reset("browse-follow-up", {})
+
+    first = agent.respond("browse-follow-up", "I'm still exploring shoes.", 1, 4)
+    second = agent.respond("browse-follow-up", "cotton", 2, 4)
+
+    assert first["recommendations"] and second["recommendations"]
+    trace = agent.traces.records[-1]
+    assert trace["route"] == "browsing"
+    assert trace["route_reason"] == "explicit_browsing"

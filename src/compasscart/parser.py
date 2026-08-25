@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 
-from .models import ConstraintSource, Route
+from .models import ConstraintOperator, ConstraintSource, Route
 from .normalization import (
     COLORS,
     FEATURES,
     MATERIALS,
     STYLES,
     USE_CASES,
+    normalize_category_value,
     normalize_value,
     terms,
 )
@@ -18,8 +20,19 @@ RouteHint = Route | None
 
 _OVERRIDE_RE = re.compile(
     r"\b(?:actually|instead|ignore (?:my )?(?:earlier|previous|old)?|"
-    r"change (?:it|that|my mind)|what i need is|rather than)\b",
+    r"change (?:it|that|my mind)|changed (?:my )?mind|"
+    r"i(?:'|’)ve changed my mind|i have changed my mind|"
+    r"what i need is|rather than)\b",
     re.IGNORECASE,
+)
+_PREFERENCE_RESET_RE = re.compile(
+    r"\b(?:ignore (?:my )?(?:(?:earlier|previous|old)\s+)?preferences?|"
+    r"changed (?:my )?mind|i(?:'|’)ve changed my mind|"
+    r"i have changed my mind|what i need is)\b",
+    re.IGNORECASE,
+)
+_CONTINUATION_RE = re.compile(
+    r"\b(?:show me more|more options|different choices)\b", re.IGNORECASE
 )
 _NO_PREFERENCE_RE = re.compile(
     r"\b(?:don['’]?t|do not|no)\s+(?:have\s+)?(?:an?\s+)?(?:additional\s+)?"
@@ -35,8 +48,21 @@ _BUYING_RE = re.compile(
     r"\b(?:key requirement|must have|need|under|at most|no more than|budget)\b|[$£€]\s*\d",
     re.IGNORECASE,
 )
-_BUDGET_RE = re.compile(
-    r"(?:[$£€]\s*|\b(?:under|below|less than|at most|no more than|up to|budget(?: around| of)?)[\s:$£€]*)"
+_AMOUNT = r"[$£€]?\s*(?P<amount>\d+(?:\.\d{1,2})?)"
+_BUDGET_BETWEEN_RE = re.compile(
+    r"\b(?:between|from)\s*"
+    + _AMOUNT
+    + r"\s*(?:and|to)\s*[$£€]?\s*(?P<upper>\d+(?:\.\d{1,2})?)",
+    re.IGNORECASE,
+)
+_BUDGET_DIRECTION_RE = re.compile(
+    r"\b(?P<direction>under|below|less than|at most|no more than|up to|"
+    r"over|above|more than|at least|from)\b\s*(?:a\s+)?(?:budget\s+(?:of|around)\s+)?"
+    + _AMOUNT,
+    re.IGNORECASE,
+)
+_BUDGET_DEFAULT_RE = re.compile(
+    r"(?:[$£€]\s*|\bbudget(?:\s+(?:around|of))?[\s:$£€]*)"
     r"(?P<amount>\d+(?:\.\d{1,2})?)",
     re.IGNORECASE,
 )
@@ -72,6 +98,68 @@ _KNOWN_CATEGORIES = {
     "top",
     "tops",
 }
+_ALIAS_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "as",
+    "at",
+    "brand",
+    "by",
+    "for",
+    "from",
+    "key",
+    "my",
+    "new",
+    "of",
+    "on",
+    "or",
+    "requirement",
+    "style",
+    "the",
+    "to",
+    "want",
+}
+_NON_BRAND_TERMS = _KNOWN_CATEGORIES | {
+    "accessory",
+    "accessories",
+    "clothing",
+    "jewelry",
+    "pants",
+    "sweatpants",
+}
+_TOKEN_SPAN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
+_EXPECTED_FILLER_TERMS = {
+    "a",
+    "an",
+    "and",
+    "any",
+    "are",
+    "can",
+    "do",
+    "for",
+    "have",
+    "i",
+    "id",
+    "im",
+    "is",
+    "it",
+    "just",
+    "like",
+    "me",
+    "my",
+    "need",
+    "of",
+    "one",
+    "please",
+    "prefer",
+    "the",
+    "that",
+    "to",
+    "want",
+    "what",
+    "would",
+}
 
 
 @dataclass(frozen=True)
@@ -81,6 +169,9 @@ class ParsedConstraint:
     confidence: float = 1.0
     is_hard: bool = True
     source: ConstraintSource = "message"
+    operator: ConstraintOperator = "eq"
+    upper_value: str | None = None
+    alternatives: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -89,10 +180,77 @@ class ParseResult:
     route_hint: RouteHint = None
     is_override: bool = False
     no_preference_attribute: str | None = None
+    is_continuation: bool = False
+    replace_preferences: bool = False
 
 
 class MessageParser:
     """Deterministic parser for the evaluator's shopping language."""
+
+    def __init__(self, vocabulary: Mapping[str, tuple[str, ...]] | None = None) -> None:
+        fixed: dict[str, set[str]] = {
+            "color": set(COLORS),
+            "material": set(MATERIALS),
+            "style": set(STYLES),
+            "feature": set(FEATURES),
+            "use_case": set(USE_CASES),
+        }
+        base_fixed = {attribute: set(values) for attribute, values in fixed.items()}
+        for attribute, values in (vocabulary or {}).items():
+            if attribute not in {
+                "brand",
+                "category",
+                "color",
+                "feature",
+                "material",
+                "size",
+                "style",
+                "use_case",
+            }:
+                continue
+            fixed.setdefault(attribute, set()).update(
+                normalize_value(value) for value in values if normalize_value(value)
+            )
+        self._vocabulary = {
+            attribute: tuple(
+                sorted(
+                    {
+                        "gray" if value == "grey" else normalize_value(value)
+                        for value in values
+                        if normalize_value(value)
+                    },
+                    key=lambda value: (-len(value.split()), -len(value), value),
+                )
+            )
+            for attribute, values in fixed.items()
+        }
+        self._fixed_values = {
+            attribute: {
+                normalize_value(value) for value in base_fixed.get(attribute, ())
+            }
+            for attribute in self._vocabulary
+        }
+        self._semantic_fixed_values = set().union(*self._fixed_values.values())
+        # Catalog vocabularies can contain tens of thousands of brands and
+        # noisy category labels.  Store token n-grams once at construction so
+        # each message is matched by a bounded dictionary scan rather than by
+        # compiling one regular expression per catalog value.
+        self._phrase_lookup: dict[str, dict[tuple[str, ...], str]] = {}
+        self._max_phrase_words = 1
+        for attribute, values in self._vocabulary.items():
+            lookup: dict[tuple[str, ...], str] = {}
+            for value in values:
+                value_terms = tuple(terms(value))
+                if not value_terms:
+                    continue
+                self._max_phrase_words = max(
+                    self._max_phrase_words, len(value_terms)
+                )
+                for alias in self._phrase_aliases(value_terms, attribute):
+                    # Values are sorted longest-first in `_vocabulary`; retain
+                    # the first canonical value for deterministic collisions.
+                    lookup.setdefault(alias, value)
+            self._phrase_lookup[attribute] = lookup
 
     def parse(
         self,
@@ -105,6 +263,8 @@ class MessageParser:
         if not text:
             return ParseResult()
         is_override = bool(_OVERRIDE_RE.search(text))
+        replace_preferences = bool(_PREFERENCE_RESET_RE.search(text))
+        is_continuation = bool(_CONTINUATION_RE.search(text))
         if is_override:
             expected_attribute = None
 
@@ -114,43 +274,89 @@ class MessageParser:
                 route_hint="browsing",
                 no_preference_attribute=attribute,
                 is_override=is_override,
+                is_continuation=is_continuation,
+                replace_preferences=replace_preferences,
+            )
+
+        # Continuation commands are control input, not answers to a pending
+        # attribute question.  Returning before catalog-vocabulary matching
+        # also prevents noisy aliases such as "show me more" from becoming a
+        # hard feature/use-case constraint.
+        if is_continuation:
+            return ParseResult(
+                is_override=is_override,
+                is_continuation=True,
+                replace_preferences=replace_preferences,
             )
 
         source: ConstraintSource = "clarification" if expected_attribute else "message"
         extracted: list[ParsedConstraint] = []
 
-        if expected_attribute:
+        known = self._extract_known_values(text, source)
+        categories = self._extract_category(text, source)
+        extracted.extend(known)
+        extracted.extend(categories)
+        if expected_attribute and not any(
+            item.attribute == normalize_value(expected_attribute) for item in extracted
+        ) and not any(item.operator == "not_in" for item in extracted) and self._has_unrecognized_expected_text(text, extracted):
             extracted.extend(self._extract_expected(text, expected_attribute, source))
-        else:
-            extracted.extend(self._extract_known_values(text, source))
-            extracted.extend(self._extract_category(text, source))
 
         route_hint: RouteHint = None
-        if _BROWSING_RE.search(text):
-            route_hint = "browsing"
-        elif extracted or _BUYING_RE.search(text):
+        if _BUYING_RE.search(text):
             route_hint = "buying"
+        elif _BROWSING_RE.search(text):
+            route_hint = "browsing"
 
         return ParseResult(
             constraints=tuple(self._deduplicate(extracted)),
             route_hint=route_hint,
             is_override=is_override,
+            is_continuation=is_continuation,
+            replace_preferences=replace_preferences,
         )
+
+    def _has_unrecognized_expected_text(
+        self, text: str, extracted: list[ParsedConstraint]
+    ) -> bool:
+        """Avoid assigning a known answer to an unrelated pending slot.
+
+        A clarification such as ``Blue.`` can arrive while a use-case question
+        is pending.  Known aliases are already represented in ``extracted``;
+        only residual, non-filler words should be offered to the pending slot.
+        Character spans are used so multi-word catalog aliases and budget
+        phrases are removed without changing the original query evidence.
+        """
+        covered: list[tuple[int, int]] = [
+            (start, end) for start, end, _, _ in self._vocabulary_matches(text)
+        ]
+        for pattern in (_BUDGET_BETWEEN_RE, _BUDGET_DIRECTION_RE, _BUDGET_DEFAULT_RE):
+            covered.extend(match.span() for match in pattern.finditer(text))
+        category_match = _CATEGORY_RE.search(text)
+        if category_match:
+            covered.append(category_match.span("category"))
+
+        # The fixed lexical category list is useful even when a lightweight
+        # parser was constructed without a catalog vocabulary.
+        for match in re.finditer(
+            r"\b(?:" + "|".join(sorted(_KNOWN_CATEGORIES, key=len, reverse=True)) + r")\b",
+            text,
+            re.IGNORECASE,
+        ):
+            covered.append(match.span())
+
+        residual_chars = [
+            character
+            if not any(start <= index < end for start, end in covered)
+            else " "
+            for index, character in enumerate(text)
+        ]
+        residual_tokens = terms("".join(residual_chars))
+        return any(token not in _EXPECTED_FILLER_TERMS for token in residual_tokens)
 
     def _extract_expected(
         self, text: str, attribute: str, source: ConstraintSource
     ) -> list[ParsedConstraint]:
         attribute = normalize_value(attribute)
-        known = self._extract_known_values(text, source)
-        matches = [item for item in known if item.attribute == attribute]
-        if matches:
-            return matches
-
-        if attribute == "category":
-            categories = self._extract_category(text, source)
-            if categories:
-                return categories
-
         cleaned = re.sub(r"^for that,?\s*(?:what matters is:?)?\s*", "", text)
         cleaned = cleaned.strip(" .;:")
         if cleaned and attribute in {
@@ -168,27 +374,277 @@ class MessageParser:
     def _extract_known_values(
         self, text: str, source: ConstraintSource
     ) -> list[ParsedConstraint]:
-        tokens = terms(text)
+        matches = self._vocabulary_matches(text)
         result: list[ParsedConstraint] = []
-        vocabularies = (
-            ("color", COLORS),
-            ("material", MATERIALS),
-            ("style", STYLES),
-            ("feature", FEATURES),
-            ("use_case", USE_CASES),
-        )
-        for attribute, vocabulary in vocabularies:
-            for value in tokens:
-                if value in vocabulary:
-                    canonical = "gray" if value == "grey" else value
-                    result.append(
-                        ParsedConstraint(attribute, canonical, 1.0, True, source)
-                    )
+        index = 0
+        while index < len(matches):
+            start, end, attribute, value = matches[index]
+            alternatives = [value]
+            next_index = index + 1
+            while next_index < len(matches):
+                other_start, other_end, other_attribute, other_value = matches[next_index]
+                connector = text[end:other_start]
+                if (
+                    other_attribute != attribute
+                    or not re.fullmatch(r"\s*,?\s*or\s*", connector, re.IGNORECASE)
+                ):
+                    break
+                alternatives.append(other_value)
+                end = other_end
+                next_index += 1
 
-        for match in _BUDGET_RE.finditer(text):
+            operator: ConstraintOperator = "eq"
+            values: tuple[str, ...] = ()
+            if len(alternatives) > 1:
+                operator = "not_in" if self._is_negative_value(text, start) else "in"
+                values = tuple(dict.fromkeys(alternatives))
+            elif self._is_negative_value(text, start):
+                operator = "not_in"
+                values = (value,)
             result.append(
                 ParsedConstraint(
-                    "budget", f"{float(match.group('amount')):.2f}", 1.0, True, source
+                    attribute,
+                    value,
+                    1.0,
+                    True,
+                    source,
+                    operator=operator,
+                    alternatives=values,
+                )
+            )
+            index = next_index
+
+        return [*result, *self._extract_budget(text, source)]
+
+    def _vocabulary_matches(self, text: str) -> list[tuple[int, int, str, str]]:
+        match_text = re.sub(r"['’]s\b", "  ", text)
+        token_spans = [
+            (match.group(0).lower(), match.start(), match.end())
+            for match in _TOKEN_SPAN_RE.finditer(match_text)
+        ]
+        candidates: list[tuple[int, int, str, str]] = []
+        for start_index, (_, start, _) in enumerate(token_spans):
+            max_length = min(self._max_phrase_words, len(token_spans) - start_index)
+            for length in range(max_length, 0, -1):
+                end_index = start_index + length - 1
+                key = tuple(
+                    token_spans[index][0] for index in range(start_index, end_index + 1)
+                )
+                end = token_spans[end_index][2]
+                for attribute, lookup in self._phrase_lookup.items():
+                    value = lookup.get(key)
+                    if value is None:
+                        continue
+                    if not self._alias_allowed(attribute, value, text, start):
+                        continue
+                    if attribute == "category" and self._is_negative_value(text, start):
+                        continue
+                    candidates.append((start, end, attribute, value))
+
+        # Prefer the longest phrase at a start position and prevent overlapping
+        # aliases for the same attribute while allowing the same text to map to
+        # different represented attributes (for example `casual` style/use_case).
+        ordered = sorted(
+            candidates,
+            key=lambda item: (item[0], -(item[1] - item[0]), item[2], item[3]),
+        )
+        result: list[tuple[int, int, str, str]] = []
+        occupied: dict[str, list[tuple[int, int]]] = {}
+        for candidate in ordered:
+            start, end, attribute, _ = candidate
+            if any(
+                start < prior_end and prior_start < end
+                for prior_start, prior_end in occupied.get(attribute, ())
+            ):
+                continue
+            occupied.setdefault(attribute, []).append((start, end))
+            result.append(candidate)
+        return sorted(result, key=lambda item: (item[0], item[1], item[2], item[3]))
+
+    def _alias_allowed(
+        self, attribute: str, value: str, text: str, start: int
+    ) -> bool:
+        normalized = normalize_value(value)
+        value_terms = terms(normalized)
+        if not value_terms or any(len(token) < 2 for token in value_terms):
+            return False
+        if len(value_terms) == 1 and value_terms[0] in _ALIAS_STOPWORDS:
+            return False
+        if normalized in self._fixed_values.get(attribute, set()):
+            return True
+        if attribute == "brand" and (
+            normalized in _NON_BRAND_TERMS
+            or (
+                normalized in self._semantic_fixed_values
+                and not re.search(r"\bbrand\b", text[:start].lower())
+            )
+            or normalized in {
+                normalize_value(item) for item in self._vocabulary.get("category", ())
+            }
+        ):
+            return False
+        if attribute == "category" and (
+            normalized in COLORS
+            or normalized in MATERIALS
+            or normalized in STYLES
+            or normalized in FEATURES
+            or normalized in USE_CASES
+        ):
+            return False
+        if attribute == "category" and re.search(
+            r"\b(?:under|over|above|below|less\s+than|more\s+than|"
+            r"at\s+least|at\s+most|up\s+to|no\s+more\s+than)\s*\d",
+            normalized,
+        ):
+            return False
+
+        prefix = text[:start].lower()
+        boundary = max(prefix.rfind("."), prefix.rfind(":"), prefix.rfind(";"))
+        clause = prefix[boundary + 1 :]
+        if attribute == "category" and normalize_category_value(normalized) in {
+            normalize_category_value(item) for item in _KNOWN_CATEGORIES
+        }:
+            return True
+        if attribute == "category":
+            return bool(
+                re.search(
+                    r"\b(?:looking\s+for|shopping\s+for|need|want|find|show\s+me)\b",
+                    clause,
+                )
+            )
+        if attribute == "brand":
+            return bool(
+                re.search(r"\b(?:brand|by|from|looking\s+for|need|want)\b", clause)
+            )
+        if attribute == "size":
+            return bool(re.search(r"\b(?:size|sized|wear|in)\b", clause))
+        if attribute == "style":
+            return bool(re.search(r"\b(?:style|prefer|looking\s+for|want)\b", clause))
+        if attribute == "feature":
+            return bool(
+                re.search(
+                    r"\b(?:feature|need|want|must\s+have|with|looking\s+for|prefer)\b",
+                    clause,
+                )
+            )
+        return True
+
+    @staticmethod
+    def _phrase_aliases(
+        value_terms: tuple[str, ...], attribute: str
+    ) -> tuple[tuple[str, ...], ...]:
+        if not value_terms:
+            return ()
+        last = value_terms[-1]
+        variants = {last}
+        if attribute == "category":
+            variants.add(normalize_category_value(last))
+        # Match ordinary singular/plural user phrasing for all catalog values,
+        # while keeping the catalog's original spelling as the returned value.
+        if len(last) > 3 and last.endswith("ies"):
+            variants.add(last[:-3] + "y")
+        elif len(last) > 3 and last.endswith("ses"):
+            variants.add(last[:-2])
+        elif len(last) > 2 and last.endswith("s") and not last.endswith("ss"):
+            variants.add(last[:-1])
+        elif len(last) > 2:
+            variants.add(last + "s")
+        return tuple(
+            (*value_terms[:-1], variant) for variant in variants if variant
+        )
+
+    @staticmethod
+    def _phrase_pattern(value: str) -> re.Pattern[str]:
+        words = value.split()
+        if not words:
+            return re.compile(r"(?!)")
+        phrase = r"\s+".join(
+            [*(re.escape(word) for word in words[:-1]), MessageParser._word_pattern(words[-1])]
+        )
+        return re.compile(rf"(?<![a-z0-9]){phrase}(?![a-z0-9])", re.IGNORECASE)
+
+    @staticmethod
+    def _word_pattern(word: str) -> str:
+        if len(word) > 3 and word.endswith("ies"):
+            return rf"(?:{re.escape(word[:-3] + 'y')}|{re.escape(word)})"
+        if len(word) > 3 and word.endswith("ses"):
+            return rf"{re.escape(word[:-2])}(?:es)?"
+        if len(word) > 2 and word.endswith("s"):
+            return rf"{re.escape(word[:-1])}s?"
+        if len(word) > 2 and word.endswith("y") and word[-2] not in "aeiou":
+            return rf"(?:{re.escape(word)}|{re.escape(word[:-1])}ies)"
+        if len(word) > 2 and word.endswith(("ch", "sh", "x", "z")):
+            return rf"{re.escape(word)}(?:es)?"
+        return rf"{re.escape(word)}s?"
+
+    @staticmethod
+    def _is_negative_value(text: str, start: int) -> bool:
+        return bool(
+            re.search(
+                r"\b(?:not|without|no|don['’]?t\s+want|do\s+not\s+want|"
+                r"doesn['’]?t\s+include|does\s+not\s+include)\s*$",
+                text[:start],
+                re.IGNORECASE,
+            )
+        )
+
+    @staticmethod
+    def _extract_budget(text: str, source: ConstraintSource) -> list[ParsedConstraint]:
+        result: list[ParsedConstraint] = []
+        covered: list[tuple[int, int]] = []
+        for match in _BUDGET_BETWEEN_RE.finditer(text):
+            covered.append(match.span())
+            result.append(
+                ParsedConstraint(
+                    "budget",
+                    f"{float(match.group('amount')):.2f}",
+                    1.0,
+                    True,
+                    source,
+                    operator="between",
+                    upper_value=f"{float(match.group('upper')):.2f}",
+                )
+            )
+
+        directions: dict[str, ConstraintOperator] = {
+            "under": "lte",
+            "below": "lte",
+            "less than": "lte",
+            "at most": "lte",
+            "no more than": "lte",
+            "up to": "lte",
+            "over": "gte",
+            "above": "gte",
+            "more than": "gte",
+            "at least": "gte",
+            "from": "gte",
+        }
+        for match in _BUDGET_DIRECTION_RE.finditer(text):
+            if any(match.start() < end and start < match.end() for start, end in covered):
+                continue
+            covered.append(match.span())
+            result.append(
+                ParsedConstraint(
+                    "budget",
+                    f"{float(match.group('amount')):.2f}",
+                    1.0,
+                    True,
+                    source,
+                    operator=directions[normalize_value(match.group("direction"))],
+                )
+            )
+
+        for match in _BUDGET_DEFAULT_RE.finditer(text):
+            if any(match.start() < end and start < match.end() for start, end in covered):
+                continue
+            result.append(
+                ParsedConstraint(
+                    "budget",
+                    f"{float(match.group('amount')):.2f}",
+                    1.0,
+                    True,
+                    source,
+                    operator="lte",
                 )
             )
         return result
@@ -201,10 +657,9 @@ class MessageParser:
             return []
         category_tokens = terms(match.group("category"))
         known = [token for token in category_tokens if token in _KNOWN_CATEGORIES]
-        value = " ".join(known or category_tokens)
-        if not value:
+        if not known:
             return []
-        return [ParsedConstraint("category", value, 1.0, True, source)]
+        return [ParsedConstraint("category", " ".join(known), 1.0, True, source)]
 
     @staticmethod
     def _mentioned_attribute(text: str) -> str | None:
@@ -227,9 +682,24 @@ class MessageParser:
     @staticmethod
     def _deduplicate(items: list[ParsedConstraint]) -> list[ParsedConstraint]:
         result: list[ParsedConstraint] = []
-        seen: set[tuple[str, str]] = set()
+        seen: set[tuple[str, str, ConstraintOperator, str | None, tuple[str, ...]]] = set()
         for item in items:
-            key = (item.attribute, item.value)
+            key = (
+                item.attribute,
+                normalize_category_value(item.value)
+                if item.attribute == "category"
+                else item.value,
+                item.operator,
+                item.upper_value,
+                tuple(
+                    sorted(
+                        normalize_category_value(value)
+                        if item.attribute == "category"
+                        else value
+                        for value in item.alternatives
+                    )
+                ),
+            )
             if key not in seen:
                 seen.add(key)
                 result.append(item)

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import math
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 
 from .catalog import CatalogIndex
+from .constraints import hard_constraint_violations
 from .dense import DenseBackend
-from .models import Candidate, RetrievalPlan, SessionState
+from .models import Candidate, Constraint, RetrievalPlan, SessionState
+from .normalization import normalize_category_value, normalize_value
 
 
 def reciprocal_rank_fusion(
@@ -39,8 +42,18 @@ class HybridRetriever:
         self.rrf_k = rrf_k
 
     def retrieve(
-        self, plan: RetrievalPlan, state: SessionState | None = None
+        self,
+        plan: RetrievalPlan,
+        state: SessionState | None = None,
+        *,
+        exclude_ids: Collection[str] | None = None,
     ) -> list[Candidate]:
+        # The caller normally supplies the exclusion set explicitly so ordinary
+        # refinements can reuse a previous result.  Keep the state-based fallback
+        # for direct component callers that set the continuation flag themselves.
+        excluded = set(exclude_ids or ())
+        if state is not None and state.continuation_requested and exclude_ids is None:
+            excluded.update(state.previous_recommendations)
         component_limit = min(150, plan.candidate_limit)
         lexical = self.catalog.search_lexical(plan, limit=component_limit)
         attribute_ids = self._attribute_candidates(plan, component_limit)
@@ -48,30 +61,58 @@ class HybridRetriever:
         dense = self._dense_candidates(plan.query_text, component_limit)
 
         rankings = {
-            "lexical": [item.parent_asin for item in lexical],
-            "attribute": attribute_ids,
-            "profile": profile_ids,
-            "dense": [item.parent_asin for item in dense],
+            "lexical": self._exact_ids(
+                [item.parent_asin for item in lexical], plan, excluded
+            ),
+            "attribute": self._exact_ids(attribute_ids, plan, excluded),
+            "profile": self._exact_ids(profile_ids, plan, excluded),
+            "dense": self._exact_ids(
+                [item.parent_asin for item in dense], plan, excluded
+            ),
         }
         weights = dict(plan.source_weights) or self._default_weights(plan.route)
         fused_ids = reciprocal_rank_fusion(rankings, weights=weights, k=self.rrf_k)
         fused_ids = [item for item in fused_ids if item in self.catalog.valid_ids]
 
         desired = min(10, len(self.catalog.valid_ids), plan.candidate_limit)
-        if len(fused_ids) < desired:
-            for identifier in self._fallback_ids(plan):
-                if identifier not in fused_ids:
-                    fused_ids.append(identifier)
-                if len(fused_ids) >= desired:
+        fallback_ids = self._fallback_ids(plan)
+        for identifier in self._exact_ids(fallback_ids, plan, excluded):
+            if identifier not in fused_ids:
+                fused_ids.append(identifier)
+            if len(fused_ids) >= desired:
+                break
+
+        exact_ids = fused_ids[: plan.candidate_limit]
+        relaxed_ids: list[str] = []
+        if len(exact_ids) < desired:
+            for identifier in fallback_ids:
+                if (
+                    identifier in excluded
+                    or identifier in exact_ids
+                    or identifier in relaxed_ids
+                ):
+                    continue
+                if self._violations(identifier, plan):
+                    relaxed_ids.append(identifier)
+                if len(exact_ids) + len(relaxed_ids) >= desired:
                     break
 
-        fused_ids = fused_ids[: plan.candidate_limit]
+        # If a caller asks for more pages than the catalog contains, the
+        # exclusion set can consume every eligible ID.  Preserve the official
+        # valid-ID guarantee as a last resort, after all unshown IDs were tried.
+        if not exact_ids and not relaxed_ids and excluded:
+            for identifier in fallback_ids:
+                if identifier not in self.catalog.valid_ids:
+                    continue
+                relaxed_ids.append(identifier)
+                if len(relaxed_ids) >= desired:
+                    break
         source_ranks = {
             source: {identifier: rank for rank, identifier in enumerate(ids, start=1)}
             for source, ids in rankings.items()
         }
         candidates: list[Candidate] = []
-        for identifier in fused_ids:
+        for identifier in exact_ids:
             contributions = {
                 source: weights.get(source, 0.0) / (self.rrf_k + ranks[identifier])
                 for source, ranks in source_ranks.items()
@@ -85,9 +126,28 @@ class HybridRetriever:
                     score=sum(contributions.values()),
                 )
             )
+        for identifier in relaxed_ids:
+            candidates.append(
+                Candidate(
+                    parent_asin=identifier,
+                    product=self.catalog.product(identifier),
+                    violations=self._violations(identifier, plan),
+                    relaxed=True,
+                )
+            )
         return candidates
 
     def _attribute_candidates(self, plan: RetrievalPlan, limit: int) -> list[str]:
+        constraints = plan.effective_hard_constraints()
+        if constraints:
+            groups = [self._ids_for_constraint(item) for item in constraints]
+            if not groups or any(not group for group in groups):
+                return []
+            identifiers = set.intersection(*groups)
+            return sorted(
+                identifiers,
+                key=lambda item: (-self.catalog.quality[item], item),
+            )[:limit]
         groups: list[set[str]] = []
         for attribute, values in plan.hard_filters.items():
             if attribute == "budget":
@@ -112,6 +172,76 @@ class HybridRetriever:
             key=lambda item: (-self.catalog.quality[item], item),
         )[:limit]
 
+    def _ids_for_constraint(self, constraint: Constraint) -> set[str]:
+        if constraint.attribute == "budget":
+            return {
+                identifier
+                for identifier, product in self.catalog.products.items()
+                if self._price_matches(product.get("price"), constraint)
+            }
+
+        attribute = constraint.attribute
+        normalizer = (
+            normalize_category_value
+            if attribute == "category"
+            else normalize_value
+        )
+        inverted = self.catalog.attribute_inverted.get(attribute, {})
+
+        def ids_for(value: str) -> set[str]:
+            wanted = normalizer(value)
+            return {
+                identifier
+                for catalog_value, identifiers in inverted.items()
+                if normalizer(catalog_value) == wanted
+                for identifier in identifiers
+            }
+
+        matched = set().union(*(ids_for(value) for value in constraint.values()))
+        if constraint.operator == "not_in":
+            present = set().union(*inverted.values()) if inverted else set()
+            return present - matched
+        if constraint.operator in {"eq", "in"}:
+            return matched
+        return set()
+
+    @classmethod
+    def _price_matches(cls, raw_price: object, constraint: Constraint) -> bool:
+        price = cls._finite_positive(raw_price)
+        lower = cls._finite_positive(constraint.value)
+        if price is None or lower is None:
+            return False
+        if constraint.operator == "lte":
+            return price <= lower
+        if constraint.operator == "gte":
+            return price >= lower
+        if constraint.operator == "between":
+            upper = cls._finite_positive(constraint.upper_value)
+            return upper is not None and lower <= price <= upper
+        if constraint.operator in {"eq", "in"}:
+            values = {
+                number
+                for value in constraint.values()
+                if (number := cls._finite_positive(value)) is not None
+            }
+            return price in values
+        if constraint.operator == "not_in":
+            values = {
+                number
+                for value in constraint.values()
+                if (number := cls._finite_positive(value)) is not None
+            }
+            return price not in values
+        return False
+
+    @staticmethod
+    def _finite_positive(value: object) -> float | None:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        return number if number > 0 and math.isfinite(number) else None
+
     def _profile_candidates(self, plan: RetrievalPlan, limit: int) -> list[str]:
         scores: dict[str, int] = defaultdict(int)
         for attribute, values in plan.soft_preferences.items():
@@ -122,6 +252,35 @@ class HybridRetriever:
             scores,
             key=lambda item: (-scores[item], -self.catalog.quality[item], item),
         )[:limit]
+
+    def _violations(self, identifier: str, plan: RetrievalPlan) -> tuple[str, ...]:
+        constraints = plan.effective_hard_constraints()
+        if not constraints:
+            return ()
+        return hard_constraint_violations(
+            self.catalog.product(identifier),
+            self.catalog.attributes[identifier],
+            constraints,
+        )
+
+    def _exact_ids(
+        self,
+        identifiers: Iterable[str],
+        plan: RetrievalPlan,
+        excluded: Collection[str] = (),
+    ) -> list[str]:
+        result: list[str] = []
+        seen: set[str] = set()
+        for identifier in identifiers:
+            if (
+                identifier not in seen
+                and identifier not in excluded
+                and identifier in self.catalog.valid_ids
+                and not self._violations(identifier, plan)
+            ):
+                seen.add(identifier)
+                result.append(identifier)
+        return result
 
     def _dense_candidates(self, text: str, limit: int) -> list[Candidate]:
         if self.dense is None or not self.dense.available:

@@ -1,0 +1,4 @@
+assets/model/model.int8.onnx binary
+assets/model/tokenizer.json binary
+assets/product_vectors/*.npy binary
+docs/*.docx binary

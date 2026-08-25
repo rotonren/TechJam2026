@@ -71,9 +71,13 @@ FEATURES = {
     "weatherproof",
 }
 GENERIC_CATEGORIES = {
+    "accessories",
     "clothing",
     "clothing shoes jewelry",
     "clothing shoes and jewelry",
+    "men",
+    "shoes and jewelry",
+    "women",
 }
 
 
@@ -90,6 +94,21 @@ def flatten_text(value: object) -> str:
 def normalize_value(value: object) -> str:
     normalized = WHITESPACE_RE.sub(" ", flatten_text(value)).strip().lower()
     return normalized.strip(" -;,.")
+
+
+def normalize_category_value(value: object) -> str:
+    """Normalize category words while accepting ordinary singular/plural variants."""
+    return " ".join(_singular_category_term(token) for token in terms(value))
+
+
+def _singular_category_term(token: str) -> str:
+    if len(token) > 3 and token.endswith("ies"):
+        return f"{token[:-3]}y"
+    if len(token) > 3 and token.endswith("ses"):
+        return token[:-2]
+    if len(token) > 2 and token.endswith("s") and not token.endswith("ss"):
+        return token[:-1]
+    return token
 
 
 def terms(text: object) -> list[str]:

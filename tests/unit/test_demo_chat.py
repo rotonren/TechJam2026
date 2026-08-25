@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 import io
+import os
+import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
+from typing import ClassVar
 
+from compasscart.models import Constraint, SessionState
 from tools.demo_chat import (
     DEFAULT_PROFILE,
     SCENARIOS,
@@ -28,7 +34,7 @@ class _Sessions:
 
 
 class _Catalog:
-    products = {
+    products: ClassVar[dict[str, dict[str, object]]] = {
         "A1": {
             "title": "Blue Trail Running Shoe",
             "price": 79.99,
@@ -46,11 +52,16 @@ class _Dense:
 
 
 class _Traces:
-    records = [
+    records: ClassVar[list[dict[str, object]]] = [
         {
             "route": "buying",
+            "route_reason": "explicit budget constraint",
+            "intent_version": 2,
             "active_constraints": [("color", "black"), ("material", "leather")],
             "candidate_count": 42,
+            "ask_attribute": "size",
+            "relaxed_count": 1,
+            "relaxed_constraints": ["budget<=80"],
             "elapsed_ms": 123.456,
             "fallbacks": [],
         }
@@ -124,13 +135,47 @@ def test_format_trace_exposes_demo_evidence():
     text = format_trace(_Agent(), "session-1")
 
     assert "route=buying" in text
+    assert "route_reason=explicit budget constraint" in text
     assert "intent=v2" in text
     assert "color=black" in text
     assert "material=leather" in text
     assert "candidates=42" in text
+    assert "ask=size" in text
+    assert "relaxed=1" in text
+    assert "relaxed_constraints=budget<=80" in text
     assert "latency=123.456 ms" in text
     assert "fallbacks=none" in text
     assert "dense=on" in text
+
+
+def test_format_trace_preserves_constraint_operators():
+    state = SessionState(
+        "session-1",
+        constraints=[
+            Constraint("budget", "50.00", 1.0, True, "message", 1, 1, operator="gte"),
+            Constraint(
+                "material",
+                "leather",
+                1.0,
+                True,
+                "message",
+                1,
+                1,
+                operator="not_in",
+                alternatives=("leather",),
+            ),
+        ],
+    )
+    agent = SimpleNamespace(
+        traces=_Traces(),
+        sessions=SimpleNamespace(get=lambda _session_id: state),
+        dense=_Dense(),
+    )
+
+    text = format_trace(agent, "session-1")
+
+    assert "budget>=50.00" in text
+    assert "material not in (leather)" in text
 
 
 def test_guided_scenarios_cover_four_judging_behaviors():
@@ -155,6 +200,25 @@ def test_parser_exposes_live_demo_options():
     assert args.scenario == "override"
     assert args.lexical is True
     assert args.top == 3
+
+
+def test_demo_module_help_runs_without_pythonpath():
+    repo_root = Path(__file__).resolve().parents[2]
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "tools.demo_chat", "--help"],
+        cwd=repo_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "Interactive CompassCart product-search demonstration." in completed.stdout
 
 
 def test_run_scenario_sends_each_turn_and_prints_trace():

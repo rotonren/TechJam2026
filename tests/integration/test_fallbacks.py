@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from agent import Agent
 from compasscart.models import Candidate
 
@@ -10,6 +12,34 @@ def _assert_valid(response: dict, valid_ids: set[str]) -> None:
     assert identifiers
     assert len(identifiers) == len(set(identifiers))
     assert set(identifiers) <= valid_ids
+
+
+def _ids(response: dict) -> list[str]:
+    return [item["parent_asin"] for item in response["recommendations"]]
+
+
+def _twelve_product_catalog(tmp_path):
+    path = tmp_path / "twelve-products.jsonl"
+    prices = (40.0, 42.0, 45.0, 49.0, 50.0, 65.0, 80.0, 100.0, 101.0, 125.0, 150.0, 175.0)
+    products = [
+        {
+            "parent_asin": f"P{index:02d}",
+            "title": f"{color.title()} running shoe {index}",
+            "features": ["breathable"],
+            "details": {"Color": color},
+            "categories": ["Clothing", "Shoes"],
+            "price": price,
+            "average_rating": 4.0,
+            "rating_number": 100 + index,
+        }
+        for index, (price, color) in enumerate(
+            zip(prices, ("black", "blue", "red") * 4, strict=True)
+        )
+    ]
+    path.write_text(
+        "".join(json.dumps(product) + "\n" for product in products), encoding="utf-8"
+    )
+    return path
 
 
 def test_parser_ranker_and_empty_retrieval_failures_are_contained(
@@ -88,3 +118,103 @@ def test_trace_storage_failure_does_not_break_response(fixture_catalog_path):
 
     _assert_valid(response, agent.catalog.valid_ids)
     assert agent.traces.enabled is False
+
+
+def test_agent_trace_exposes_route_and_relaxation_evidence(fixture_catalog_path):
+    agent = Agent(fixture_catalog_path)
+    agent.reset("s1", {})
+
+    response = agent.respond("s1", "still exploring shoes under $50", 1, 10)
+
+    _assert_valid(response, agent.catalog.valid_ids)
+    assert "relaxing budget<=50.00" in response["message"]
+    trace = agent.traces.records[-1]
+    assert trace["route_reason"] == "explicit_buying"
+    assert trace["relaxed_count"] > 0
+    assert "budget<=50.00" in trace["relaxed_constraints"]
+
+
+def test_first_category_query_returns_the_singular_plural_exact_match(
+    fixture_catalog_path,
+):
+    agent = Agent(fixture_catalog_path)
+    agent.reset("belt", {})
+
+    response = agent.respond("belt", "I need a belt", 1, 1)
+
+    assert _ids(response) == ["BELT1"]
+    assert agent.traces.records[-1]["relaxed_count"] == 0
+
+
+def test_constraint_matrix_keeps_exact_prices_and_colors_ahead_of_alternatives(tmp_path):
+    agent = Agent(_twelve_product_catalog(tmp_path))
+    agent.reset("under", {})
+
+    under = agent.respond("under", "I need shoes under $50", 1, 10)
+    under_ids = _ids(under)
+    under_prices = [float(agent.catalog.product(identifier)["price"]) for identifier in under_ids]
+    assert all(price <= 50.0 for price in under_prices[:5])
+    assert all(price > 50.0 for price in under_prices[5:])
+
+    state = agent.sessions.get("under")
+    assert state is not None
+    plan = agent.router.build_plan(state, "I need shoes under $50")
+    ranked = agent.ranker.rank(agent.retriever.retrieve(plan, state), state)
+    assert all(not candidate.relaxed for candidate in ranked[:5])
+    assert all(candidate.relaxed for candidate in ranked[5:])
+
+    agent.reset("between", {})
+    between = agent.respond("between", "I need shoes between $50 and $100", 1, 4)
+    between_prices = [
+        float(agent.catalog.product(identifier)["price"])
+        for identifier in _ids(between)
+    ]
+    assert all(50.0 <= price <= 100.0 for price in between_prices)
+
+    agent.reset("colors", {})
+    colors = agent.respond("colors", "I need black or blue shoes", 1, 8)
+    selected_colors = {
+        agent.catalog.attributes[identifier]["color"][0]
+        for identifier in _ids(colors)
+    }
+    assert selected_colors <= {"black", "blue"}
+
+
+def test_show_me_more_excludes_previous_batch_but_refinement_does_not(
+    fixture_catalog_path,
+):
+    agent = Agent(fixture_catalog_path)
+    agent.reset("more", {})
+
+    first = agent.respond("more", "show me shoes", 1, 2)
+    first_ids = _ids(first)
+    more = agent.respond("more", "show me more", 2, 2)
+    more_ids = _ids(more)
+
+    assert first_ids
+    assert more_ids
+    assert set(first_ids).isdisjoint(more_ids)
+    state = agent.sessions.get("more")
+    assert state is not None
+    assert state.continuation_requested is False
+
+    refined = agent.respond("more", "blue shoes", 3, 2)
+    refined_ids = _ids(refined)
+    assert set(refined_ids) & set(first_ids)
+
+
+def test_empty_retrieval_uses_constraint_aware_fallback(fixture_catalog_path):
+    agent = Agent(fixture_catalog_path)
+    agent.reset("empty-hard", {})
+    agent.retriever.retrieve = lambda *_args, **_kwargs: []
+
+    response = agent.respond("empty-hard", "I need shoes under $80", 1, 10)
+
+    prices = [
+        float(agent.catalog.product(identifier)["price"])
+        for identifier in _ids(response)
+    ]
+    # SHOE1 is the exact fixture match; any additional IDs must be disclosed
+    # alternatives, but no silent over-budget item may be returned as exact.
+    assert prices[0] <= 80.0
+    assert "relaxing" in response["message"]

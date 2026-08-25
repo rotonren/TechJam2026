@@ -1,3 +1,5 @@
+from agent import Agent
+from compasscart.models import Constraint
 from compasscart.parser import MessageParser
 from compasscart.state import SessionStore
 
@@ -67,8 +69,244 @@ def test_query_history_keeps_evidence_but_resets_on_override():
     state = store.update(
         "s1", "I don't have a preference for size; use your judgment.", 2
     )
-    assert state.query_history == ["I need a red cotton dress with buckle closure"]
+    assert state.query_history == [
+        "I need a red cotton dress with buckle closure",
+        "I don't have a preference for size; use your judgment.",
+    ]
 
     state = store.update("s1", "Actually, what I need is blue leather shoes.", 3)
 
     assert state.query_history == ["Actually, what I need is blue leather shoes."]
+
+
+def test_update_copies_parser_semantics_to_constraint():
+    store = SessionStore(MessageParser())
+    store.reset("s1", {})
+
+    state = store.update("s1", "between $50 and $80", 1)
+
+    budget = state.active_constraints()[0]
+    assert (budget.operator, budget.value, budget.upper_value, budget.alternatives) == (
+        "between",
+        "50.00",
+        "80.00",
+        (),
+    )
+
+
+def test_update_keeps_unknown_second_message_as_bounded_query_evidence():
+    store = SessionStore(MessageParser())
+    store.reset("s1", {})
+    store.update("s1", "I need blue shoes", 1)
+
+    state = store.update("s1", "with a magnetic clasp", 2)
+
+    assert state.query_history == ["I need blue shoes", "with a magnetic clasp"]
+    assert Agent._query_text("with a magnetic clasp", state).count(
+        "with a magnetic clasp"
+    ) == 1
+
+
+def test_update_marks_and_clears_continuation_requests_and_keeps_last_four_messages():
+    store = SessionStore(MessageParser())
+    store.reset("s1", {})
+    for turn, message in enumerate(("one", "two", "three", "four", "five"), start=1):
+        state = store.update("s1", message, turn)
+
+    state = store.update("s1", "show me more", 6)
+    assert state.continuation_requested is True
+    assert state.query_history == ["three", "four", "five", "show me more"]
+
+    state = store.update("s1", "blue", 7)
+    assert state.continuation_requested is False
+    assert state.override_scope == "none"
+
+
+def test_goal_override_replaces_prior_hard_constraints_and_question_state():
+    store = SessionStore(MessageParser())
+    state = store.reset("s1", {"preference_tags": ["comfort"]})
+    state.asked_attributes.append("size")
+    state.pending_attribute = "material"
+    state.no_preference_attributes.add("brand")
+    store.update("s1", "I need a red cotton dress", 1)
+
+    state = store.update(
+        "s1", "Actually, I need a black leather belt", 2
+    )
+
+    assert state.override_scope == "goal"
+    assert {(item.attribute, item.value) for item in state.active_constraints()} == {
+        ("color", "black"),
+        ("material", "leather"),
+        ("category", "belt"),
+        ("feature", "comfortable"),
+    }
+    assert state.asked_attributes == []
+    assert state.pending_attribute is None
+    assert state.no_preference_attributes == set()
+    assert state.query_history == ["Actually, I need a black leather belt"]
+
+
+def test_attribute_override_replaces_only_mentioned_attribute():
+    store = SessionStore(MessageParser())
+    store.reset("s1", {})
+    store.update("s1", "I need a red cotton dress", 1)
+
+    state = store.update("s1", "Actually, make it blue", 2)
+
+    assert state.override_scope == "attribute"
+    assert {(item.attribute, item.value) for item in state.active_constraints()} == {
+        ("color", "blue"),
+        ("material", "cotton"),
+        ("category", "dress"),
+    }
+
+
+def test_explicit_preference_reset_keeps_category_but_clears_old_preferences():
+    store = SessionStore(MessageParser())
+    store.reset("s1", {})
+    prior = store.update("s1", "I need a red cotton dress", 1)
+    prior.asked_attributes.append("brand")
+    prior.pending_attribute = "size"
+    prior.no_preference_attributes.add("feature")
+
+    state = store.update(
+        "s1",
+        "Actually, ignore my earlier preference. What I need is leather.",
+        2,
+    )
+
+    assert state.override_scope == "attribute"
+    assert {(item.attribute, item.value) for item in state.active_constraints()} == {
+        ("category", "dress"),
+        ("material", "leather"),
+    }
+    assert state.query_history == [
+        "Actually, ignore my earlier preference. What I need is leather."
+    ]
+    assert state.asked_attributes == []
+    assert state.pending_attribute is None
+    assert state.no_preference_attributes == set()
+
+
+def test_goal_override_allows_an_attribute_rejected_under_the_old_goal():
+    store = SessionStore(MessageParser())
+    state = store.reset("s1", {})
+    state.asked_attributes.append("size")
+    state.no_preference_attributes.add("size")
+    store.update("s1", "I need a red dress", 1)
+
+    state = store.update("s1", "Actually, I need blue shoes", 2)
+
+    assert state.override_scope == "goal"
+    assert "size" not in state.asked_attributes
+    assert "size" not in state.no_preference_attributes
+
+
+def test_profile_constraints_are_soft_and_never_override_user_color():
+    store = SessionStore(MessageParser())
+    state = store.reset(
+        "s1",
+        {
+            "preference_tags": [
+                "comfort",
+                "fit",
+                "durable",
+                "warm",
+                "weatherproof",
+                "lightweight",
+                "breathable",
+                "waterproof",
+                "stretch",
+                "red",
+            ],
+            "purchase_frequency": 3,
+            "average_prior_rating": 4.8,
+            "rating_style": "high",
+        },
+    )
+    state = store.update("s1", "I need blue shoes", 1)
+
+    active = state.active_constraints()
+    assert all(not item.is_hard for item in active if item.source == "profile")
+    assert ("color", "blue") in {(item.attribute, item.value) for item in active}
+    assert ("color", "red") not in {(item.attribute, item.value) for item in active}
+    assert {item.value for item in active if item.source == "profile"} >= {
+        "comfortable",
+        "durable",
+        "warm",
+        "weatherproof",
+        "lightweight",
+        "breathable",
+        "waterproof",
+        "stretch",
+    }
+    assert not {
+        "3",
+        "4.8",
+        "high",
+    } & {item.value for item in active}
+
+
+def test_negative_constraint_replaces_same_value_positive_constraint():
+    store = SessionStore(MessageParser())
+    store.reset("s1", {})
+    store.update("s1", "I need leather shoes", 1)
+
+    state = store.update("s1", "I don't want leather", 2)
+
+    material = [item for item in state.active_constraints() if item.attribute == "material"]
+    assert len(material) == 1
+    assert material[0].operator == "not_in"
+    assert material[0].value == "leather"
+
+
+def test_goal_override_compares_category_singular_plural_forms():
+    parser = MessageParser({"category": ("Dresses", "Belts")})
+    store = SessionStore(parser)
+    store.reset("s1", {})
+    store.update("s1", "I need a dress", 1)
+
+    state = store.update("s1", "I've changed my mind: belt", 2)
+
+    assert state.override_scope == "goal"
+    assert {item.value for item in state.active_constraints() if item.attribute == "category"} == {
+        "belts"
+    }
+
+
+def test_goal_override_drops_non_profile_soft_category_constraints():
+    store = SessionStore(MessageParser())
+    state = store.reset("s1", {})
+    state.constraints.append(
+        Constraint("category", "dress", 0.5, False, "inferred", 1, 1)
+    )
+
+    state = store.update("s1", "Actually, I need a black belt", 2)
+
+    assert ("category", "dress") not in {
+        (item.attribute, item.value) for item in state.active_constraints()
+    }
+    assert any(
+        item.attribute == "category"
+        and item.value == "dress"
+        and item.status == "superseded"
+        for item in state.constraints
+    )
+
+
+def test_goal_override_supersedes_old_non_profile_soft_constraints():
+    store = SessionStore(MessageParser())
+    state = store.reset("s1", {})
+    state.constraints.append(
+        Constraint("feature", "warm", 0.5, False, "inferred", 1, 1)
+    )
+
+    state = store.update("s1", "Actually, I need a black belt", 2)
+
+    assert any(
+        item.attribute == "feature"
+        and item.value == "warm"
+        and item.status == "superseded"
+        for item in state.constraints
+    )

@@ -1,4 +1,4 @@
-from compasscart.models import Candidate, SessionState
+from compasscart.models import Candidate, Constraint, SessionState
 from compasscart.question_policy import QuestionPolicy
 
 
@@ -100,3 +100,50 @@ def test_policy_prefers_answerable_attribute_over_category_or_brand():
     decision = QuestionPolicy().choose(candidates, SessionState("s1", turn=2))
 
     assert decision.ask_attribute == "material"
+
+
+def test_policy_does_not_invent_an_other_question_for_undifferentiated_results():
+    candidates = [_candidate(f"P{index:03d}", 300.0 - index) for index in range(250)]
+
+    decision = QuestionPolicy().choose(candidates, SessionState("s1", turn=2))
+
+    assert decision.ask_attribute is None
+
+
+def test_policy_does_not_ask_a_follow_up_when_more_results_are_requested():
+    candidates = [
+        _candidate(
+            f"P{index:02d}",
+            12.0 - index,
+            material="cotton" if index < 6 else "leather",
+        )
+        for index in range(12)
+    ]
+    state = SessionState("s1", turn=2, continuation_requested=True)
+
+    decision = QuestionPolicy().choose(candidates, state)
+
+    assert decision.ask_attribute is None
+
+
+def test_policy_does_not_ask_for_an_explicitly_constrained_attribute():
+    candidates = [
+        _candidate(
+            f"P{index:02d}",
+            12.0 - index,
+            material="cotton" if index < 6 else "leather",
+            color="blue" if index % 2 else "red",
+        )
+        for index in range(12)
+    ]
+    state = SessionState(
+        "s1",
+        turn=2,
+        constraints=[
+            Constraint("material", "leather", 1.0, True, "message", 1, 1)
+        ],
+    )
+
+    decision = QuestionPolicy().choose(candidates, state)
+
+    assert decision.ask_attribute != "material"

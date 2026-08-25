@@ -4,10 +4,19 @@ import json
 import math
 import sqlite3
 from collections import defaultdict
+from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 
+from .constraints import hard_constraint_violations
 from .models import Candidate, RetrievalPlan
-from .normalization import extract_attributes, normalize_value, searchable_fields, terms
+from .normalization import (
+    GENERIC_CATEGORIES,
+    extract_attributes,
+    normalize_value,
+    searchable_fields,
+    terms,
+)
 
 
 class CatalogIndex:
@@ -51,19 +60,27 @@ class CatalogIndex:
                 self.products[parent_asin] = product
                 self.valid_ids.add(parent_asin)
                 self.attributes[parent_asin] = attributes
-                self.field_terms[parent_asin] = tuple(
-                    set(terms(field)) for field in fields
-                )
+                if not self._fts_enabled:
+                    self.field_terms[parent_asin] = tuple(
+                        set(terms(field)) for field in fields
+                    )
                 for attribute, values in attributes.items():
                     for value in values:
                         self.attribute_inverted[attribute][value].add(parent_asin)
                 if self._fts_enabled:
                     fts_batch.append((parent_asin, *fields))
+                    if len(fts_batch) >= 1_000:
+                        cursor.executemany(
+                            "INSERT INTO products VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            fts_batch,
+                        )
+                        fts_batch.clear()
 
-        if self._fts_enabled and fts_batch:
-            cursor.executemany(
-                "INSERT INTO products VALUES (?, ?, ?, ?, ?, ?, ?)", fts_batch
-            )
+        if self._fts_enabled:
+            if fts_batch:
+                cursor.executemany(
+                    "INSERT INTO products VALUES (?, ?, ?, ?, ?, ?, ?)", fts_batch
+                )
             self.connection.commit()
 
         max_reviews = max(
@@ -95,6 +112,20 @@ class CatalogIndex:
             )
         )
 
+    def parser_vocabulary(self) -> Mapping[str, tuple[str, ...]]:
+        attributes = ("brand", "size", "category", "material", "style", "feature", "use_case")
+        vocabulary: dict[str, tuple[str, ...]] = {}
+        for attribute in attributes:
+            values = {
+                normalize_value(value)
+                for value in self.attribute_inverted.get(attribute, {})
+                if normalize_value(value)
+            }
+            if attribute == "category":
+                values.difference_update(GENERIC_CATEGORIES)
+            vocabulary[attribute] = tuple(sorted(values))
+        return MappingProxyType(vocabulary)
+
     def product(self, parent_asin: str) -> dict[str, object]:
         return self.products[parent_asin]
 
@@ -119,14 +150,28 @@ class CatalogIndex:
                 ).fetchall()
                 ranked = [str(row[0]) for row in rows]
                 ranked = [item for item in ranked if self._matches_hard(item, plan)]
-                if ranked:
-                    return self._as_candidates(ranked[:limit], source="lexical")
+                return self._as_candidates(ranked[:limit], source="lexical")
             except sqlite3.OperationalError:
                 self._fts_enabled = False
 
         return self._fallback_search(plan, query_terms, limit)
 
+    def _ensure_field_terms(self) -> None:
+        if self.field_terms:
+            return
+        self.field_terms = {
+            parent_asin: tuple(set(terms(field)) for field in searchable_fields(product))
+            for parent_asin, product in self.products.items()
+        }
+
     def _matches_hard(self, parent_asin: str, plan: RetrievalPlan) -> bool:
+        constraints = plan.effective_hard_constraints()
+        if constraints:
+            return not hard_constraint_violations(
+                self.products[parent_asin],
+                self.attributes[parent_asin],
+                constraints,
+            )
         attributes = self.attributes[parent_asin]
         for attribute, values in plan.hard_filters.items():
             if attribute == "budget":
@@ -141,6 +186,7 @@ class CatalogIndex:
     def _fallback_search(
         self, plan: RetrievalPlan, query_terms: list[str], limit: int
     ) -> list[Candidate]:
+        self._ensure_field_terms()
         query = set(query_terms)
         field_weights = (6.0, 4.0, 2.5, 2.5, 1.5, 1.0)
         scored: list[tuple[float, float, str]] = []

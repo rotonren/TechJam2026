@@ -4,14 +4,23 @@ from collections import OrderedDict
 from dataclasses import replace
 
 from .models import Constraint, SessionState
-from .normalization import normalize_value
+from .normalization import normalize_category_value, normalize_value
 from .parser import MessageParser, ParsedConstraint
 
 _PROFILE_FEATURES = {
     "comfort": "comfortable",
+    "comfortable": "comfortable",
+    "fit": "comfortable",
     "durability": "durable",
+    "durable": "durable",
     "warmth": "warm",
+    "warm": "warm",
     "weather": "weatherproof",
+    "weatherproof": "weatherproof",
+    "lightweight": "lightweight",
+    "breathable": "breathable",
+    "waterproof": "waterproof",
+    "stretch": "stretch",
 }
 
 
@@ -55,12 +64,25 @@ class SessionStore:
             state = self.reset(session_id, {})
 
         result = self._parser.parse(message, turn, expected_attribute)
+        state.override_scope = "none"
+        state.continuation_requested = result.is_continuation
+        # Keep an explicit route context across short clarification turns.  A
+        # later explicit hint still replaces it; a goal-level override without
+        # a hint starts from the prior route as a safe fallback.
+        if result.route_hint is not None:
+            state.route_hint = result.route_hint
         incoming = list(result.constraints)
-        is_override = result.is_override or self._has_explicit_conflict(state, incoming)
-
-        if is_override:
-            self._begin_new_intent(state, incoming)
+        if result.is_override and self._is_new_goal(state, incoming):
+            state.override_scope = "goal"
+            if result.route_hint is None:
+                state.route_hint = None
+            self._begin_new_goal(state)
             state.query_history.clear()
+        elif result.is_override:
+            state.override_scope = "attribute"
+            if result.replace_preferences:
+                self._replace_prior_preferences(state)
+                state.query_history.clear()
 
         if result.no_preference_attribute:
             state.no_preference_attributes.add(result.no_preference_attribute)
@@ -69,7 +91,7 @@ class SessionStore:
         for parsed in incoming:
             self._merge_constraint(state, parsed, turn)
 
-        if message.strip() and (incoming or turn == 1 or is_override):
+        if message.strip():
             state.query_history.append(message.strip())
             state.query_history[:] = state.query_history[-4:]
 
@@ -81,51 +103,56 @@ class SessionStore:
         return state
 
     @staticmethod
-    def _has_explicit_conflict(
-        state: SessionState, incoming: list[ParsedConstraint]
-    ) -> bool:
-        new_values = {(item.attribute, item.value) for item in incoming if item.is_hard}
-        return any(
-            old.is_hard
-            and old.source != "profile"
-            and any(
-                attribute == old.attribute and value != old.value
-                for attribute, value in new_values
-            )
-            for old in state.active_constraints()
-        )
+    def _is_new_goal(state: SessionState, incoming: list[ParsedConstraint]) -> bool:
+        incoming_categories = {
+            normalize_category_value(value)
+            for item in incoming
+            if item.attribute == "category" and item.is_hard
+            for value in (item.alternatives or (item.value,))
+        }
+        if not incoming_categories:
+            return False
+        active_categories = {
+            normalize_category_value(value)
+            for item in state.active_constraints()
+            if item.attribute == "category" and item.is_hard
+            for value in (item.alternatives or (item.value,))
+        }
+        return not incoming_categories.issubset(active_categories)
 
-    def _begin_new_intent(
-        self, state: SessionState, incoming: list[ParsedConstraint]
-    ) -> None:
-        old_version = state.intent_version
+    @staticmethod
+    def _begin_new_goal(state: SessionState) -> None:
         state.intent_version += 1
-        incoming_by_attribute: dict[str, set[str]] = {}
-        for item in incoming:
-            incoming_by_attribute.setdefault(item.attribute, set()).add(item.value)
-
-        retained: list[Constraint] = []
         for index, old in enumerate(state.constraints):
-            if old.status != "active" or old.intent_version != old_version:
+            if old.status != "active":
                 continue
-            conflicts = (
-                old.attribute in incoming_by_attribute
-                and old.value not in incoming_by_attribute[old.attribute]
-            )
-            if conflicts:
+            if old.source == "profile":
+                state.constraints[index] = replace(old, intent_version=state.intent_version)
+            else:
                 state.constraints[index] = replace(old, status="superseded")
-            elif (
-                old.is_hard and old.source != "profile" and old.attribute != "category"
+        state.asked_attributes.clear()
+        state.pending_attribute = None
+        state.no_preference_attributes.clear()
+
+    @staticmethod
+    def _replace_prior_preferences(state: SessionState) -> None:
+        for index, old in enumerate(state.constraints):
+            if (
+                old.status == "active"
+                and old.attribute != "category"
+                and old.source != "profile"
             ):
-                retained.append(replace(old, intent_version=state.intent_version))
-        state.constraints.extend(retained)
+                state.constraints[index] = replace(old, status="superseded")
+        state.asked_attributes.clear()
+        state.pending_attribute = None
+        state.no_preference_attributes.clear()
 
     def _merge_constraint(
         self, state: SessionState, parsed: ParsedConstraint, turn: int
     ) -> None:
         active = state.active_constraints()
         if any(
-            item.attribute == parsed.attribute and item.value == parsed.value
+            item.is_hard == parsed.is_hard and self._same_semantics(item, parsed)
             for item in active
         ):
             return
@@ -133,13 +160,34 @@ class SessionStore:
         for index, old in enumerate(state.constraints):
             if old.status != "active" or old.attribute != parsed.attribute:
                 continue
-            if old.source == "profile" and old.value != parsed.value:
+            if old.source == "profile" and (
+                old.value != parsed.value or parsed.is_hard
+            ):
                 state.constraints[index] = replace(old, status="rejected")
-            elif parsed.is_hard and old.value != parsed.value:
+            elif parsed.is_hard and not self._same_semantics(old, parsed):
                 state.constraints[index] = replace(old, status="superseded")
 
         state.constraints.append(
             self._to_constraint(parsed, turn, state.intent_version)
+        )
+
+    @staticmethod
+    def _same_semantics(item: Constraint, parsed: ParsedConstraint) -> bool:
+        if item.attribute != parsed.attribute or item.operator != parsed.operator:
+            return False
+        normalizer = (
+            normalize_category_value
+            if item.attribute == "category"
+            else normalize_value
+        )
+        if normalizer(item.value) != normalizer(parsed.value):
+            return False
+        if tuple(sorted(normalizer(value) for value in item.values())) != tuple(
+            sorted(normalizer(value) for value in parsed.alternatives or (parsed.value,))
+        ):
+            return False
+        return normalizer(item.upper_value or "") == normalize_value(
+            parsed.upper_value or ""
         )
 
     @staticmethod
@@ -161,6 +209,9 @@ class SessionStore:
             source=parsed.source,
             created_turn=turn,
             intent_version=intent_version,
+            operator=parsed.operator,
+            upper_value=parsed.upper_value,
+            alternatives=parsed.alternatives,
         )
 
     @staticmethod
@@ -174,6 +225,12 @@ class SessionStore:
             tag = normalize_value(raw_tag)
             if not tag:
                 continue
+            mapped = _PROFILE_FEATURES.get(tag)
+            if mapped:
+                result.append(
+                    ParsedConstraint("feature", mapped, 0.25, False, "profile")
+                )
+                continue
             parsed = parser.parse(tag, turn=0).constraints
             if parsed:
                 for item in parsed:
@@ -181,8 +238,7 @@ class SessionStore:
                         replace(item, confidence=0.25, is_hard=False, source="profile")
                     )
                 continue
-            value = _PROFILE_FEATURES.get(tag, tag)
-            result.append(ParsedConstraint("feature", value, 0.25, False, "profile"))
+            result.append(ParsedConstraint("feature", tag, 0.25, False, "profile"))
         return result
 
     def _trim(self) -> None:

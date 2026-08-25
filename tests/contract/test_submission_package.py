@@ -12,6 +12,7 @@ REQUIRED_ENTRIES = {
     "requirements.txt",
     "README.md",
     "DATA_ATTRIBUTION.md",
+    "licenses/all-MiniLM-L6-v2-APACHE-2.0.txt",
     "assets/SHA256SUMS",
     "assets/model/model.int8.onnx",
     "assets/model/tokenizer.json",

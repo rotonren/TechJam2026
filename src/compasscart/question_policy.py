@@ -31,6 +31,8 @@ class QuestionPolicy:
     def choose(
         self, candidates: list[Candidate], state: SessionState
     ) -> QuestionDecision:
+        if state.continuation_requested:
+            return QuestionDecision(None)
         if len(candidates) <= 10:
             return QuestionDecision(None)
 
@@ -39,6 +41,14 @@ class QuestionPolicy:
             extract_attributes(candidate.product) for candidate in candidates
         ]
         blocked = set(state.asked_attributes) | state.no_preference_attributes
+        # An attribute explicitly constrained by the user is already answered;
+        # asking for it again would contradict the turn's hard semantics (for
+        # example, asking for material after "black leather belt").
+        blocked.update(
+            item.attribute
+            for item in state.active_constraints()
+            if item.is_hard
+        )
         utilities = {
             attribute: self._utility(
                 attribute, candidate_attributes, probabilities, state.turn
@@ -56,13 +66,6 @@ class QuestionPolicy:
         if utility > threshold:
             return QuestionDecision(attribute, utility)
 
-        if (
-            state.turn < 8
-            and len(candidates) > 200
-            and utility < 0.03
-            and "other" not in blocked
-        ):
-            return QuestionDecision("other", max(utility, 0.01))
         return QuestionDecision(None)
 
     def _utility(

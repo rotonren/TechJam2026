@@ -8,6 +8,11 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import TextIO
 
+_SRC_ROOT = Path(__file__).resolve().parents[1] / "src"
+if str(_SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SRC_ROOT))
+
+from compasscart.constraints import display_constraint
 
 SCENARIOS: dict[str, tuple[str, ...]] = {
     "browsing": (
@@ -111,20 +116,46 @@ def format_trace(agent: object, session_id: str) -> str:
     records = agent.traces.records
     trace = records[-1] if records else {}
     state = agent.sessions.get(session_id)
-    intent = getattr(state, "intent_version", "?")
-    constraints = trace.get("active_constraints") or []
-    constraint_text = ", ".join(f"{key}={value}" for key, value in constraints) or "none"
+    intent = trace.get("intent_version", getattr(state, "intent_version", "?"))
+    route_reason = trace.get("route_reason") or "unknown"
+    constraint_text = ""
+    active_constraints = getattr(state, "active_constraints", None)
+    if callable(active_constraints):
+        try:
+            constraint_text = ", ".join(
+                display_constraint(item) for item in active_constraints()
+            )
+        except Exception:  # noqa: BLE001 - trace formatting must remain best effort.
+            constraint_text = ""
+    if not constraint_text:
+        details = trace.get("active_constraint_details") or []
+        if details:
+            constraint_text = ", ".join(str(item) for item in details)
+    if not constraint_text:
+        constraints = trace.get("active_constraints") or []
+        constraint_text = ", ".join(
+            f"{key}={value}" for key, value in constraints
+        )
+    constraint_text = constraint_text or "none"
     fallbacks = trace.get("fallbacks") or []
     fallback_text = ",".join(str(item) for item in fallbacks) or "none"
+    ask_attribute = trace.get("ask_attribute") or "none"
+    relaxed_count = trace.get("relaxed_count", 0)
+    relaxed_constraints = trace.get("relaxed_constraints") or []
+    relaxed_text = ",".join(str(item) for item in relaxed_constraints) or "none"
     dense_text = "on" if bool(getattr(agent.dense, "available", False)) else "off"
     latency = _number(trace.get("elapsed_ms"))
     latency_text = f"{latency:.3f} ms" if latency is not None else "unknown"
     return (
         "Demo evidence | "
         f"route={trace.get('route', 'unknown')} | "
+        f"route_reason={route_reason} | "
         f"intent=v{intent} | "
         f"constraints={constraint_text} | "
         f"candidates={trace.get('candidate_count', 'unknown')} | "
+        f"ask={ask_attribute} | "
+        f"relaxed={relaxed_count} | "
+        f"relaxed_constraints={relaxed_text} | "
         f"latency={latency_text} | "
         f"fallbacks={fallback_text} | "
         f"dense={dense_text}"

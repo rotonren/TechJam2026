@@ -25,6 +25,28 @@ def test_vague_exploration_routes_to_browsing():
     assert dict(plan.source_weights)["dense"] == 0.45
 
 
+def test_explicit_browsing_hint_beats_specificity():
+    state = SessionState(
+        "s1",
+        route_hint="browsing",
+        constraints=[_constraint("color", "blue")],
+    )
+
+    plan = RoutePlanner().build_plan(state, "I am still exploring blue shoes")
+
+    assert plan.route == "browsing"
+    assert plan.route_reason == "explicit_browsing"
+
+
+def test_explicit_buying_hint_beats_specificity_fallback():
+    state = SessionState("s1", route_hint="buying")
+
+    plan = RoutePlanner().build_plan(state, "must have something")
+
+    assert plan.route == "buying"
+    assert plan.route_reason == "explicit_buying"
+
+
 def test_override_uses_balanced_source_weights():
     state = SessionState("s1", constraints=[_constraint("material", "leather")])
 

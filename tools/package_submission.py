@@ -22,6 +22,7 @@ ROOT_FILES = (
     "README.md",
     "DATA_ATTRIBUTION.md",
     "MODEL_ATTRIBUTION.md",
+    "licenses/all-MiniLM-L6-v2-APACHE-2.0.txt",
 )
 OPTIONAL_REPORTS = (
     "reports/final/architecture.md",

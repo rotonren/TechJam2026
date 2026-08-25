@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 
 from .models import Candidate, QuestionDecision
 
@@ -41,18 +41,40 @@ class ResponseBuilder:
         question: QuestionDecision | None,
         *,
         top_k: int,
+        relaxed: bool | None = None,
+        relaxed_constraints: Iterable[str] = (),
+        excluded_ids: Collection[str] = (),
     ) -> dict[str, object]:
         limit = min(max(int(top_k), 0), 10)
         identifiers: list[str] = []
+        selected: list[Candidate] = []
         seen: set[str] = set()
         for candidate in ranked:
             identifier = candidate.parent_asin
-            if identifier in self.valid_ids and identifier not in seen:
+            if (
+                identifier in self.valid_ids
+                and identifier not in excluded_ids
+                and identifier not in seen
+            ):
                 identifiers.append(identifier)
+                selected.append(candidate)
                 seen.add(identifier)
             if len(identifiers) >= limit:
                 break
         if len(identifiers) < limit:
+            for identifier in self.fallback_ids:
+                if (
+                    identifier in self.valid_ids
+                    and identifier not in excluded_ids
+                    and identifier not in seen
+                ):
+                    identifiers.append(identifier)
+                    seen.add(identifier)
+                if len(identifiers) >= limit:
+                    break
+        # If the user requested more pages than the catalog can provide, use a
+        # previously shown ID only as a final contract-preserving fallback.
+        if len(identifiers) < min(limit, len(self.valid_ids)) and excluded_ids:
             for identifier in self.fallback_ids:
                 if identifier in self.valid_ids and identifier not in seen:
                     identifiers.append(identifier)
@@ -68,6 +90,25 @@ class ResponseBuilder:
             if attribute
             else "Here are the closest matches I found."
         )
+        constraints = list(dict.fromkeys(str(item) for item in relaxed_constraints if item))
+        for candidate in selected:
+            if candidate.relaxed:
+                constraints.extend(
+                    item
+                    for item in candidate.violations
+                    if item and item not in constraints
+                )
+        is_relaxed = (
+            relaxed
+            if relaxed is not None
+            else bool(constraints) or any(item.relaxed for item in selected)
+        )
+        if is_relaxed:
+            detail = ", ".join(constraints)
+            if detail:
+                message = f"{message} These are close alternatives after relaxing {detail}."
+            else:
+                message = f"{message} These are close alternatives after relaxing a strict preference."
         return {
             "message": message,
             "ask_attribute": attribute,

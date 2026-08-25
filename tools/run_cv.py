@@ -8,7 +8,7 @@ import math
 import random
 import statistics
 import subprocess
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -78,6 +78,22 @@ def _latency_summary(values: list[float]) -> dict[str, float | int | None]:
     }
 
 
+def _trace_summary(records: list[dict[str, object]]) -> dict[str, object]:
+    """Summarize route and controlled-relaxation evidence for an evaluation fold."""
+    route_distribution = Counter(str(record.get("route", "unknown")) for record in records)
+    relaxed_turn_count = sum(
+        bool(record.get("relaxed_count", 0)) for record in records
+    )
+    hard_filter_violation_count = sum(
+        int(record.get("relaxed_count", 0) or 0) for record in records
+    )
+    return {
+        "route_distribution": dict(sorted(route_distribution.items())),
+        "relaxed_turn_count": relaxed_turn_count,
+        "hard_filter_violation_count": hard_filter_violation_count,
+    }
+
+
 def _load_agent(specification: str):
     module_name, class_name = specification.split(":", 1)
     return getattr(importlib.import_module(module_name), class_name)
@@ -133,6 +149,7 @@ def main() -> None:
                 [float(record.get("elapsed_ms", 0.0)) for record in records]
             ),
             "fallback_count": sum(bool(record.get("fallbacks")) for record in records),
+            **_trace_summary(records),
         }
         if not args.audit:
             fold_report["sessions"] = result["sessions"]

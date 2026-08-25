@@ -13,9 +13,10 @@ unavailable.
    query evidence.
 2. `RoutePlanner` selects Buying, Browsing, or Intent Override weights.
 3. `HybridRetriever` generates lexical, attribute, profile, and dense candidate
-   lists and combines them with weighted reciprocal-rank fusion.
-4. `ConstraintRanker` enforces active constraints, penalizes conflicts, and
-   diversifies the final ten products.
+   lists, applies the shared hard-constraint matcher to every source, and
+   combines exact candidates with weighted reciprocal-rank fusion.
+4. `ConstraintRanker` keeps exact candidates ahead of explicitly marked
+   relaxed alternatives, then diversifies the final ten products.
 5. `QuestionPolicy` estimates conversion gain for answerable attributes.
 6. `ResponseBuilder` emits unique catalog-valid IDs and zero token usage.
 
@@ -24,21 +25,23 @@ unavailable.
 | Judging concern | Evidence |
 | --- | --- |
 | Retrieval quality | Field-weighted FTS5, structured attributes, local semantic embeddings, weighted RRF |
-| Multi-turn reasoning | Versioned constraint ledger, pending-question tracking, bounded query history |
-| Intent Override | Override-first parsing clears obsolete text and supersedes conflicting constraints |
+| Multi-turn reasoning | Versioned constraint ledger, pending-question tracking, bounded raw query history |
+| Intent Override | Goal-level overrides clear obsolete text/questions; attribute-level corrections replace only the named slot |
 | Browsing utility | Profile-aware broad recall and conversion-gain clarification |
-| Reliability | Contract sanitizer, bounded state/traces, component fallbacks, valid-ID filtering |
+| Reliability | Shared hard-filter matcher, disclosed relaxation evidence, bounded state/traces, component fallbacks, valid-ID filtering |
 | Feasibility | CPU ONNX int8 assets, 45 MiB runtime asset set, zero API cost, offline operation |
 | Reproducibility | Deterministic CV, sealed audit fold, checksummed assets, deterministic allowlist ZIP |
 
 ## State and Override Semantics
 
-Each constraint records source, confidence, turn, intent version, hardness, and
-status. Active constraints belong to the current intent, except a compatible
-category may be retained. An override starts a new version, supersedes
-conflicts, clears old free-text evidence, and prevents the message from being
-misread as an answer to the previous clarification. A no-preference reply is
-stored explicitly so the agent does not ask the same boundary question again.
+Each constraint records source, confidence, turn, intent version, hardness,
+operator, and status. Active constraints belong to the current intent, except a
+compatible category and soft profile preferences may be retained. A goal-level
+override starts a new version, supersedes old user constraints, clears old
+free-text evidence and question state, and prevents the message from being
+misread as an answer to the previous clarification. An attribute-level
+correction replaces only the named slot. A no-preference reply is stored
+explicitly so the agent does not ask the same boundary question again.
 
 ## Failure Containment
 

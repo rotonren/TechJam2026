@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from agent import Agent
-from compasscart.models import Candidate, QuestionDecision
+from compasscart.models import Candidate, Constraint, QuestionDecision, SessionState
 from compasscart.response import ALLOWED_ATTRIBUTES, ResponseBuilder
 from compasscart.tracing import TraceSink
 
@@ -88,8 +88,30 @@ def test_agent_query_uses_bounded_dialog_evidence():
     state = SessionState("s1")
     state.query_history = ["alloy buckle closure", "black belt"]
 
-    query = Agent._query_text("ignored current argument", state)
+    query = Agent._query_text("current message", state)
 
     assert "alloy buckle closure" in query
     assert "black belt" in query
-    assert "ignored current argument" not in query
+    assert query.count("current message") == 1
+
+
+def test_agent_query_preserves_all_alternative_constraint_values():
+    state = SessionState("s1")
+    state.constraints = [
+        Constraint(
+            "color",
+            "black",
+            1.0,
+            True,
+            "message",
+            1,
+            1,
+            operator="in",
+            alternatives=("black", "blue"),
+        )
+    ]
+
+    query = Agent._query_text("", state)
+
+    assert "black" in query
+    assert "blue" in query

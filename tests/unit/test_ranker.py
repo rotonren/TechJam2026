@@ -78,3 +78,19 @@ def test_browsing_only_applies_mmr_to_final_top10(fixture_catalog_path):
 
     assert len(ranked) == 40
     assert ranker.calls < 2_000
+
+
+def test_exact_candidates_rank_before_higher_scoring_relaxed_candidates(
+    fixture_catalog_path,
+):
+    index = CatalogIndex(fixture_catalog_path)
+    state = SessionState("s1", route="buying")
+    candidates = [
+        Candidate("JACKET1", product=index.product("JACKET1"), score=10.0, relaxed=True),
+        Candidate("BELT1", product=index.product("BELT1"), score=0.1),
+    ]
+
+    ranked = ConstraintRanker(index).rank(candidates, state)
+
+    assert [item.parent_asin for item in ranked] == ["BELT1", "JACKET1"]
+    assert ranked[1].relaxed is True
