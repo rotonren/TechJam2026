@@ -128,10 +128,15 @@ class CatalogIndex:
 
     def _matches_hard(self, parent_asin: str, plan: RetrievalPlan) -> bool:
         attributes = self.attributes[parent_asin]
-        return all(
-            any(value in attributes.get(attribute, ()) for value in values)
-            for attribute, values in plan.hard_filters.items()
-        )
+        for attribute, values in plan.hard_filters.items():
+            if attribute == "budget":
+                ceilings = [self._number(value) for value in values]
+                price = self._number(self.products[parent_asin].get("price"))
+                if not ceilings or price <= 0 or price > max(ceilings):
+                    return False
+            elif not any(value in attributes.get(attribute, ()) for value in values):
+                return False
+        return True
 
     def _fallback_search(
         self, plan: RetrievalPlan, query_terms: list[str], limit: int

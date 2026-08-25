@@ -52,6 +52,8 @@ class RetrievalPlan:
     soft_preferences: dict[str, tuple[str, ...]] = field(default_factory=dict)
     excluded_values: dict[str, tuple[str, ...]] = field(default_factory=dict)
     candidate_limit: int = 500
+    source_weights: tuple[tuple[str, float], ...] = ()
+    is_override: bool = False
 
 
 @dataclass
