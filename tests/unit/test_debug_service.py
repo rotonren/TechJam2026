@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
@@ -10,11 +12,13 @@ import pytest
 from compasscart_debug.agent_adapter import TurnObservation
 from compasscart_debug.config import RuntimeIdentity
 from compasscart_debug.errors import (
+    ConflictError,
     DebugServiceError,
     NotReadyError,
     ReplayMismatchError,
     RequestMismatchError,
     UnresolvedTurnError,
+    ValidationError,
 )
 from compasscart_debug.repository import (
     DebugRepository,
@@ -40,6 +44,8 @@ class FakeWorker:
         self.replay_response_mismatch = False
         self.replay_state_mismatch = False
         self.has_session_error: DebugServiceError | None = None
+        self.reply_prefix = "reply"
+        self.fail_on_message: str | None = None
 
     @property
     def identity(self) -> RuntimeIdentity:
@@ -59,7 +65,7 @@ class FakeWorker:
     def observe_turn(self, session_id: str, message: str, turn: int) -> TurnObservation:
         self.observe_calls.append((session_id, message, turn))
         self.sessions.setdefault(session_id, []).append((turn, message))
-        if self.fail_after_mutating_once:
+        if self.fail_after_mutating_once or message == self.fail_on_message:
             self.fail_after_mutating_once = False
             self.events.append("failed_observe")
             raise RuntimeError(r"C:\private\agent.py failed")
@@ -100,12 +106,12 @@ class FakeWorker:
     def _observation(self, session_id: str, message: str, turn: int) -> TurnObservation:
         return TurnObservation(
             response={
-                "message": f"reply:{message}",
+                "message": f"{self.reply_prefix}:{message}",
                 "ask_attribute": None,
                 "recommendations": [],
                 "usage": {},
             },
-            products=[],
+            products=[{"rank": 1, "parent_asin": "SHOE1"}],
             state={
                 "session_id": session_id,
                 "turn": turn,
@@ -448,3 +454,271 @@ def test_create_resets_before_database_create(tmp_path: Path, monkeypatch) -> No
 
     assert events == ["reset", "create"]
     assert result["session"]["profile"] == {"preference_tags": ["comfort"]}
+
+
+def test_feedback_upserts_clears_and_is_returned_for_completed_duplicates(
+    tmp_path: Path,
+) -> None:
+    service, _, _ = _service(tmp_path)
+    session_id = _create(service)
+    service.send_message(session_id, "r1", "shoes under $80")
+
+    saved = service.set_feedback(
+        session_id,
+        1,
+        "SHOE1",
+        True,
+        "over_budget",
+        "Explicit budget was $80",
+    )
+
+    assert saved["reason"] == "over_budget"
+    assert service.get_session(session_id)["turns"][0]["feedback"][0]["note"].endswith(
+        "$80"
+    )
+    duplicate = service.send_message(session_id, "r1", "shoes under $80")
+    assert duplicate["turn"]["feedback"] == [saved]
+    assert service.set_feedback(session_id, 1, "SHOE1", False, None, "") is None
+    assert service.get_session(session_id)["turns"][0]["feedback"] == []
+
+
+def test_archive_scopes_block_mutation_until_unarchived(tmp_path: Path) -> None:
+    service, _, _ = _service(
+        tmp_path,
+        ids=("archived-session", "active-session", "clone-session"),
+    )
+    archived = _create(service, "Archived")
+    active = _create(service, "Active")
+
+    patched = service.patch_session(archived, archived=True)
+
+    assert patched["session"]["archived"] is True
+    assert [item["session_id"] for item in service.list_sessions("active")] == [active]
+    assert [item["session_id"] for item in service.list_sessions("archived")] == [
+        archived
+    ]
+    assert {item["session_id"] for item in service.list_sessions("all")} == {
+        active,
+        archived,
+    }
+    assert service.get_session(archived)["can_send"] is False
+    with pytest.raises(ConflictError):
+        service.send_message(archived, "r1", "blue shoes")
+    with pytest.raises(ConflictError):
+        service.set_feedback(archived, 1, "SHOE1", False, None, "")
+    with pytest.raises(ConflictError):
+        service.clone_session(archived)
+
+    service.patch_session(archived, archived=False)
+    assert (
+        service.send_message(archived, "r1", "blue shoes")["turn"]["status"]
+        == "completed"
+    )
+
+
+def test_export_has_exact_envelope_safe_json_and_no_local_secrets(
+    tmp_path: Path,
+) -> None:
+    service, _, _ = _service(tmp_path)
+    session_id = service.create_session(
+        "Export me",
+        {
+            "preference_tags": ["comfort"],
+            "access_token": "secret-token-value",
+            "database_path": r"C:\private\debug.sqlite3",
+            "hostname": "demo.internal.example",
+        },
+    )["session"]["session_id"]
+    service.send_message(session_id, "r1", "blue shoes")
+    service.set_feedback(session_id, 1, "SHOE1", True, "other", "not for me")
+
+    exported = service.export_session(session_id)
+    encoded = json.dumps(exported, allow_nan=False)
+
+    assert set(exported) == {
+        "format",
+        "schema_version",
+        "exported_at",
+        "session",
+        "turns",
+    }
+    assert exported["format"] == "compasscart-debug-session"
+    assert exported["schema_version"] == 1
+    assert exported["exported_at"] == "2026-08-26T12:00:00Z"
+    assert "secret-token-value" not in encoded
+    assert r"C:\\private" not in encoded
+    assert "demo.internal.example" not in encoded
+    assert exported["turns"][0]["feedback"][0]["reason"] == "other"
+
+
+def test_import_assigns_new_id_and_preserves_historical_observations(
+    tmp_path: Path,
+) -> None:
+    service, _, worker = _service(tmp_path, ids=("source", "imported"))
+    source = _create(service)
+    service.send_message(source, "r1", "blue shoes")
+    service.set_feedback(
+        source,
+        1,
+        "SHOE1",
+        True,
+        "attribute_mismatch",
+        "heel too high",
+    )
+    exported = service.export_session(source)
+    reset_count = len(worker.reset_calls)
+
+    imported = service.import_session(exported)
+
+    assert imported["session"]["session_id"] == "imported"
+    assert imported["session"]["session_id"] != exported["session"]["session_id"]
+    assert imported["session"]["source_session_id"] == source
+    assert imported["session"]["agent_version"] == exported["session"]["agent_version"]
+    assert imported["turns"][0]["response"] == exported["turns"][0]["response"]
+    assert imported["turns"][0]["feedback"][0]["note"] == "heel too high"
+    assert imported["turns"][0]["request_id"] == "r1"
+    assert len(worker.reset_calls) == reset_count
+    with pytest.raises(ConflictError):
+        service.send_message("imported", "new-request", "red shoes")
+    with pytest.raises(ConflictError):
+        service.set_feedback(
+            "imported", 1, "SHOE1", True, "other", "must stay historical"
+        )
+
+
+def test_export_import_preserves_hostname_like_identifiers(tmp_path: Path) -> None:
+    service, _, _ = _service(
+        tmp_path, ids=("source.example.com", "imported.example.com")
+    )
+    source = _create(service)
+    service.send_message(source, "request.example.com", "blue shoes")
+
+    exported = service.export_session(source)
+    imported = service.import_session(exported)
+
+    assert exported["session"]["session_id"] == "source.example.com"
+    assert exported["turns"][0]["request_id"] == "request.example.com"
+    assert imported["turns"][0]["request_id"] == "request.example.com"
+
+
+@pytest.mark.parametrize("status", ["pending", "failed"])
+def test_import_accepts_safe_unresolved_historical_turns(
+    tmp_path: Path, status: str
+) -> None:
+    service, repository, _ = _service(tmp_path / status, ids=("source", "imported"))
+    source = _create(service)
+    turn = repository.reserve_turn(source, "r1", "blue shoes")
+    if status == "failed":
+        repository.fail_turn(
+            source,
+            turn.turn,
+            {"code": "agent_error", "message": "Historical failure."},
+        )
+
+    imported = service.import_session(service.export_session(source))
+
+    assert imported["turns"][0]["status"] == status
+    assert imported["turns"][0]["response"] is None
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "body",
+        "format",
+        "version",
+        "order",
+        "status",
+        "completed_snapshot",
+        "feedback_reason",
+        "feedback_asin",
+        "secret",
+    ],
+)
+def test_import_rejects_malformed_history_without_partial_state(
+    tmp_path: Path, case: str
+) -> None:
+    service, repository, _ = _service(tmp_path / case, ids=("source", "unused"))
+    source = _create(service)
+    service.send_message(source, "r1", "blue shoes")
+    service.set_feedback(source, 1, "SHOE1", True, "other", "bad fit")
+    malformed: object = copy.deepcopy(service.export_session(source))
+    if case == "body":
+        malformed = []
+    elif case == "format":
+        malformed["format"] = "not-compasscart"
+    elif case == "version":
+        malformed["schema_version"] = 999
+    elif case == "order":
+        malformed["turns"][0]["turn"] = 2
+    elif case == "status":
+        malformed["turns"][0]["status"] = "unknown"
+    elif case == "completed_snapshot":
+        malformed["turns"][0]["response"] = None
+    elif case == "feedback_reason":
+        malformed["turns"][0]["feedback"][0]["reason"] = "fit"
+    elif case == "feedback_asin":
+        malformed["turns"][0]["feedback"][0]["parent_asin"] = "MISSING"
+    elif case == "secret":
+        malformed["session"]["profile"]["access_token"] = "do-not-import"
+
+    with pytest.raises(ValidationError) as captured:
+        service.import_session(malformed)
+
+    assert captured.value.field_errors
+    assert [item.session_id for item in repository.list_sessions()] == [source]
+
+
+def test_clone_replays_completed_prefix_with_current_identity_and_no_feedback(
+    tmp_path: Path,
+) -> None:
+    service, _, worker = _service(
+        tmp_path,
+        ids=("source", "clone", "fresh-clone-request"),
+    )
+    source = _create(service, "Shopping")
+    first = service.send_message(source, "source-r1", "blue shoes")
+    service.send_message(source, "source-r2", "under $80")
+    service.set_feedback(source, 1, "SHOE1", True, "other", "source only")
+    worker.current_identity = RuntimeIdentity(
+        "agent-v2", "catalog-v2", "config-v2", "assets-v2"
+    )
+    worker.reply_prefix = "current"
+
+    clone = service.clone_session(source, through_turn=1)
+
+    assert clone["session"]["session_id"] == "clone"
+    assert clone["session"]["source_session_id"] == source
+    assert clone["session"]["agent_version"] == "agent-v2"
+    assert (
+        clone["session"]["profile"] == service.get_session(source)["session"]["profile"]
+    )
+    assert len(clone["turns"]) == 1
+    assert clone["turns"][0]["request_id"] != first["turn"]["request_id"]
+    assert clone["turns"][0]["response"]["message"] == "current:blue shoes"
+    assert clone["turns"][0]["state"]["session_id"] == "clone"
+    assert clone["turns"][0]["feedback"] == []
+
+
+def test_clone_failure_leaves_completed_prefix_and_failed_turn_viewable(
+    tmp_path: Path,
+) -> None:
+    service, repository, worker = _service(
+        tmp_path,
+        ids=("source", "partial-clone", "fresh-r1", "fresh-r2"),
+    )
+    source = _create(service)
+    service.send_message(source, "source-r1", "first")
+    service.send_message(source, "source-r2", "second")
+    worker.fail_on_message = "second"
+
+    with pytest.raises(DebugServiceError):
+        service.clone_session(source)
+
+    partial = service.get_session("partial-clone")
+    assert partial["session"]["source_session_id"] == source
+    assert [turn["status"] for turn in partial["turns"]] == ["completed", "failed"]
+    assert [turn.status for turn in repository.list_turns(source)] == [
+        "completed",
+        "completed",
+    ]

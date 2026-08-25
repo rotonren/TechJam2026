@@ -1241,6 +1241,118 @@ def test_feedback_reasons_are_fixed_and_notes_may_be_empty(tmp_path: Path) -> No
         repository.upsert_feedback("session-1", 1, "A1", 42, "not valid")
 
 
+def _historical_import_turn(
+    turn: int,
+    request_id: str,
+    *,
+    feedback: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    return {
+        "turn": turn,
+        "request_id": request_id,
+        "status": "completed",
+        "user_message": f"message {turn}",
+        "response": {"message": f"historical reply {turn}"},
+        "products": [{"rank": 1, "parent_asin": f"A{turn}"}],
+        "state": {"historical_turn": turn},
+        "trace": {"elapsed_ms": turn},
+        "error": None,
+        "created_at": "2025-01-01T00:00:00Z",
+        "updated_at": "2025-01-01T00:00:01Z",
+        "feedback": feedback or [],
+    }
+
+
+def _import_historical_session(repository, turns: list[dict[str, object]]):
+    return repository.import_session(
+        session_id="import-1",
+        name="Imported history",
+        profile={"preference_tags": ["comfort"]},
+        agent_version="historical-agent",
+        catalog_sha256="historical-catalog",
+        config_sha256="historical-config",
+        assets_sha256=None,
+        source_session_id=None,
+        archived=False,
+        dirty=False,
+        read_only_reason="imported_history",
+        created_at="2025-01-01T00:00:00Z",
+        updated_at="2025-01-01T00:00:02Z",
+        turns=turns,
+    )
+
+
+def test_import_session_persists_historical_snapshots_and_feedback(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path / "debug.sqlite3")
+    repository.initialize()
+    feedback = {
+        "parent_asin": "A1",
+        "reason": "over_budget",
+        "note": "Explicit budget was $80",
+        "updated_at": "2025-01-01T00:00:02Z",
+    }
+
+    imported = _import_historical_session(
+        repository,
+        [_historical_import_turn(1, "source-request-1", feedback=[feedback])],
+    )
+
+    turn = repository.get_turn(imported.session_id, 1)
+    saved_feedback = repository.list_feedback(imported.session_id, 1)
+    assert imported.created_at == "2025-01-01T00:00:00Z"
+    assert imported.read_only_reason == "imported_history"
+    assert turn.response == {"message": "historical reply 1"}
+    assert turn.request_id == "source-request-1"
+    assert saved_feedback[0].note == "Explicit budget was $80"
+
+
+def test_import_session_rolls_back_duplicate_request_ids(tmp_path: Path) -> None:
+    repository = _repository(tmp_path / "debug.sqlite3")
+    repository.initialize()
+
+    with pytest.raises(_repository_module().ConflictError):
+        _import_historical_session(
+            repository,
+            [
+                _historical_import_turn(1, "duplicate"),
+                _historical_import_turn(2, "duplicate"),
+            ],
+        )
+
+    with pytest.raises(_repository_module().NotFoundError):
+        repository.get_session("import-1")
+    assert repository.list_sessions() == []
+
+
+def test_import_session_rolls_back_an_injected_middle_failure(tmp_path: Path) -> None:
+    path = tmp_path / "debug.sqlite3"
+    repository = _repository(path)
+    repository.initialize()
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """
+            CREATE TRIGGER reject_second_import BEFORE INSERT ON turns
+            WHEN NEW.turn = 2
+            BEGIN SELECT RAISE(FAIL, 'middle import failure'); END
+            """
+        )
+
+    with pytest.raises(_repository_module().ConflictError):
+        _import_historical_session(
+            repository,
+            [
+                _historical_import_turn(1, "source-request-1"),
+                _historical_import_turn(2, "source-request-2"),
+            ],
+        )
+
+    with pytest.raises(_repository_module().NotFoundError):
+        repository.get_session("import-1")
+    assert repository.list_sessions() == []
+
+
 @pytest.mark.parametrize("payload", ["NaN", "{not-json"])
 def test_tampered_turn_json_raises_stable_corruption_error(
     tmp_path: Path, payload: str

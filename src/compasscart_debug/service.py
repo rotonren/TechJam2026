@@ -13,6 +13,7 @@ from typing import Any, TypeVar
 
 from .agent_worker import AgentWorker
 from .errors import (
+    ConflictError,
     DebugServiceError,
     NotReadyError,
     ReplayMismatchError,
@@ -22,6 +23,7 @@ from .errors import (
     WorkerBusyError,
 )
 from .repository import (
+    FEEDBACK_REASONS,
     DebugRepository,
     FeedbackRecord,
     RepositoryBusyError,
@@ -38,6 +40,87 @@ _MAX_REQUEST_ID_LENGTH = 128
 _MAX_PREFERENCE_TAGS = 50
 _MAX_PREFERENCE_TAG_LENGTH = 200
 _REQUEST_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]*\Z")
+_EXPORT_FORMAT = "compasscart-debug-session"
+_EXPORT_SCHEMA_VERSION = 1
+_EXPORT_KEYS = frozenset(
+    {"format", "schema_version", "exported_at", "session", "turns"}
+)
+_SESSION_KEYS = frozenset(
+    {
+        "session_id",
+        "name",
+        "profile",
+        "agent_version",
+        "catalog_sha256",
+        "config_sha256",
+        "assets_sha256",
+        "source_session_id",
+        "archived",
+        "dirty",
+        "read_only_reason",
+        "created_at",
+        "updated_at",
+    }
+)
+_TURN_KEYS = frozenset(
+    {
+        "session_id",
+        "turn",
+        "request_id",
+        "status",
+        "user_message",
+        "response",
+        "products",
+        "state",
+        "trace",
+        "feedback",
+        "error",
+        "created_at",
+        "updated_at",
+    }
+)
+_FEEDBACK_KEYS = frozenset(
+    {"session_id", "turn", "parent_asin", "reason", "note", "updated_at"}
+)
+_TURN_STATUSES = frozenset({"pending", "completed", "failed"})
+_SENSITIVE_EXPORT_KEYS = frozenset(
+    {
+        "access_token",
+        "api_key",
+        "authorization",
+        "database_path",
+        "env",
+        "environment",
+        "exception",
+        "host",
+        "hostname",
+        "password",
+        "path",
+        "repr",
+        "secret",
+        "token",
+        "traceback",
+    }
+)
+_IDENTIFIER_EXPORT_KEYS = frozenset(
+    {
+        "agent_version",
+        "assets_sha256",
+        "catalog_sha256",
+        "config_sha256",
+        "parent_asin",
+        "request_id",
+        "session_id",
+        "source_session_id",
+    }
+)
+_ABSOLUTE_PATH = re.compile(r"(?:[A-Za-z]:[\\/]|\\\\|/(?:[^/\s]+/)+)")
+_HOSTNAME = re.compile(
+    r"\b(?:localhost|(?:\d{1,3}\.){3}\d{1,3}|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+){2,})\b"
+)
+_EXCEPTION_REPR = re.compile(
+    r"(?:Traceback \(most recent call last\)|\b[A-Za-z_][A-Za-z0-9_]*(?:Error|Exception)\()"
+)
 _UNSET = object()
 _T = TypeVar("_T")
 
@@ -158,19 +241,142 @@ class DebugService:
         )
         return {"session": _session_payload(session)}
 
+    def set_feedback(
+        self,
+        session_id: str,
+        turn: int,
+        parent_asin: object,
+        incorrect: object,
+        reason: object,
+        note: object,
+    ) -> dict[str, Any] | None:
+        if not isinstance(incorrect, bool):
+            raise ValidationError({"incorrect": "Incorrect must be a boolean."})
+        if not isinstance(parent_asin, str) or not parent_asin:
+            raise ValidationError({"parent_asin": "A product identifier is required."})
+        if not isinstance(note, str):
+            raise ValidationError({"note": "Feedback note must be text."})
+        session = self._repository_call(self.repository.get_session, session_id)
+        if session.archived or session.read_only_reason == "imported_history":
+            raise ConflictError()
+        if not incorrect:
+            self._repository_call(
+                self.repository.clear_feedback, session_id, turn, parent_asin
+            )
+            return None
+        if not isinstance(reason, str) or reason not in FEEDBACK_REASONS:
+            raise ValidationError({"reason": "Feedback reason is invalid."})
+        feedback = self._repository_call(
+            self.repository.upsert_feedback,
+            session_id,
+            turn,
+            parent_asin,
+            reason,
+            note,
+        )
+        return _feedback_payload(feedback)
+
+    def export_session(self, session_id: str) -> dict[str, Any]:
+        session = self._repository_call(self.repository.get_session, session_id)
+        turns = self._repository_call(self.repository.list_turns, session_id)
+        payload = {
+            "format": _EXPORT_FORMAT,
+            "schema_version": _EXPORT_SCHEMA_VERSION,
+            "exported_at": _utc_timestamp(self.clock()),
+            "session": _safe_export_value(_session_payload(session)),
+            "turns": [
+                _safe_export_value(self._turn_with_feedback(turn)) for turn in turns
+            ],
+        }
+        return _json_copy(payload, "export")
+
+    def import_session(self, payload: object) -> dict[str, Any]:
+        session, turns = _validate_import_payload(payload)
+        session_id = self._new_session_id()
+        local_session_ids = {
+            item.session_id
+            for item in self._repository_call(self.repository.list_sessions)
+        }
+        source_session_id = (
+            session["session_id"]
+            if session["session_id"] in local_session_ids
+            else None
+        )
+        self._repository_call(
+            self.repository.import_session,
+            session_id=session_id,
+            name=session["name"],
+            profile=session["profile"],
+            agent_version=session["agent_version"],
+            catalog_sha256=session["catalog_sha256"],
+            config_sha256=session["config_sha256"],
+            assets_sha256=session["assets_sha256"],
+            source_session_id=source_session_id,
+            archived=session["archived"],
+            dirty=session["dirty"],
+            read_only_reason="imported_history",
+            created_at=session["created_at"],
+            updated_at=session["updated_at"],
+            turns=turns,
+        )
+        return self.get_session(session_id)
+
+    def clone_session(
+        self, source_session_id: str, through_turn: object = None
+    ) -> dict[str, Any]:
+        source = self._repository_call(self.repository.get_session, source_session_id)
+        if source.archived:
+            raise ConflictError()
+        turns = self._repository_call(self.repository.list_turns, source_session_id)
+        completed_prefix: list[TurnRecord] = []
+        for turn in turns:
+            if turn.status != "completed":
+                break
+            completed_prefix.append(turn)
+        if through_turn is None:
+            selected_count = len(completed_prefix)
+        elif (
+            not isinstance(through_turn, int)
+            or isinstance(through_turn, bool)
+            or through_turn < 0
+            or through_turn > len(completed_prefix)
+        ):
+            raise ValidationError(
+                {"through_turn": "Clone turn must select a completed prefix."}
+            )
+        else:
+            selected_count = through_turn
+
+        suffix = " (Clone)"
+        clone_name = f"{source.name[: _MAX_NAME_LENGTH - len(suffix)].rstrip()}{suffix}"
+        created = self.create_session(
+            clone_name,
+            source.profile,
+            source_session_id=source_session_id,
+        )
+        clone_id = created["session"]["session_id"]
+        source_request_ids = {turn.request_id for turn in turns}
+        for turn in completed_prefix[:selected_count]:
+            request_id = self._new_request_id(excluding=source_request_ids)
+            source_request_ids.add(request_id)
+            self.send_message(clone_id, request_id, turn.user_message)
+        return self.get_session(clone_id)
+
     def send_message(
         self, session_id: str, request_id: object, user_message: object
     ) -> dict[str, Any]:
         clean_request_id = _validate_request_id(request_id)
         clean_message = _validate_message(user_message)
         session = self._repository_call(self.repository.get_session, session_id)
+        if session.archived or session.read_only_reason == "imported_history":
+            raise ConflictError()
         existing = self._repository_call(
             self.repository.find_turn_by_request_id, session_id, clean_request_id
         )
         if existing is not None and existing.user_message != clean_message:
             raise RequestMismatchError()
         if existing is not None and existing.status == "completed":
-            return {"turn": _turn_payload(existing, feedback=[])}
+            return {"turn": self._turn_with_feedback(existing)}
 
         # Identity is checked before reserving a new durable row so an old
         # session cannot be made unresolved merely by viewing it under a new
@@ -224,7 +430,7 @@ class DebugService:
 
             if pending.status == "completed":
                 self._inflight.pop(key, None)
-                return {"turn": _turn_payload(pending, feedback=[])}
+                return {"turn": self._turn_with_feedback(pending)}
 
         retrying_unresolved = existing is not None and existing.status in {
             "pending",
@@ -420,6 +626,8 @@ class DebugService:
             active = any(key[0] == session.session_id for key in self._inflight)
         if active or any(turn.status == "pending" for turn in turns):
             return "rehydrating", False
+        if session.archived:
+            return "archived", False
         if session.read_only_reason is not None:
             return "incompatible", False
         if any(turn.status == "failed" for turn in turns):
@@ -450,6 +658,13 @@ class DebugService:
         if not value or len(value) > 128:
             raise ValidationError({"session_id": "Session identifier is invalid."})
         return value
+
+    def _new_request_id(self, *, excluding: set[str]) -> str:
+        for _ in range(100):
+            value = _validate_request_id(str(self.uuid_factory()))
+            if value not in excluding:
+                return value
+        raise ValidationError({"request_id": "A fresh request identifier is required."})
 
     @staticmethod
     def _repository_call(
@@ -485,6 +700,331 @@ class DebugService:
                 503,
                 True,
             ) from error
+
+
+def _validate_import_payload(
+    payload: object,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    body = _exact_object(payload, _EXPORT_KEYS, "body")
+    if _safe_export_value(body) != body:
+        raise ValidationError(
+            {"body": "Import data contains local or sensitive information."}
+        )
+    if body["format"] != _EXPORT_FORMAT:
+        raise ValidationError({"format": "Import format is invalid."})
+    if (
+        not isinstance(body["schema_version"], int)
+        or isinstance(body["schema_version"], bool)
+        or body["schema_version"] != _EXPORT_SCHEMA_VERSION
+    ):
+        raise ValidationError({"schema_version": "Import version is invalid."})
+    _validate_timestamp(body["exported_at"], "exported_at")
+    session = _validate_import_session(body["session"])
+    turns = _validate_import_turns(body["turns"], session["session_id"])
+    return session, turns
+
+
+def _validate_import_session(value: object) -> dict[str, Any]:
+    session = _exact_object(value, _SESSION_KEYS, "session")
+    source_session_id = _validate_identifier(
+        session["session_id"], "session.session_id"
+    )
+    imported_source = session["source_session_id"]
+    if imported_source is not None:
+        imported_source = _validate_identifier(
+            imported_source, "session.source_session_id"
+        )
+    assets_sha256 = session["assets_sha256"]
+    if assets_sha256 is not None:
+        assets_sha256 = _validate_required_text(assets_sha256, "session.assets_sha256")
+    read_only_reason = session["read_only_reason"]
+    if read_only_reason is not None and not isinstance(read_only_reason, str):
+        raise ValidationError(
+            {"session.read_only_reason": "Read-only reason must be text or null."}
+        )
+    if not isinstance(session["archived"], bool):
+        raise ValidationError({"session.archived": "Archived must be a boolean."})
+    if not isinstance(session["dirty"], bool):
+        raise ValidationError({"session.dirty": "Dirty must be a boolean."})
+    return {
+        "session_id": source_session_id,
+        "name": _validate_name(session["name"]),
+        "profile": _validate_profile(session["profile"]),
+        "agent_version": _validate_required_text(
+            session["agent_version"], "session.agent_version"
+        ),
+        "catalog_sha256": _validate_required_text(
+            session["catalog_sha256"], "session.catalog_sha256"
+        ),
+        "config_sha256": _validate_required_text(
+            session["config_sha256"], "session.config_sha256"
+        ),
+        "assets_sha256": assets_sha256,
+        "source_session_id": imported_source,
+        "archived": session["archived"],
+        "dirty": session["dirty"],
+        "read_only_reason": read_only_reason,
+        "created_at": _validate_timestamp(session["created_at"], "session.created_at"),
+        "updated_at": _validate_timestamp(session["updated_at"], "session.updated_at"),
+    }
+
+
+def _validate_import_turns(
+    value: object, source_session_id: str
+) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise ValidationError({"turns": "Turns must be a list."})
+    if len(value) > 10:
+        raise ValidationError({"turns": "At most 10 turns may be imported."})
+    request_ids: set[str] = set()
+    normalized: list[dict[str, Any]] = []
+    for position, raw_turn in enumerate(value, start=1):
+        field = f"turns[{position - 1}]"
+        turn = _exact_object(raw_turn, _TURN_KEYS, field)
+        if turn["session_id"] != source_session_id:
+            raise ValidationError(
+                {f"{field}.session_id": "Turn session identifier is invalid."}
+            )
+        if (
+            not isinstance(turn["turn"], int)
+            or isinstance(turn["turn"], bool)
+            or turn["turn"] != position
+        ):
+            raise ValidationError(
+                {f"{field}.turn": "Turns must be contiguous and ordered."}
+            )
+        request_id = _validate_request_id(turn["request_id"])
+        if request_id in request_ids:
+            raise ValidationError(
+                {f"{field}.request_id": "Request identifiers must be unique."}
+            )
+        request_ids.add(request_id)
+        status = turn["status"]
+        if not isinstance(status, str) or status not in _TURN_STATUSES:
+            raise ValidationError({f"{field}.status": "Turn status is invalid."})
+
+        response = _json_copy(turn["response"], f"{field}.response")
+        products = _json_copy(turn["products"], f"{field}.products")
+        state = _json_copy(turn["state"], f"{field}.state")
+        trace = _json_copy(turn["trace"], f"{field}.trace")
+        error = _json_copy(turn["error"], f"{field}.error")
+        feedback = _validate_import_feedback(
+            turn["feedback"],
+            field=field,
+            source_session_id=source_session_id,
+            turn_number=position,
+            products=products,
+        )
+        snapshots = (response, products, state, trace)
+        if status == "completed":
+            if (
+                not isinstance(response, dict)
+                or not isinstance(products, list)
+                or not isinstance(state, dict)
+                or not isinstance(trace, dict)
+                or error is not None
+            ):
+                raise ValidationError(
+                    {field: "Completed turns require snapshots and no error."}
+                )
+        elif status == "failed":
+            if any(item is not None for item in snapshots) or not isinstance(
+                error, dict
+            ):
+                raise ValidationError(
+                    {field: "Failed turns require only an error snapshot."}
+                )
+            if feedback:
+                raise ValidationError(
+                    {f"{field}.feedback": "Only completed turns may have feedback."}
+                )
+        elif any(item is not None for item in (*snapshots, error)) or feedback:
+            raise ValidationError(
+                {field: "Pending turns cannot contain snapshots or feedback."}
+            )
+
+        normalized.append(
+            {
+                "turn": position,
+                "request_id": request_id,
+                "status": status,
+                "user_message": _validate_message(turn["user_message"]),
+                "response": response,
+                "products": products,
+                "state": state,
+                "trace": trace,
+                "error": error,
+                "created_at": _validate_timestamp(
+                    turn["created_at"], f"{field}.created_at"
+                ),
+                "updated_at": _validate_timestamp(
+                    turn["updated_at"], f"{field}.updated_at"
+                ),
+                "feedback": feedback,
+            }
+        )
+    return normalized
+
+
+def _validate_import_feedback(
+    value: object,
+    *,
+    field: str,
+    source_session_id: str,
+    turn_number: int,
+    products: Any,
+) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise ValidationError({f"{field}.feedback": "Feedback must be a list."})
+    product_asins = (
+        {
+            product.get("parent_asin")
+            for product in products
+            if isinstance(product, dict) and isinstance(product.get("parent_asin"), str)
+        }
+        if isinstance(products, list)
+        else set()
+    )
+    seen: set[str] = set()
+    normalized: list[dict[str, Any]] = []
+    for index, raw_feedback in enumerate(value):
+        item_field = f"{field}.feedback[{index}]"
+        feedback = _exact_object(raw_feedback, _FEEDBACK_KEYS, item_field)
+        if feedback["session_id"] != source_session_id:
+            raise ValidationError(
+                {f"{item_field}.session_id": "Feedback session is invalid."}
+            )
+        if (
+            not isinstance(feedback["turn"], int)
+            or isinstance(feedback["turn"], bool)
+            or feedback["turn"] != turn_number
+        ):
+            raise ValidationError({f"{item_field}.turn": "Feedback turn is invalid."})
+        parent_asin = feedback["parent_asin"]
+        if not isinstance(parent_asin, str) or not parent_asin:
+            raise ValidationError(
+                {f"{item_field}.parent_asin": "Feedback product is invalid."}
+            )
+        if parent_asin in seen:
+            raise ValidationError(
+                {f"{item_field}.parent_asin": "Feedback products must be unique."}
+            )
+        if parent_asin not in product_asins:
+            raise ValidationError(
+                {
+                    f"{item_field}.parent_asin": (
+                        "Feedback product is not present in the completed turn."
+                    )
+                }
+            )
+        seen.add(parent_asin)
+        reason = feedback["reason"]
+        if not isinstance(reason, str) or reason not in FEEDBACK_REASONS:
+            raise ValidationError(
+                {f"{item_field}.reason": "Feedback reason is invalid."}
+            )
+        note = feedback["note"]
+        if not isinstance(note, str):
+            raise ValidationError({f"{item_field}.note": "Feedback note must be text."})
+        normalized.append(
+            {
+                "parent_asin": parent_asin,
+                "reason": reason,
+                "note": note,
+                "updated_at": _validate_timestamp(
+                    feedback["updated_at"], f"{item_field}.updated_at"
+                ),
+            }
+        )
+    return normalized
+
+
+def _exact_object(
+    value: object, expected_keys: frozenset[str], field: str
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValidationError({field: "A JSON object is required."})
+    if set(value) != expected_keys:
+        raise ValidationError({field: "Object fields do not match the schema."})
+    return value
+
+
+def _validate_identifier(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value or len(value) > 128:
+        raise ValidationError({field: "Session identifier is invalid."})
+    return value
+
+
+def _validate_required_text(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValidationError({field: "Nonempty text is required."})
+    return value
+
+
+def _validate_timestamp(value: object, field: str) -> str:
+    if not isinstance(value, str):
+        raise ValidationError({field: "A UTC timestamp is required."})
+    try:
+        parsed = datetime.fromisoformat(value.removesuffix("Z") + "+00:00")
+    except ValueError as error:
+        raise ValidationError({field: "A UTC timestamp is required."}) from error
+    if parsed.tzinfo is None or _utc_timestamp(parsed) != value:
+        raise ValidationError({field: "A canonical UTC timestamp is required."})
+    return value
+
+
+def _utc_timestamp(value: datetime) -> str:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("The service clock must return a timezone-aware datetime.")
+    return (
+        value.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    )
+
+
+def _json_copy(value: object, field: str) -> Any:
+    try:
+        encoded = json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+        decoded = json.loads(encoded)
+    except (TypeError, ValueError) as error:
+        raise ValidationError({field: "Value must contain valid JSON."}) from error
+    if decoded != value:
+        raise ValidationError({field: "Value must contain valid JSON."})
+    return decoded
+
+
+def _safe_export_value(value: Any, *, field: str | None = None) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _safe_export_value(item, field=key)
+            for key, item in value.items()
+            if isinstance(key, str) and not _is_sensitive_export_key(key)
+        }
+    if isinstance(value, list):
+        return [_safe_export_value(item, field=field) for item in value]
+    if (
+        isinstance(value, str)
+        and field not in _IDENTIFIER_EXPORT_KEYS
+        and (
+            _ABSOLUTE_PATH.search(value)
+            or _HOSTNAME.search(value)
+            or _EXCEPTION_REPR.search(value)
+        )
+    ):
+        return "[redacted]"
+    return value
+
+
+def _is_sensitive_export_key(value: str) -> bool:
+    normalized = value.lower().replace("-", "_")
+    return normalized in _SENSITIVE_EXPORT_KEYS or normalized.endswith(
+        ("_path", "_token", "_secret", "_password", "_hostname")
+    )
 
 
 def _validate_name(value: object) -> str:

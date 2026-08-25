@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -21,7 +21,7 @@ from .errors import (
 
 _SCHEMA_VERSION = 1
 _UNSET = object()
-_FEEDBACK_REASONS = frozenset(
+FEEDBACK_REASONS = frozenset(
     {
         "explicit_constraint",
         "wrong_category",
@@ -336,6 +336,102 @@ class DebugRepository:
                 raise
         return self.get_session(session_id)
 
+    def import_session(
+        self,
+        *,
+        session_id: str,
+        name: str,
+        profile: Any,
+        agent_version: str,
+        catalog_sha256: str,
+        config_sha256: str,
+        assets_sha256: str | None,
+        source_session_id: str | None,
+        archived: bool,
+        dirty: bool,
+        read_only_reason: str | None,
+        created_at: str,
+        updated_at: str,
+        turns: list[Mapping[str, Any]],
+    ) -> SessionRecord:
+        """Atomically persist an already-validated historical session."""
+
+        with self._connect() as connection:
+            self._begin(connection)
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO sessions(
+                        session_id, name, profile_json, agent_version, catalog_sha256,
+                        config_sha256, assets_sha256, source_session_id, archived,
+                        dirty, read_only_reason, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        session_id,
+                        name,
+                        _encode_json(profile),
+                        agent_version,
+                        catalog_sha256,
+                        config_sha256,
+                        assets_sha256,
+                        source_session_id,
+                        int(archived),
+                        int(dirty),
+                        read_only_reason,
+                        created_at,
+                        updated_at,
+                    ),
+                )
+                for turn in turns:
+                    connection.execute(
+                        """
+                        INSERT INTO turns(
+                            session_id, turn, request_id, status, user_message,
+                            response_json, products_json, state_json, trace_json,
+                            error_json, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            session_id,
+                            turn["turn"],
+                            turn["request_id"],
+                            turn["status"],
+                            turn["user_message"],
+                            _encode_optional_json(turn["response"]),
+                            _encode_optional_json(turn["products"]),
+                            _encode_optional_json(turn["state"]),
+                            _encode_optional_json(turn["trace"]),
+                            _encode_optional_json(turn["error"]),
+                            turn["created_at"],
+                            turn["updated_at"],
+                        ),
+                    )
+                    for feedback in turn["feedback"]:
+                        connection.execute(
+                            """
+                            INSERT INTO product_feedback(
+                                session_id, turn, parent_asin, reason, note, updated_at
+                            ) VALUES (?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                session_id,
+                                turn["turn"],
+                                feedback["parent_asin"],
+                                feedback["reason"],
+                                feedback["note"],
+                                feedback["updated_at"],
+                            ),
+                        )
+                connection.commit()
+            except sqlite3.IntegrityError as error:
+                connection.rollback()
+                raise ConflictError() from error
+            except BaseException:
+                connection.rollback()
+                raise
+        return self.get_session(session_id)
+
     def get_session(self, session_id: str) -> SessionRecord:
         with self._connect() as connection:
             row = connection.execute(
@@ -591,7 +687,7 @@ class DebugRepository:
     ) -> FeedbackRecord:
         if not isinstance(parent_asin, str):
             raise ValidationError({"parent_asin": "A product identifier is required."})
-        if not isinstance(reason, str) or reason not in _FEEDBACK_REASONS:
+        if not isinstance(reason, str) or reason not in FEEDBACK_REASONS:
             raise ValidationError({"reason": "Feedback reason is invalid."})
         if not isinstance(note, str):
             raise ValidationError({"note": "Feedback note must be text."})
@@ -784,6 +880,10 @@ def _encode_json(value: Any) -> str:
         ensure_ascii=False,
         allow_nan=False,
     )
+
+
+def _encode_optional_json(value: Any | None) -> str | None:
+    return None if value is None else _encode_json(value)
 
 
 def _validate_schema_version(value: str) -> int:
