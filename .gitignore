@@ -12,6 +12,8 @@ data/catalog.jsonl.gz
 data/releases/
 assets/model/
 assets/product_vectors/
+assets/SHA256SUMS
+results-task*.json
 reports/experiments/*.json
 
 # Organizer-only code, private evaluation data, manifests, and build reports.

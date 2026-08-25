@@ -5,6 +5,7 @@ from pathlib import Path
 
 from .catalog import CatalogIndex
 from .config import RuntimeConfig
+from .dense import load_dense_backend
 from .models import Candidate, QuestionDecision, RetrievalPlan, SessionState
 from .parser import MessageParser
 from .question_policy import QuestionPolicy
@@ -28,7 +29,14 @@ class CompassCartAgent:
         self.parser = MessageParser()
         self.sessions = SessionStore(self.parser)
         self.router = RoutePlanner(self.config)
-        self.retriever = HybridRetriever(self.catalog, rrf_k=self.config.rrf_k)
+        self.dense = load_dense_backend(
+            self.config.dense_model_dir,
+            self.config.dense_vector_dir,
+            self.config.dense_manifest_path,
+        )
+        self.retriever = HybridRetriever(
+            self.catalog, self.dense, rrf_k=self.config.rrf_k
+        )
         self.ranker = ConstraintRanker(self.catalog)
         self.question_policy = QuestionPolicy()
         self.response_builder = ResponseBuilder(

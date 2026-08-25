@@ -2,3 +2,4 @@
 optimum[onnxruntime]>=1.21,<3
 sentence-transformers>=3,<6
 torch>=2.2,<3
+truststore>=0.10,<1

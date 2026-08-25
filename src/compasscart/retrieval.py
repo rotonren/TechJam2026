@@ -2,17 +2,10 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
-from typing import Protocol
 
 from .catalog import CatalogIndex
+from .dense import DenseBackend
 from .models import Candidate, RetrievalPlan, SessionState
-
-
-class DenseRetriever(Protocol):
-    @property
-    def available(self) -> bool: ...
-
-    def search(self, text: str, limit: int) -> list[Candidate]: ...
 
 
 def reciprocal_rank_fusion(
@@ -37,7 +30,7 @@ class HybridRetriever:
     def __init__(
         self,
         catalog: CatalogIndex,
-        dense: DenseRetriever | None = None,
+        dense: DenseBackend | None = None,
         *,
         rrf_k: int = 60,
     ) -> None:

@@ -12,6 +12,7 @@ class RuntimeConfig:
     component_timeout_ms: int = 800
     dense_model_dir: Path = Path("assets/model")
     dense_vector_dir: Path = Path("assets/product_vectors")
+    dense_manifest_path: Path = Path("assets/SHA256SUMS")
     bm25_field_weights: tuple[float, ...] = (0.0, 6.0, 4.0, 2.5, 2.5, 1.5, 1.0)
     buying_route_weights: tuple[tuple[str, float], ...] = (
         ("attribute", 0.45),
