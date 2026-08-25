@@ -62,8 +62,20 @@ function mergeSession(sessions, session) {
   return next;
 }
 
-export function createStore({ service = null, initialState = {} } = {}) {
-  let state = { ...DEFAULT_STATE, ...initialState, service: service || initialState.service || null };
+export function createStore(options = {}) {
+  const service = options.service || null;
+  const initialState = options.initialState || Object.fromEntries(
+    Object.entries(options).filter(([key]) => key !== "service"),
+  );
+  const suppliedTurns = Array.isArray(initialState.turns)
+    ? initialState.turns
+    : (Array.isArray(initialState.currentSession?.turns) ? initialState.currentSession.turns : []);
+  let state = {
+    ...DEFAULT_STATE,
+    ...initialState,
+    turns: suppliedTurns.slice(),
+    service: service || initialState.service || null,
+  };
   const listeners = new Set();
 
   function emit() {
@@ -284,7 +296,7 @@ export function createStore({ service = null, initialState = {} } = {}) {
     },
   };
 
-  return {
+  const store = {
     getState: () => state,
     subscribe(listener) {
       listeners.add(listener);
@@ -292,4 +304,9 @@ export function createStore({ service = null, initialState = {} } = {}) {
     },
     actions,
   };
+  // Keep the compact direct-action spelling useful for small consumers and
+  // Node tests while the UI uses the namespaced actions object.
+  for (const [name, action] of Object.entries(actions)) store[name] = action;
+  Object.defineProperty(store, "state", { enumerable: true, get: () => state });
+  return store;
 }

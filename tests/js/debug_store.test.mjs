@@ -76,6 +76,13 @@ test("selecting a turn updates observation, recommendations, and diagnostics ato
   assert.deepEqual(state.diagnostics, second.state);
 });
 
+test("store accepts a compact initial session and direct selectTurn action", () => {
+  const store = createStore({ currentSession: { turns: [{ turn: 1 }, { turn: 2 }] } });
+  store.selectTurn(2);
+  assert.equal(store.getState().selectedTurn, 2);
+  assert.equal(store.getState().selectedObservation.turn, 2);
+});
+
 test("an authentication error clears only the token", async () => {
   const service = {
     health: async () => { throw Object.assign(new Error("unauthorized"), { status: 401 }); },
