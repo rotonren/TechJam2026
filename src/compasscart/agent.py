@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from collections import OrderedDict
 from pathlib import Path
 
 from .catalog import CatalogIndex
@@ -44,8 +45,13 @@ class CompassCartAgent:
             self.catalog.popular_ids(self.config.max_recommendations),
         )
         self.traces = TraceSink()
+        self._profiles: OrderedDict[str, dict[str, object]] = OrderedDict()
 
     def reset(self, session_id: str, user_profile: dict) -> None:
+        self._profiles[session_id] = dict(user_profile)
+        self._profiles.move_to_end(session_id)
+        while len(self._profiles) > 1_000:
+            self._profiles.popitem(last=False)
         self.sessions.reset(session_id, user_profile)
 
     def respond(
@@ -57,7 +63,10 @@ class CompassCartAgent:
     ) -> dict[str, object]:
         state = self.sessions.get(session_id)
         if state is None:
-            raise RuntimeError("reset must be called before respond")
+            profile = self._profiles.get(session_id)
+            if profile is None:
+                raise RuntimeError("reset must be called before respond")
+            state = self.sessions.reset(session_id, profile)
         if not 1 <= turn <= 10:
             raise ValueError("turn must be between 1 and 10")
 
