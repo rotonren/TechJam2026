@@ -6,12 +6,10 @@ from .models import Candidate, QuestionDecision, SessionState
 from .normalization import extract_attributes
 
 _ATTRIBUTES = (
-    "category",
     "material",
     "color",
     "size",
     "style",
-    "brand",
     "budget",
     "feature",
     "use_case",

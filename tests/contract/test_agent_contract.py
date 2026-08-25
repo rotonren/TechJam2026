@@ -80,3 +80,16 @@ def test_trace_sink_is_bounded():
     sink.record({"turn": 3})
 
     assert [item["turn"] for item in sink.records] == [2, 3]
+
+
+def test_agent_query_uses_bounded_dialog_evidence():
+    from compasscart.models import SessionState
+
+    state = SessionState("s1")
+    state.query_history = ["alloy buckle closure", "black belt"]
+
+    query = Agent._query_text("ignored current argument", state)
+
+    assert "alloy buckle closure" in query
+    assert "black belt" in query
+    assert "ignored current argument" not in query

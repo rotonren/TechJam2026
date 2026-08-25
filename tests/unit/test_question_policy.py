@@ -83,3 +83,20 @@ def test_late_turn_requires_meaningful_utility():
     decision = QuestionPolicy().choose(candidates, SessionState("s1", turn=9))
 
     assert decision.ask_attribute is None
+
+
+def test_policy_prefers_answerable_attribute_over_category_or_brand():
+    candidates = []
+    for index in range(12):
+        candidate = _candidate(
+            f"P{index:02d}",
+            12.0 - index,
+            material="cotton" if index < 6 else "leather",
+        )
+        candidate.product["categories"] = [f"Category {index}"]
+        candidate.product["store"] = f"Brand {index}"
+        candidates.append(candidate)
+
+    decision = QuestionPolicy().choose(candidates, SessionState("s1", turn=2))
+
+    assert decision.ask_attribute == "material"

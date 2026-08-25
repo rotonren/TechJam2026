@@ -58,3 +58,17 @@ def test_no_preference_is_recorded_and_not_added_as_constraint():
 
     assert "size" in state.no_preference_attributes
     assert all(item.attribute != "size" for item in state.active_constraints())
+
+
+def test_query_history_keeps_evidence_but_resets_on_override():
+    store = SessionStore(MessageParser())
+    store.reset("s1", {"preference_tags": []})
+    store.update("s1", "I need a red cotton dress with buckle closure", 1)
+    state = store.update(
+        "s1", "I don't have a preference for size; use your judgment.", 2
+    )
+    assert state.query_history == ["I need a red cotton dress with buckle closure"]
+
+    state = store.update("s1", "Actually, what I need is blue leather shoes.", 3)
+
+    assert state.query_history == ["Actually, what I need is blue leather shoes."]

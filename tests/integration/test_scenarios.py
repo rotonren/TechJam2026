@@ -86,3 +86,6 @@ def test_boundary_reply_prevents_repeated_question(tmp_path):
 
     assert first["recommendations"] and second["recommendations"]
     assert second["ask_attribute"] != asked
+    state = agent.sessions.get("boundary")
+    assert state is not None
+    assert state.pending_attribute == second["ask_attribute"]

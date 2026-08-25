@@ -104,13 +104,16 @@ class MessageParser:
         text = normalize_value(message)
         if not text:
             return ParseResult()
+        is_override = bool(_OVERRIDE_RE.search(text))
+        if is_override:
+            expected_attribute = None
 
         if _NO_PREFERENCE_RE.search(text):
             attribute = expected_attribute or self._mentioned_attribute(text)
             return ParseResult(
                 route_hint="browsing",
                 no_preference_attribute=attribute,
-                is_override=bool(_OVERRIDE_RE.search(text)),
+                is_override=is_override,
             )
 
         source: ConstraintSource = "clarification" if expected_attribute else "message"
@@ -131,7 +134,7 @@ class MessageParser:
         return ParseResult(
             constraints=tuple(self._deduplicate(extracted)),
             route_hint=route_hint,
-            is_override=bool(_OVERRIDE_RE.search(text)),
+            is_override=is_override,
         )
 
     def _extract_expected(

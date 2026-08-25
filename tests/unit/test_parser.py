@@ -52,3 +52,16 @@ def test_parser_detects_buying_requirement_and_budget():
     assert ("budget", "80.00") in {
         (item.attribute, item.value) for item in result.constraints
     }
+
+
+def test_override_is_not_parsed_as_previous_question_answer():
+    result = MessageParser().parse(
+        "Actually, ignore my earlier preference. What I need is: leather.",
+        turn=3,
+        expected_attribute="category",
+    )
+
+    assert result.is_override is True
+    assert [(item.attribute, item.value) for item in result.constraints] == [
+        ("material", "leather")
+    ]

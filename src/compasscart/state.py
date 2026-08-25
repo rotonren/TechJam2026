@@ -60,6 +60,7 @@ class SessionStore:
 
         if is_override:
             self._begin_new_intent(state, incoming)
+            state.query_history.clear()
 
         if result.no_preference_attribute:
             state.no_preference_attributes.add(result.no_preference_attribute)
@@ -67,6 +68,10 @@ class SessionStore:
 
         for parsed in incoming:
             self._merge_constraint(state, parsed, turn)
+
+        if message.strip() and (incoming or turn == 1 or is_override):
+            state.query_history.append(message.strip())
+            state.query_history[:] = state.query_history[-4:]
 
         state.turn = turn
         if result.route_hint:

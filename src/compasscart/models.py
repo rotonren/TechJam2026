@@ -28,6 +28,8 @@ class SessionState:
     intent_version: int = 1
     constraints: list[Constraint] = field(default_factory=list)
     asked_attributes: list[str] = field(default_factory=list)
+    pending_attribute: str | None = None
+    query_history: list[str] = field(default_factory=list)
     no_preference_attributes: set[str] = field(default_factory=set)
     previous_recommendations: list[str] = field(default_factory=list)
     candidate_count: int = 0

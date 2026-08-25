@@ -73,9 +73,8 @@ class CompassCartAgent:
         started = time.perf_counter()
         fallbacks: list[str] = []
         old_version = state.intent_version
-        expected_attribute = (
-            state.asked_attributes[-1] if state.asked_attributes else None
-        )
+        expected_attribute = state.pending_attribute
+        state.pending_attribute = None
         try:
             state = self.sessions.update(
                 session_id,
@@ -122,6 +121,7 @@ class CompassCartAgent:
             and question.ask_attribute not in state.asked_attributes
         ):
             state.asked_attributes.append(question.ask_attribute)
+        state.pending_attribute = question.ask_attribute
         state.previous_recommendations = [
             candidate.parent_asin for candidate in ranked[: min(top_k, 10)]
         ]
@@ -159,5 +159,6 @@ class CompassCartAgent:
 
     @staticmethod
     def _query_text(message: str, state: SessionState) -> str:
+        del message
         values = [item.value for item in state.active_constraints()]
-        return " ".join([message, *values]).strip()
+        return " ".join([*state.query_history, *values]).strip()
