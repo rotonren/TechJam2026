@@ -86,7 +86,7 @@ class UnresolvedTurnError(DebugServiceError):
 
 class TurnLimitError(DebugServiceError):
     def __init__(self) -> None:
-        super().__init__("turn_limit", "The session has reached its turn limit.", 400)
+        super().__init__("turn_limit", "The session has reached its turn limit.", 409)
 
 
 class NotFoundError(DebugServiceError):

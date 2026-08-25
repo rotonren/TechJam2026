@@ -27,12 +27,12 @@ class RuntimePaths:
 @dataclass(frozen=True)
 class DebugConfig:
     catalog_path: Path = Path("data/catalog.jsonl")
-    database_path: Path = Path("compasscart-debug.sqlite3")
-    static_root: Path = Path("src/compasscart_debug/static")
+    database_path: Path = Path("var/debug/compasscart-debug.sqlite3")
+    static_root: Path = Path(__file__).resolve().parent / "static"
     asset_root: Path = Path("assets")
     runtime_root: Path | None = None
     host: str = "127.0.0.1"
-    port: int = 8000
+    port: int = 8765
     access_token: str = ""
     max_body_bytes: int = 1_048_576
     max_import_bytes: int = 16_777_216
@@ -43,8 +43,11 @@ class DebugConfig:
     def from_env(cls, env: Mapping[str, str] | None = None) -> DebugConfig:
         values = os.environ if env is None else env
         token = values.get("COMPASSCART_DEBUG_TOKEN", "")
-        if token == "change-me" or len(token) < _MIN_TOKEN_LENGTH:
-            raise ValueError("A secure debug access token is required.")
+        if (
+            token.lower() in {"change-me", "replace-me", "password"}
+            or len(token) < _MIN_TOKEN_LENGTH
+        ):
+            raise ValueError("COMPASSCART_DEBUG_TOKEN must be at least 43 characters.")
         runtime_root = values.get("COMPASSCART_RUNTIME_ROOT")
         return cls(
             catalog_path=Path(
@@ -52,18 +55,14 @@ class DebugConfig:
             ),
             database_path=Path(
                 values.get(
-                    "COMPASSCART_DEBUG_DATABASE_PATH", "compasscart-debug.sqlite3"
+                    "COMPASSCART_DEBUG_DATABASE", "var/debug/compasscart-debug.sqlite3"
                 )
             ),
-            static_root=Path(
-                values.get(
-                    "COMPASSCART_DEBUG_STATIC_ROOT", "src/compasscart_debug/static"
-                )
-            ),
+            static_root=Path(__file__).resolve().parent / "static",
             asset_root=Path(values.get("COMPASSCART_ASSET_ROOT", "assets")),
             runtime_root=Path(runtime_root) if runtime_root else None,
-            host=values.get("COMPASSCART_DEBUG_HOST", "127.0.0.1"),
-            port=_positive_int(values, "COMPASSCART_DEBUG_PORT", 8000),
+            host=values.get("HOST", "127.0.0.1"),
+            port=_positive_int(values, "PORT", 8765),
             access_token=token,
             max_body_bytes=_positive_int(
                 values, "COMPASSCART_DEBUG_MAX_BODY_BYTES", 1_048_576
@@ -126,7 +125,7 @@ class RuntimeIdentity:
         agent_version: str,
         catalog_path: Path,
         runtime_config: RuntimeConfig,
-        manifest_path: Path,
+        manifest_path: Path | None,
         dense_disabled: bool,
     ) -> RuntimeIdentity:
         config_payload = {
@@ -180,8 +179,8 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _optional_sha256_file(path: Path) -> str | None:
-    return _sha256_file(path) if path.is_file() else None
+def _optional_sha256_file(path: Path | None) -> str | None:
+    return _sha256_file(path) if path is not None and path.is_file() else None
 
 
 def _canonical_config_value(name: str, value: Any) -> Any:

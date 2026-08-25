@@ -7,9 +7,9 @@ from pathlib import Path
 
 _RESPONSE_FIELDS = (
     "message",
-    "recommendations",
     "ask_attribute",
-    "conversation_summary",
+    "recommendations",
+    "usage",
 )
 
 
@@ -17,12 +17,15 @@ def json_safe(value: object) -> object:
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         return json_safe(dataclasses.asdict(value))
     if isinstance(value, Mapping):
-        return {
-            str(key): json_safe(value[key])
-            for key in sorted(value, key=lambda item: str(item))
-        }
+        snapshot: dict[str, object] = {}
+        for key in sorted(value, key=_mapping_sort_key):
+            json_key = _mapping_key(key)
+            if json_key in snapshot:
+                raise TypeError("Mapping keys collide after JSON conversion.")
+            snapshot[json_key] = json_safe(value[key])
+        return snapshot
     if isinstance(value, (set, frozenset)):
-        return [json_safe(item) for item in sorted(value, key=_sort_key)]
+        return [json_safe(item) for item in sorted(value, key=_set_sort_key)]
     if isinstance(value, (list, tuple)):
         return [json_safe(item) for item in value]
     if isinstance(value, Path):
@@ -44,17 +47,25 @@ def snapshot_state(state: object) -> dict[str, object]:
 
 
 def snapshot_products(
-    response: Mapping[str, object], catalog: Mapping[str, object] | object
+    agent: object, response: Mapping[str, object]
 ) -> list[dict[str, object]]:
+    catalog = getattr(agent, "catalog", None)
+    products = getattr(catalog, "products", None)
+    attributes = getattr(catalog, "attributes", None)
+    if not isinstance(products, Mapping) or not isinstance(attributes, Mapping):
+        raise TypeError("Agent catalog metadata is unavailable.")
     recommendations = response.get("recommendations")
     if not isinstance(recommendations, list):
         raise TypeError("Response recommendations are invalid.")
     snapshots: list[dict[str, object]] = []
     for rank, recommendation in enumerate(recommendations, start=1):
         identifier = _recommendation_identifier(recommendation)
-        product = _catalog_product(catalog, identifier)
+        product = products.get(identifier)
         metadata_missing = not isinstance(product, Mapping)
         product = product if isinstance(product, Mapping) else {}
+        normalized_attributes = attributes.get(identifier, {})
+        if not isinstance(normalized_attributes, Mapping):
+            normalized_attributes = {}
         snapshots.append(
             {
                 "rank": rank,
@@ -67,9 +78,7 @@ def snapshot_products(
                 "categories": json_safe(product.get("categories", [])),
                 "features": json_safe(product.get("features", [])),
                 "details": json_safe(product.get("details", {})),
-                "normalized_attributes": json_safe(
-                    product.get("normalized_attributes", {})
-                ),
+                "normalized_attributes": json_safe(normalized_attributes),
                 "metadata_missing": metadata_missing,
             }
         )
@@ -106,9 +115,7 @@ def snapshot_response(response: object) -> dict[str, object]:
         response["ask_attribute"], str
     ):
         raise TypeError("Agent response is invalid.")
-    if response["conversation_summary"] is not None and not isinstance(
-        response["conversation_summary"], str
-    ):
+    if not isinstance(response["usage"], Mapping):
         raise TypeError("Agent response is invalid.")
     return {name: json_safe(response[name]) for name in _RESPONSE_FIELDS}
 
@@ -122,20 +129,24 @@ def _recommendation_identifier(recommendation: object) -> str:
     return identifier
 
 
-def _catalog_product(catalog: Mapping[str, object] | object, identifier: str) -> object:
-    if isinstance(catalog, Mapping):
-        return catalog.get(identifier)
-    product = getattr(catalog, "product", None)
-    if not callable(product):
-        raise TypeError("Catalog metadata is unavailable.")
-    try:
-        return product(identifier)
-    except (KeyError, LookupError):
-        return None
+def _mapping_sort_key(value: object) -> tuple[str, str, str]:
+    value_type = type(value)
+    return (value_type.__module__, value_type.__qualname__, _mapping_key(value))
 
 
-def _sort_key(value: object) -> tuple[str, str]:
-    return (str(value), type(value).__name__)
+def _mapping_key(value: object) -> str:
+    if isinstance(value, Path):
+        return str(value)
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return str(value)
+    text = _safe_string(value)
+    if text is None:
+        raise TypeError("Mapping key is not JSON-safe.")
+    return text
+
+
+def _set_sort_key(value: object) -> tuple[str, str]:
+    return (_mapping_key(value), type(value).__name__)
 
 
 def _safe_string(value: object) -> str | None:

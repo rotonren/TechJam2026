@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from agent import Agent
 from compasscart.models import Constraint, SessionState
 from compasscart_debug.snapshots import (
     capture_exact_trace,
@@ -72,47 +74,44 @@ def test_snapshot_state_preserves_all_fields_as_strict_json() -> None:
     json.dumps(snapshot, allow_nan=False)
 
 
-def test_snapshot_products_keeps_response_order_and_current_catalog_fields() -> None:
-    response = {"recommendations": [{"parent_asin": "B"}, {"parent_asin": "A"}]}
-    products = {
-        "A": {
-            "title": "Alpha",
-            "price": 10.0,
-            "average_rating": 4.5,
-            "rating_number": 7,
-            "store": "Store A",
-            "categories": ["shoes"],
-            "features": ["light"],
-            "details": {"color": "red"},
-            "normalized_attributes": {"color": ["red"]},
-        },
-        "B": {
-            "title": "Beta",
-            "price": 20.0,
-            "average_rating": 4.0,
-            "rating_number": 4,
-            "store": "Store B",
-            "categories": ["boots"],
-            "features": ["warm"],
-            "details": {"color": "black"},
-            "normalized_attributes": {"color": ["black"]},
-        },
+def test_agent_snapshots_use_real_response_contract_and_catalog_attributes(
+    fixture_catalog_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("COMPASSCART_DISABLE_DENSE", "1")
+    agent = Agent(fixture_catalog_path)
+    agent.reset("session-1", {})
+    response = agent.respond("session-1", "blue shoes", 1, 10)
+
+    response_snapshot = snapshot_response(response)
+    product_snapshot = snapshot_products(agent, response)
+    identifiers = [item["parent_asin"] for item in response["recommendations"]]
+
+    assert response_snapshot == response
+    assert set(response_snapshot) == {
+        "message",
+        "ask_attribute",
+        "recommendations",
+        "usage",
     }
-
-    snapshot = snapshot_products(response, products)
-
-    assert [(item["rank"], item["parent_asin"]) for item in snapshot] == [
-        (1, "B"),
-        (2, "A"),
+    assert [(item["rank"], item["parent_asin"]) for item in product_snapshot] == [
+        (rank, identifier) for rank, identifier in enumerate(identifiers, start=1)
     ]
-    assert snapshot[0]["rating"] == 4.0
-    assert snapshot[0]["rating_count"] == 4
-    assert "score" not in snapshot[0]
-    assert "source_scores" not in snapshot[0]
+    assert product_snapshot[0]["normalized_attributes"] == json_safe(
+        agent.catalog.attributes[identifiers[0]]
+    )
+    assert all(
+        "score" not in item and "source_scores" not in item for item in product_snapshot
+    )
 
 
 def test_snapshot_products_keeps_rank_for_missing_metadata() -> None:
-    snapshot = snapshot_products({"recommendations": [{"parent_asin": "MISSING"}]}, {})
+    class AgentWithoutMetadata:
+        def __init__(self) -> None:
+            self.catalog = SimpleNamespace(products={}, attributes={})
+
+    snapshot = snapshot_products(
+        AgentWithoutMetadata(), {"recommendations": [{"parent_asin": "MISSING"}]}
+    )
 
     assert snapshot == [
         {
@@ -150,7 +149,6 @@ def test_snapshot_response_keeps_only_official_agent_response_fields() -> None:
         "message": "Matches",
         "recommendations": [{"parent_asin": "A"}],
         "ask_attribute": None,
-        "conversation_summary": "summary",
         "usage": {"prompt_tokens": 0},
     }
 
@@ -158,7 +156,7 @@ def test_snapshot_response_keeps_only_official_agent_response_fields() -> None:
         "message": "Matches",
         "recommendations": [{"parent_asin": "A"}],
         "ask_attribute": None,
-        "conversation_summary": "summary",
+        "usage": {"prompt_tokens": 0},
     }
 
 
@@ -175,7 +173,7 @@ def test_snapshot_response_rejects_malformed_recommendation_entries() -> None:
         "message": "Matches",
         "recommendations": [{"parent_asin": 42}],
         "ask_attribute": None,
-        "conversation_summary": None,
+        "usage": {"prompt_tokens": 0},
     }
 
     with pytest.raises((TypeError, ValueError), match="response"):
@@ -191,3 +189,17 @@ def test_json_safe_normalizes_supported_values_deterministically() -> None:
         "set": ["2", 3],
     }
     json.dumps(json_safe(value), allow_nan=False)
+
+
+def test_json_safe_rejects_colliding_stringified_mapping_keys() -> None:
+    for value in ({1: "integer", "1": "string"}, {"1": "string", 1: "integer"}):
+        with pytest.raises(TypeError, match="collide"):
+            json_safe(value)
+
+
+def test_json_safe_sorts_normal_mixed_mapping_keys_deterministically() -> None:
+    first = json_safe({2: "integer", "10": "string"})
+    second = json_safe({"10": "string", 2: "integer"})
+
+    assert first == second == {"2": "integer", "10": "string"}
+    assert list(first) == ["2", "10"]

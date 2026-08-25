@@ -207,7 +207,7 @@ def capture_exact_trace(records, session_id: str, turn: int):
     return json_safe(latest)
 ```
 
-`snapshot_response()` validates and preserves the four Agent contract keys. `snapshot_state()` includes every `SessionState` field. `snapshot_products()` iterates only response recommendations and returns rank, ASIN, title, price, rating, rating count, store, categories, features, details, normalized attributes, and `metadata_missing`; missing rows retain rank/ASIN and explicit null/empty metadata.
+`snapshot_response()` validates and preserves the four Agent contract keys: `message`, `ask_attribute`, `recommendations`, and `usage`. `snapshot_state()` includes every `SessionState` field. `snapshot_products()` iterates only response recommendations and returns rank, ASIN, title, price, rating, rating count, store, categories, features, details, normalized attributes, and `metadata_missing`; missing rows retain rank/ASIN and explicit null/empty metadata.
 
 - [ ] **Step 6: Verify GREEN and commit**
 

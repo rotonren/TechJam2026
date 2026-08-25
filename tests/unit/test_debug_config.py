@@ -6,13 +6,46 @@ from pathlib import Path
 import pytest
 
 from compasscart.config import RuntimeConfig
+from compasscart_debug import config as debug_config
 from compasscart_debug.config import DebugConfig, RuntimeIdentity, RuntimeSetupError
+from compasscart_debug.errors import TurnLimitError, ValidationError
 
 
-@pytest.mark.parametrize("token", ["change-me", "x" * 42])
+@pytest.mark.parametrize(
+    "token", ["change-me", "CHANGE-ME", "replace-me", "PASSWORD", "x" * 42]
+)
 def test_from_env_rejects_placeholder_or_short_access_tokens(token: str) -> None:
-    with pytest.raises(ValueError, match="access token"):
+    with pytest.raises(ValueError, match="43 characters"):
         DebugConfig.from_env({"COMPASSCART_DEBUG_TOKEN": token})
+
+
+def test_from_env_uses_deployment_env_names_and_fixed_static_root(
+    tmp_path: Path,
+) -> None:
+    config = DebugConfig.from_env(
+        {
+            "COMPASSCART_DEBUG_TOKEN": "t" * 43,
+            "COMPASSCART_DEBUG_DATABASE": str(tmp_path / "debug.sqlite3"),
+            "HOST": "0.0.0.0",
+            "PORT": "9123",
+            "COMPASSCART_DEBUG_STATIC_ROOT": str(tmp_path / "untrusted-static"),
+        }
+    )
+
+    assert config.database_path == tmp_path / "debug.sqlite3"
+    assert config.host == "0.0.0.0"
+    assert config.port == 9123
+    assert config.static_root == Path(debug_config.__file__).resolve().parent / "static"
+
+
+def test_from_env_uses_fixed_deployment_defaults() -> None:
+    config = DebugConfig.from_env({"COMPASSCART_DEBUG_TOKEN": "t" * 43})
+
+    assert config.database_path == Path("var/debug/compasscart-debug.sqlite3")
+    assert config.host == "127.0.0.1"
+    assert config.port == 8765
+    assert config.static_root.name == "static"
+    assert config.static_root.parent.name == "compasscart_debug"
 
 
 def test_from_env_preserves_explicit_catalog_and_asset_paths(tmp_path: Path) -> None:
@@ -56,6 +89,49 @@ def test_runtime_identity_ignores_absolute_dense_paths(tmp_path: Path) -> None:
     assert left.config_sha256 == right.config_sha256
     assert left.catalog_sha256 == right.catalog_sha256
     assert left.assets_sha256 == right.assets_sha256
+
+
+@pytest.mark.parametrize("manifest", [None, Path("does-not-exist")])
+def test_runtime_identity_allows_missing_optional_manifest(
+    tmp_path: Path, manifest: Path | None
+) -> None:
+    catalog = tmp_path / "catalog.jsonl"
+    catalog.write_text('{"parent_asin":"A"}\n', encoding="utf-8")
+    if manifest is not None:
+        manifest = tmp_path / manifest
+
+    identity = RuntimeIdentity.build(
+        "1.0", catalog, RuntimeConfig(), manifest, dense_disabled=False
+    )
+
+    assert identity.assets_sha256 is None
+
+
+def test_runtime_identity_skips_assets_when_dense_is_disabled(tmp_path: Path) -> None:
+    catalog = tmp_path / "catalog.jsonl"
+    manifest = tmp_path / "SHA256SUMS"
+    catalog.write_text('{"parent_asin":"A"}\n', encoding="utf-8")
+    manifest.write_text("assets", encoding="utf-8")
+
+    identity = RuntimeIdentity.build(
+        "1.0", catalog, RuntimeConfig(), manifest, dense_disabled=True
+    )
+
+    assert identity.assets_sha256 is None
+
+
+def test_stable_error_payload_sorts_fields_and_turn_limit_conflicts() -> None:
+    payload = ValidationError({"z": "last", "a": "first"}).to_payload()
+
+    assert payload == {
+        "error": {
+            "code": "validation_failed",
+            "message": "Request validation failed.",
+            "retryable": False,
+            "field_errors": {"a": "first", "z": "last"},
+        }
+    }
+    assert TurnLimitError().http_status == 409
 
 
 def test_resolve_runtime_paths_reads_current_later_and_builds_release_paths(
