@@ -63,7 +63,9 @@ def snapshot_products(
         product = products.get(identifier)
         metadata_missing = not isinstance(product, Mapping)
         product = product if isinstance(product, Mapping) else {}
-        normalized_attributes = attributes.get(identifier, {})
+        normalized_attributes = (
+            {} if metadata_missing else attributes.get(identifier, {})
+        )
         if not isinstance(normalized_attributes, Mapping):
             normalized_attributes = {}
         snapshots.append(

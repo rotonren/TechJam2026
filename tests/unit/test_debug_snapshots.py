@@ -107,7 +107,9 @@ def test_agent_snapshots_use_real_response_contract_and_catalog_attributes(
 def test_snapshot_products_keeps_rank_for_missing_metadata() -> None:
     class AgentWithoutMetadata:
         def __init__(self) -> None:
-            self.catalog = SimpleNamespace(products={}, attributes={})
+            self.catalog = SimpleNamespace(
+                products={}, attributes={"MISSING": {"color": ("red",)}}
+            )
 
     snapshot = snapshot_products(
         AgentWithoutMetadata(), {"recommendations": [{"parent_asin": "MISSING"}]}
