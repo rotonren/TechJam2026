@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -29,6 +30,9 @@ _FEEDBACK_REASONS = frozenset(
         "duplicate_or_too_similar",
         "other",
     }
+)
+_EXPLICIT_MATCH_CLAUSE = re.compile(
+    r"\bmatch\b\s+(?:[a-z_][a-z0-9_]*|\"[^\"]+\")", re.IGNORECASE
 )
 _REQUIRED_TABLES = {"metadata", "sessions", "turns", "product_feedback"}
 _TABLE_COLUMNS = {
@@ -798,6 +802,8 @@ def _validate_schema_constraints(
         or "check(turnbetween1and10)" not in turns_sql
         or "check(statusin('pending','completed','failed'))" not in turns_sql
     ):
+        raise RepositoryVersionError("The database schema is incompatible.")
+    if any(_EXPLICIT_MATCH_CLAUSE.search(sql) for sql in tables.values()):
         raise RepositoryVersionError("The database schema is incompatible.")
     if not _has_unique_index(connection, "turns", ("session_id", "request_id")):
         raise RepositoryVersionError("The database schema is incompatible.")

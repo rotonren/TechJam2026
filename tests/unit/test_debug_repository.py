@@ -327,6 +327,33 @@ def test_initialize_rejects_foreign_key_with_on_update_cascade(tmp_path: Path) -
     assert _repository(path).health() is False
 
 
+def test_initialize_rejects_foreign_key_with_match_full_without_mutation(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "match-full.sqlite3"
+    repository = _repository(path)
+    repository.initialize()
+    connection = _raw_connection(path)
+    try:
+        _replace_sessions_table(
+            connection,
+            """
+            FOREIGN KEY (source_session_id) REFERENCES sessions(session_id)
+            MATCH FULL
+            """,
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    before = _schema_objects(path)
+
+    with pytest.raises(_repository_module().RepositoryVersionError):
+        _repository(path).initialize()
+
+    assert _schema_objects(path) == before
+    assert _repository(path).health() is False
+
+
 def test_health_and_schema_version_do_not_create_or_accept_unready_databases(
     tmp_path: Path,
 ) -> None:
