@@ -32,7 +32,45 @@ _FEEDBACK_REASONS = frozenset(
     }
 )
 _EXPLICIT_MATCH_CLAUSE = re.compile(r"\bmatch\b", re.IGNORECASE)
+_EXPLICIT_DEFERRABLE_CLAUSE = re.compile(r"\bdeferrable\b", re.IGNORECASE)
+_EXPLICIT_COLLATE_CLAUSE = re.compile(r"\bcollate\b", re.IGNORECASE)
 _REQUIRED_TABLES = {"metadata", "sessions", "turns", "product_feedback"}
+_TABLE_INDEXES = {
+    "metadata": (("pk", ("key",)),),
+    "sessions": (("pk", ("session_id",)),),
+    "turns": (("pk", ("session_id", "turn")), ("u", ("session_id", "request_id"))),
+    "product_feedback": (("pk", ("session_id", "turn", "parent_asin")),),
+}
+_TABLE_FOREIGN_KEYS = {
+    "metadata": (),
+    "sessions": (
+        (
+            "sessions",
+            (("source_session_id", "session_id"),),
+            "NO ACTION",
+            "NO ACTION",
+            "NONE",
+        ),
+    ),
+    "turns": (
+        ("sessions", (("session_id", "session_id"),), "CASCADE", "NO ACTION", "NONE"),
+    ),
+    "product_feedback": (
+        (
+            "turns",
+            (("session_id", "session_id"), ("turn", "turn")),
+            "CASCADE",
+            "NO ACTION",
+            "NONE",
+        ),
+    ),
+}
+_TABLE_CHECKS = {
+    "metadata": (),
+    "sessions": ("archivedin(0,1)", "dirtyin(0,1)"),
+    "turns": ("turnbetween1and10", "statusin('pending','completed','failed')"),
+    "product_feedback": (),
+}
 _TABLE_COLUMNS = {
     "metadata": (
         ("key", "TEXT", False, 1, None),
@@ -214,7 +252,9 @@ class DebugRepository:
             except BaseException:
                 connection.rollback()
                 raise
-            connection.execute("PRAGMA journal_mode=WAL")
+            result = connection.execute("PRAGMA journal_mode=WAL").fetchone()
+            if result is None or str(result[0]).lower() != "wal":
+                raise RepositoryStorageError("The repository storage is unavailable.")
 
     def schema_version(self) -> int:
         try:
@@ -231,9 +271,13 @@ class DebugRepository:
         try:
             with self._connect(mode="ro") as connection:
                 _validate_existing_v1(connection)
+                journal_mode = connection.execute("PRAGMA journal_mode").fetchone()
+                if journal_mode is None or str(journal_mode[0]).lower() != "wal":
+                    return False
                 result = connection.execute("PRAGMA quick_check").fetchone()
                 return result is not None and result[0] == "ok"
         except (
+            RepositoryBusyError,
             RepositoryVersionError,
             RepositoryStorageError,
             sqlite3.DatabaseError,
@@ -792,88 +836,194 @@ def _validate_existing_v1(connection: sqlite3.Connection) -> int:
 def _validate_schema_constraints(
     connection: sqlite3.Connection, tables: dict[str, str]
 ) -> None:
-    sessions_sql = _normalize_sql(tables["sessions"])
-    turns_sql = _normalize_sql(tables["turns"])
-    if (
-        "check(archivedin(0,1))" not in sessions_sql
-        or "check(dirtyin(0,1))" not in sessions_sql
-        or "check(turnbetween1and10)" not in turns_sql
-        or "check(statusin('pending','completed','failed'))" not in turns_sql
+    if any(
+        _EXPLICIT_MATCH_CLAUSE.search(sql)
+        or _EXPLICIT_DEFERRABLE_CLAUSE.search(sql)
+        or _EXPLICIT_COLLATE_CLAUSE.search(sql)
+        or _has_sql_keyword_sequence(sql, ("on", "conflict"))
+        for sql in tables.values()
     ):
         raise RepositoryVersionError("The database schema is incompatible.")
-    if any(_EXPLICIT_MATCH_CLAUSE.search(sql) for sql in tables.values()):
-        raise RepositoryVersionError("The database schema is incompatible.")
-    if not _has_unique_index(connection, "turns", ("session_id", "request_id")):
-        raise RepositoryVersionError("The database schema is incompatible.")
-    if not _has_foreign_key(
-        connection,
-        "sessions",
-        "sessions",
-        (("source_session_id", "session_id"),),
-        "NO ACTION",
-    ):
-        raise RepositoryVersionError("The database schema is incompatible.")
-    if not _has_foreign_key(
-        connection,
-        "turns",
-        "sessions",
-        (("session_id", "session_id"),),
-        "CASCADE",
-    ):
-        raise RepositoryVersionError("The database schema is incompatible.")
-    if not _has_foreign_key(
-        connection,
-        "product_feedback",
-        "turns",
-        (("session_id", "session_id"), ("turn", "turn")),
-        "CASCADE",
-    ):
-        raise RepositoryVersionError("The database schema is incompatible.")
+    for table, expected in _TABLE_CHECKS.items():
+        actual = tuple(sorted(_check_expressions(tables[table])))
+        if actual != tuple(sorted(expected)):
+            raise RepositoryVersionError("The database schema is incompatible.")
+    for table, expected in _TABLE_INDEXES.items():
+        if _index_signatures(connection, table) != tuple(sorted(expected)):
+            raise RepositoryVersionError("The database schema is incompatible.")
+    for table, expected in _TABLE_FOREIGN_KEYS.items():
+        if _foreign_key_signatures(connection, table) != tuple(sorted(expected)):
+            raise RepositoryVersionError("The database schema is incompatible.")
 
 
-def _has_unique_index(
-    connection: sqlite3.Connection, table: str, expected: tuple[str, ...]
-) -> bool:
+def _index_signatures(
+    connection: sqlite3.Connection, table: str
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
     rows = connection.execute(
         f"PRAGMA index_list({_quote_identifier(table)})"
     ).fetchall()
+    signatures: list[tuple[str, tuple[str, ...]]] = []
     for row in rows:
-        if not row["unique"] or row["origin"] != "u" or row["partial"] != 0:
-            continue
+        if not row["unique"] or row["partial"] != 0:
+            return ()
         index_rows = connection.execute(
-            f"PRAGMA index_info({_quote_identifier(str(row['name']))})"
+            f"PRAGMA index_xinfo({_quote_identifier(str(row['name']))})"
         ).fetchall()
-        columns = tuple(str(index_row["name"]) for index_row in index_rows)
-        if columns == expected:
-            return True
-    return False
+        key_rows = [index_row for index_row in index_rows if index_row["key"]]
+        key_rows.sort(key=lambda index_row: int(index_row["seqno"]))
+        if any(
+            index_row["name"] is None
+            or str(index_row["coll"]).upper() != "BINARY"
+            or int(index_row["desc"]) != 0
+            for index_row in key_rows
+        ):
+            return ()
+        signatures.append(
+            (
+                str(row["origin"]),
+                tuple(str(index_row["name"]) for index_row in key_rows),
+            )
+        )
+    return tuple(sorted(signatures))
 
 
-def _has_foreign_key(
-    connection: sqlite3.Connection,
-    table: str,
-    target_table: str,
-    expected: tuple[tuple[str, str], ...],
-    on_delete: str,
-) -> bool:
+def _foreign_key_signatures(
+    connection: sqlite3.Connection, table: str
+) -> tuple[tuple[str, tuple[tuple[str, str], ...], str, str, str], ...]:
     rows = connection.execute(
         f"PRAGMA foreign_key_list({_quote_identifier(table)})"
     ).fetchall()
     grouped: dict[int, list[sqlite3.Row]] = {}
     for row in rows:
         grouped.setdefault(int(row["id"]), []).append(row)
+    signatures: list[tuple[str, tuple[tuple[str, str], ...], str, str, str]] = []
     for group in grouped.values():
         group.sort(key=lambda row: int(row["seq"]))
         pairs = tuple((str(row["from"]), str(row["to"])) for row in group)
-        if (
-            str(group[0]["table"]) == target_table
-            and pairs == expected
-            and all(str(row["on_delete"]) == on_delete for row in group)
-            and all(str(row["on_update"]) == "NO ACTION" for row in group)
-            and all(str(row["match"]) == "NONE" for row in group)
-        ):
-            return True
+        first = group[0]
+        signatures.append(
+            (
+                str(first["table"]),
+                pairs,
+                str(first["on_delete"]),
+                str(first["on_update"]),
+                str(first["match"]),
+            )
+        )
+    return tuple(sorted(signatures))
+
+
+def _check_expressions(sql: str) -> tuple[str, ...]:
+    expressions: list[str] = []
+    index = 0
+    while index < len(sql):
+        quote_end = _skip_sql_quote(sql, index)
+        if quote_end is not None:
+            index = quote_end
+            continue
+        if not _sql_keyword_at(sql, index, "check"):
+            index += 1
+            continue
+        index += len("check")
+        while index < len(sql) and sql[index].isspace():
+            index += 1
+        if index >= len(sql) or sql[index] != "(":
+            raise RepositoryVersionError("The database schema is incompatible.")
+        expression, index = _parenthesized_sql(sql, index)
+        expressions.append(_normalize_sql(expression))
+    return tuple(expressions)
+
+
+def _parenthesized_sql(sql: str, index: int) -> tuple[str, int]:
+    start = index + 1
+    depth = 1
+    index = start
+    while index < len(sql):
+        quote_end = _skip_sql_quote(sql, index)
+        if quote_end is not None:
+            index = quote_end
+            continue
+        if sql[index] == "(":
+            depth += 1
+        elif sql[index] == ")":
+            depth -= 1
+            if depth == 0:
+                return sql[start:index], index + 1
+        index += 1
+    raise RepositoryVersionError("The database schema is incompatible.")
+
+
+def _skip_sql_quote(sql: str, index: int) -> int | None:
+    quote = sql[index]
+    if quote not in "'\"`[":
+        return None
+    end_quote = "]" if quote == "[" else quote
+    index += 1
+    while index < len(sql):
+        if sql[index] == end_quote:
+            if (
+                end_quote != "]"
+                and index + 1 < len(sql)
+                and sql[index + 1] == end_quote
+            ):
+                index += 2
+                continue
+            return index + 1
+        index += 1
+    raise RepositoryVersionError("The database schema is incompatible.")
+
+
+def _sql_keyword_at(sql: str, index: int, keyword: str) -> bool:
+    end = index + len(keyword)
+    return (
+        sql[index:end].lower() == keyword
+        and (index == 0 or not _is_sql_identifier_character(sql[index - 1]))
+        and (end == len(sql) or not _is_sql_identifier_character(sql[end]))
+    )
+
+
+def _is_sql_identifier_character(value: str) -> bool:
+    return value.isalnum() or value == "_"
+
+
+def _has_sql_keyword_sequence(sql: str, expected: tuple[str, ...]) -> bool:
+    expected_index = 0
+    for keyword in _sql_keywords(sql):
+        if keyword == expected[expected_index]:
+            expected_index += 1
+            if expected_index == len(expected):
+                return True
+        elif keyword == expected[0]:
+            expected_index = 1
+        else:
+            expected_index = 0
     return False
+
+
+def _sql_keywords(sql: str) -> Iterator[str]:
+    index = 0
+    while index < len(sql):
+        quote_end = _skip_sql_quote(sql, index)
+        if quote_end is not None:
+            index = quote_end
+            continue
+        if sql.startswith("--", index):
+            line_end = sql.find("\n", index + 2)
+            index = len(sql) if line_end == -1 else line_end + 1
+            continue
+        if sql.startswith("/*", index):
+            comment_end = sql.find("*/", index + 2)
+            if comment_end == -1:
+                raise RepositoryVersionError("The database schema is incompatible.")
+            index = comment_end + 2
+            continue
+        if not _is_sql_identifier_character(sql[index]):
+            index += 1
+            continue
+        start = index
+        while index < len(sql) and _is_sql_identifier_character(sql[index]):
+            index += 1
+        yield sql[start:index].lower()
 
 
 def _normalize_sql(value: str) -> str:

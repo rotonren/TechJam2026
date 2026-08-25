@@ -236,6 +236,31 @@ def _replace_sessions_table(connection: sqlite3.Connection, foreign_key: str) ->
     )
 
 
+def _replace_turns_table(
+    connection: sqlite3.Connection,
+    *,
+    request_id_declaration: str = "request_id TEXT NOT NULL",
+    unique_constraint: str = "UNIQUE (session_id,request_id)",
+    extra_constraint: str = "",
+) -> None:
+    connection.execute("PRAGMA foreign_keys=OFF")
+    connection.execute("DROP TABLE turns")
+    connection.execute(
+        f"""
+        CREATE TABLE turns (
+            session_id TEXT NOT NULL, turn INTEGER NOT NULL CHECK (turn BETWEEN 1 AND 10),
+            {request_id_declaration}, status TEXT NOT NULL CHECK (status IN ('pending','completed','failed')),
+            user_message TEXT NOT NULL, response_json TEXT, products_json TEXT,
+            state_json TEXT, trace_json TEXT, error_json TEXT,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+            PRIMARY KEY (session_id,turn), {unique_constraint},
+            FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+            {extra_constraint}
+        )
+        """
+    )
+
+
 def test_initialize_rejects_sessions_without_required_default(tmp_path: Path) -> None:
     path = tmp_path / "missing-default.sqlite3"
     repository = _repository(path)
@@ -355,6 +380,146 @@ def test_initialize_rejects_explicit_foreign_key_match_without_mutation(
         _repository(path).initialize()
 
     assert _schema_objects(path) == before
+    assert _repository(path).health() is False
+
+
+def test_initialize_rejects_extra_unique_turn_constraint(tmp_path: Path) -> None:
+    path = tmp_path / "extra-unique.sqlite3"
+    repository = _repository(path)
+    repository.initialize()
+    connection = _raw_connection(path)
+    try:
+        _replace_turns_table(connection, extra_constraint=", UNIQUE (user_message)")
+        connection.commit()
+    finally:
+        connection.close()
+
+    with pytest.raises(_repository_module().RepositoryVersionError):
+        _repository(path).initialize()
+    assert _repository(path).health() is False
+
+
+def test_initialize_rejects_turn_unique_conflict_resolution(tmp_path: Path) -> None:
+    path = tmp_path / "unique-conflict.sqlite3"
+    repository = _repository(path)
+    repository.initialize()
+    connection = _raw_connection(path)
+    try:
+        _replace_turns_table(
+            connection,
+            unique_constraint="UNIQUE (session_id,request_id) ON CONFLICT IGNORE",
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    with pytest.raises(_repository_module().RepositoryVersionError):
+        _repository(path).initialize()
+    assert _repository(path).health() is False
+
+
+def test_initialize_rejects_commented_turn_unique_conflict_resolution(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "commented-unique-conflict.sqlite3"
+    repository = _repository(path)
+    repository.initialize()
+    connection = _raw_connection(path)
+    try:
+        _replace_turns_table(
+            connection,
+            unique_constraint=(
+                "UNIQUE (session_id,request_id) ON /* keep existing rows */ "
+                "CONFLICT IGNORE"
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    with pytest.raises(_repository_module().RepositoryVersionError):
+        _repository(path).initialize()
+    assert _repository(path).health() is False
+
+
+def test_initialize_rejects_extra_turn_foreign_key(tmp_path: Path) -> None:
+    path = tmp_path / "extra-fk.sqlite3"
+    repository = _repository(path)
+    repository.initialize()
+    connection = _raw_connection(path)
+    try:
+        _replace_turns_table(
+            connection,
+            extra_constraint=(
+                ", FOREIGN KEY (request_id) REFERENCES sessions(session_id)"
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    with pytest.raises(_repository_module().RepositoryVersionError):
+        _repository(path).initialize()
+    assert _repository(path).health() is False
+
+
+def test_initialize_rejects_request_id_collation(tmp_path: Path) -> None:
+    path = tmp_path / "nocase.sqlite3"
+    repository = _repository(path)
+    repository.initialize()
+    connection = _raw_connection(path)
+    try:
+        _replace_turns_table(
+            connection,
+            request_id_declaration="request_id TEXT NOT NULL COLLATE NOCASE",
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    with pytest.raises(_repository_module().RepositoryVersionError):
+        _repository(path).initialize()
+    assert _repository(path).health() is False
+
+
+def test_initialize_rejects_extra_turn_check(tmp_path: Path) -> None:
+    path = tmp_path / "extra-check.sqlite3"
+    repository = _repository(path)
+    repository.initialize()
+    connection = _raw_connection(path)
+    try:
+        _replace_turns_table(
+            connection,
+            extra_constraint=", CHECK (length(user_message) > 0)",
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    with pytest.raises(_repository_module().RepositoryVersionError):
+        _repository(path).initialize()
+    assert _repository(path).health() is False
+
+
+def test_initialize_rejects_deferrable_foreign_key(tmp_path: Path) -> None:
+    path = tmp_path / "deferrable.sqlite3"
+    repository = _repository(path)
+    repository.initialize()
+    connection = _raw_connection(path)
+    try:
+        _replace_sessions_table(
+            connection,
+            """
+            FOREIGN KEY (source_session_id) REFERENCES sessions(session_id)
+            DEFERRABLE INITIALLY DEFERRED
+            """,
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    with pytest.raises(_repository_module().RepositoryVersionError):
+        _repository(path).initialize()
     assert _repository(path).health() is False
 
 
@@ -494,6 +659,20 @@ class _LockedImmediateConnection(sqlite3.Connection):
         return super().execute(sql, parameters)
 
 
+class _BusyHealthConnection(sqlite3.Connection):
+    def execute(self, sql: str, parameters=()):
+        if sql.strip().upper() == "PRAGMA QUICK_CHECK":
+            raise sqlite3.OperationalError("database is locked")
+        return super().execute(sql, parameters)
+
+
+class _WalRefusingConnection(sqlite3.Connection):
+    def execute(self, sql: str, parameters=()):
+        if sql.strip().upper() == "PRAGMA JOURNAL_MODE=WAL":
+            return super().execute("PRAGMA journal_mode=DELETE")
+        return super().execute(sql, parameters)
+
+
 def _blocking_repository(path: Path, gate: _TransactionGate):
     def factory(*args, **kwargs) -> _BlockingImmediateConnection:
         connection = sqlite3.connect(
@@ -616,6 +795,51 @@ def test_locked_storage_is_mapped_to_a_stable_busy_error(tmp_path: Path) -> None
         assert type(error).__name__ == "RepositoryBusyError"
     else:
         pytest.fail("A locked SQLite operation escaped the repository boundary.")
+
+
+def test_health_returns_false_for_a_busy_probe(tmp_path: Path) -> None:
+    path = tmp_path / "debug.sqlite3"
+    repository = _repository(path)
+    repository.initialize()
+
+    def factory(*args, **kwargs) -> _BusyHealthConnection:
+        return sqlite3.connect(*args, factory=_BusyHealthConnection, **kwargs)
+
+    probe = _repository_module().DebugRepository(path, connection_factory=factory)
+    try:
+        healthy = probe.health()
+    except Exception as error:  # noqa: BLE001 - health must absorb expected storage state.
+        pytest.fail(f"health leaked {type(error).__name__}")
+    assert healthy is False
+
+
+def test_initialize_fails_when_wal_is_not_enabled(tmp_path: Path) -> None:
+    path = tmp_path / "debug.sqlite3"
+
+    def factory(*args, **kwargs) -> _WalRefusingConnection:
+        return sqlite3.connect(*args, factory=_WalRefusingConnection, **kwargs)
+
+    repository = _repository_module().DebugRepository(path, connection_factory=factory)
+
+    with pytest.raises(_repository_module().RepositoryStorageError):
+        repository.initialize()
+
+
+def test_health_rejects_database_switched_back_to_delete_journal(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "debug.sqlite3"
+    repository = _repository(path)
+    repository.initialize()
+    connection = _raw_connection(path)
+    try:
+        assert (
+            connection.execute("PRAGMA journal_mode=DELETE").fetchone()[0] == "delete"
+        )
+    finally:
+        connection.close()
+
+    assert repository.health() is False
 
 
 def test_reserve_turn_is_idempotent_for_the_same_request(tmp_path: Path) -> None:
