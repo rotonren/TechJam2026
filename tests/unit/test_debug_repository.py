@@ -1241,6 +1241,24 @@ def test_feedback_reasons_are_fixed_and_notes_may_be_empty(tmp_path: Path) -> No
         repository.upsert_feedback("session-1", 1, "A1", 42, "not valid")
 
 
+def test_clear_feedback_requires_a_completed_turn_product(tmp_path: Path) -> None:
+    repository = _repository(tmp_path / "debug.sqlite3")
+    repository.initialize()
+    _create_session(repository)
+    pending = repository.reserve_turn("session-1", "request-1", "show shoes")
+    errors = _repository_module()
+
+    with pytest.raises(errors.ConflictError):
+        repository.clear_feedback("session-1", pending.turn, "A1")
+
+    repository.complete_turn("session-1", pending.turn, _observation())
+    repository.upsert_feedback("session-1", 1, "A1", "other", "keep me")
+    with pytest.raises(errors.ValidationError):
+        repository.clear_feedback("session-1", 1, "MISSING")
+
+    assert repository.list_feedback("session-1", 1)[0].note == "keep me"
+
+
 def _historical_import_turn(
     turn: int,
     request_id: str,

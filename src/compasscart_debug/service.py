@@ -114,12 +114,16 @@ _IDENTIFIER_EXPORT_KEYS = frozenset(
         "source_session_id",
     }
 )
-_ABSOLUTE_PATH = re.compile(r"(?:[A-Za-z]:[\\/]|\\\\|/(?:[^/\s]+/)+)")
+_ABSOLUTE_PATH = re.compile(
+    r"(?:[A-Za-z]:[\\/]|\\\\|(?<![A-Za-z0-9])/(?!/)(?:[^/\s]+(?:/[^/\s]+)*))"
+)
 _HOSTNAME = re.compile(
-    r"\b(?:localhost|(?:\d{1,3}\.){3}\d{1,3}|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+){2,})\b"
+    r"\b(?:localhost|(?i:desktop-[a-z0-9-]+)|[A-Za-z0-9-]+\.local|"
+    r"(?:\d{1,3}\.){3}\d{1,3}|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+){2,})\b"
 )
 _EXCEPTION_REPR = re.compile(
-    r"(?:Traceback \(most recent call last\)|\b[A-Za-z_][A-Za-z0-9_]*(?:Error|Exception)\()"
+    r"(?:Traceback \(most recent call last\)|"
+    r"\b[A-Za-z_][A-Za-z0-9_]*(?:Error|Exception)(?:\(|:))"
 )
 _UNSET = object()
 _T = TypeVar("_T")
@@ -359,7 +363,12 @@ class DebugService:
         for turn in completed_prefix[:selected_count]:
             request_id = self._new_request_id(excluding=source_request_ids)
             source_request_ids.add(request_id)
-            self.send_message(clone_id, request_id, turn.user_message)
+            try:
+                self.send_message(clone_id, request_id, turn.user_message)
+            except DebugServiceError as error:
+                partial = self.get_session(clone_id)
+                partial["clone_error"] = error.to_payload()["error"]
+                return partial
         return self.get_session(clone_id)
 
     def send_message(
@@ -1023,7 +1032,7 @@ def _safe_export_value(value: Any, *, field: str | None = None) -> Any:
 def _is_sensitive_export_key(value: str) -> bool:
     normalized = value.lower().replace("-", "_")
     return normalized in _SENSITIVE_EXPORT_KEYS or normalized.endswith(
-        ("_path", "_token", "_secret", "_password", "_hostname")
+        ("_api_key", "_path", "_token", "_secret", "_password", "_hostname")
     )
 
 

@@ -755,7 +755,15 @@ class DebugRepository:
         with self._connect() as connection:
             self._begin(connection)
             try:
-                self._require_turn(connection, session_id, turn)
+                row = self._require_turn(connection, session_id, turn)
+                if row["status"] != "completed":
+                    raise ConflictError()
+                if parent_asin is not None and parent_asin not in _product_ranks(
+                    _decode_json(row["products_json"])
+                ):
+                    raise ValidationError(
+                        {"parent_asin": "Product is not present in this turn."}
+                    )
                 if parent_asin is None:
                     connection.execute(
                         "DELETE FROM product_feedback WHERE session_id = ? AND turn = ?",

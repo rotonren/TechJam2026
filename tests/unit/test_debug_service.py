@@ -482,6 +482,25 @@ def test_feedback_upserts_clears_and_is_returned_for_completed_duplicates(
     assert service.get_session(session_id)["turns"][0]["feedback"] == []
 
 
+def test_feedback_clear_rejects_pending_turns_and_absent_products(
+    tmp_path: Path,
+) -> None:
+    service, repository, _ = _service(tmp_path)
+    session_id = _create(service)
+    pending = repository.reserve_turn(session_id, "r1", "blue shoes")
+
+    with pytest.raises(ConflictError):
+        service.set_feedback(session_id, 1, "SHOE1", False, None, "")
+
+    repository.complete_turn(
+        session_id,
+        pending.turn,
+        _stored_observation(session_id, "blue shoes", pending.turn),
+    )
+    with pytest.raises(ValidationError):
+        service.set_feedback(session_id, 1, "MISSING", False, None, "")
+
+
 def test_archive_scopes_block_mutation_until_unarchived(tmp_path: Path) -> None:
     service, _, _ = _service(
         tmp_path,
@@ -527,6 +546,12 @@ def test_export_has_exact_envelope_safe_json_and_no_local_secrets(
             "access_token": "secret-token-value",
             "database_path": r"C:\private\debug.sqlite3",
             "hostname": "demo.internal.example",
+            "openai_api_key": "openai-secret-value",
+            "machine_name": "DESKTOP-DEMO",
+            "local_peer": "devbox.local",
+            "workdir": "/secret",
+            "failure_detail": "ValueError: raw failure",
+            "safe_label": "blue-shoes",
         },
     )["session"]["session_id"]
     service.send_message(session_id, "r1", "blue shoes")
@@ -548,6 +573,13 @@ def test_export_has_exact_envelope_safe_json_and_no_local_secrets(
     assert "secret-token-value" not in encoded
     assert r"C:\\private" not in encoded
     assert "demo.internal.example" not in encoded
+    assert "openai-secret-value" not in encoded
+    assert "DESKTOP-DEMO" not in encoded
+    assert "devbox.local" not in encoded
+    assert '"/secret"' not in encoded
+    assert "ValueError: raw failure" not in encoded
+    assert "blue-shoes" in encoded
+    assert exported["turns"][0]["user_message"] == "blue shoes"
     assert exported["turns"][0]["feedback"][0]["reason"] == "other"
 
 
@@ -712,12 +744,15 @@ def test_clone_failure_leaves_completed_prefix_and_failed_turn_viewable(
     service.send_message(source, "source-r2", "second")
     worker.fail_on_message = "second"
 
-    with pytest.raises(DebugServiceError):
-        service.clone_session(source)
+    partial = service.clone_session(source)
 
-    partial = service.get_session("partial-clone")
     assert partial["session"]["source_session_id"] == source
     assert [turn["status"] for turn in partial["turns"]] == ["completed", "failed"]
+    assert partial["clone_error"] == {
+        "code": "agent_error",
+        "message": "The Agent could not complete this turn.",
+        "retryable": True,
+    }
     assert [turn.status for turn in repository.list_turns(source)] == [
         "completed",
         "completed",
