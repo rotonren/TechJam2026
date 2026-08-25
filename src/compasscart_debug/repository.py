@@ -33,45 +33,45 @@ _FEEDBACK_REASONS = frozenset(
 _REQUIRED_TABLES = {"metadata", "sessions", "turns", "product_feedback"}
 _TABLE_COLUMNS = {
     "metadata": (
-        ("key", "TEXT", False, 1),
-        ("value", "TEXT", True, 0),
+        ("key", "TEXT", False, 1, None),
+        ("value", "TEXT", True, 0, None),
     ),
     "sessions": (
-        ("session_id", "TEXT", False, 1),
-        ("name", "TEXT", True, 0),
-        ("profile_json", "TEXT", True, 0),
-        ("agent_version", "TEXT", True, 0),
-        ("catalog_sha256", "TEXT", True, 0),
-        ("config_sha256", "TEXT", True, 0),
-        ("assets_sha256", "TEXT", False, 0),
-        ("source_session_id", "TEXT", False, 0),
-        ("archived", "INTEGER", True, 0),
-        ("dirty", "INTEGER", True, 0),
-        ("read_only_reason", "TEXT", False, 0),
-        ("created_at", "TEXT", True, 0),
-        ("updated_at", "TEXT", True, 0),
+        ("session_id", "TEXT", False, 1, None),
+        ("name", "TEXT", True, 0, None),
+        ("profile_json", "TEXT", True, 0, None),
+        ("agent_version", "TEXT", True, 0, None),
+        ("catalog_sha256", "TEXT", True, 0, None),
+        ("config_sha256", "TEXT", True, 0, None),
+        ("assets_sha256", "TEXT", False, 0, None),
+        ("source_session_id", "TEXT", False, 0, None),
+        ("archived", "INTEGER", True, 0, "0"),
+        ("dirty", "INTEGER", True, 0, "0"),
+        ("read_only_reason", "TEXT", False, 0, None),
+        ("created_at", "TEXT", True, 0, None),
+        ("updated_at", "TEXT", True, 0, None),
     ),
     "turns": (
-        ("session_id", "TEXT", True, 1),
-        ("turn", "INTEGER", True, 2),
-        ("request_id", "TEXT", True, 0),
-        ("status", "TEXT", True, 0),
-        ("user_message", "TEXT", True, 0),
-        ("response_json", "TEXT", False, 0),
-        ("products_json", "TEXT", False, 0),
-        ("state_json", "TEXT", False, 0),
-        ("trace_json", "TEXT", False, 0),
-        ("error_json", "TEXT", False, 0),
-        ("created_at", "TEXT", True, 0),
-        ("updated_at", "TEXT", True, 0),
+        ("session_id", "TEXT", True, 1, None),
+        ("turn", "INTEGER", True, 2, None),
+        ("request_id", "TEXT", True, 0, None),
+        ("status", "TEXT", True, 0, None),
+        ("user_message", "TEXT", True, 0, None),
+        ("response_json", "TEXT", False, 0, None),
+        ("products_json", "TEXT", False, 0, None),
+        ("state_json", "TEXT", False, 0, None),
+        ("trace_json", "TEXT", False, 0, None),
+        ("error_json", "TEXT", False, 0, None),
+        ("created_at", "TEXT", True, 0, None),
+        ("updated_at", "TEXT", True, 0, None),
     ),
     "product_feedback": (
-        ("session_id", "TEXT", True, 1),
-        ("turn", "INTEGER", True, 2),
-        ("parent_asin", "TEXT", True, 3),
-        ("reason", "TEXT", True, 0),
-        ("note", "TEXT", True, 0),
-        ("updated_at", "TEXT", True, 0),
+        ("session_id", "TEXT", True, 1, None),
+        ("turn", "INTEGER", True, 2, None),
+        ("parent_asin", "TEXT", True, 3, None),
+        ("reason", "TEXT", True, 0, None),
+        ("note", "TEXT", True, 0, None),
+        ("updated_at", "TEXT", True, 0, None),
     ),
 }
 _SCHEMA_STATEMENTS = (
@@ -199,7 +199,7 @@ class DebugRepository:
         with self._connect(mode="rwc") as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
-                if not _user_tables(connection):
+                if not _user_objects(connection):
                     for statement in _SCHEMA_STATEMENTS:
                         connection.execute(statement)
                     connection.execute(
@@ -744,17 +744,23 @@ def _sqlite_uri(path: Path, mode: str) -> str:
     return f"{path.resolve().as_uri()}?mode={mode}"
 
 
-def _user_tables(connection: sqlite3.Connection) -> dict[str, str]:
+def _user_objects(connection: sqlite3.Connection) -> dict[str, tuple[str, str]]:
     rows = connection.execute(
-        "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+        """
+        SELECT type, name, sql FROM sqlite_master
+        WHERE name NOT LIKE 'sqlite_%'
+        """
     ).fetchall()
-    return {str(row["name"]): str(row["sql"] or "") for row in rows}
+    return {str(row["name"]): (str(row["type"]), str(row["sql"] or "")) for row in rows}
 
 
 def _validate_existing_v1(connection: sqlite3.Connection) -> int:
-    tables = _user_tables(connection)
-    if set(tables) != _REQUIRED_TABLES:
+    objects = _user_objects(connection)
+    if set(objects) != _REQUIRED_TABLES or any(
+        object_type != "table" for object_type, _ in objects.values()
+    ):
         raise RepositoryVersionError("The database schema is incompatible.")
+    tables = {name: sql for name, (_, sql) in objects.items()}
     for table, expected_columns in _TABLE_COLUMNS.items():
         rows = connection.execute(
             f"PRAGMA table_info({_quote_identifier(table)})"
@@ -765,6 +771,7 @@ def _validate_existing_v1(connection: sqlite3.Connection) -> int:
                 str(row["type"]).upper(),
                 bool(row["notnull"]),
                 row["pk"],
+                _normalize_default(row["dflt_value"]),
             )
             for row in rows
         )
@@ -827,7 +834,7 @@ def _has_unique_index(
         f"PRAGMA index_list({_quote_identifier(table)})"
     ).fetchall()
     for row in rows:
-        if not row["unique"]:
+        if not row["unique"] or row["origin"] != "u" or row["partial"] != 0:
             continue
         index_rows = connection.execute(
             f"PRAGMA index_info({_quote_identifier(str(row['name']))})"
@@ -852,11 +859,14 @@ def _has_foreign_key(
     for row in rows:
         grouped.setdefault(int(row["id"]), []).append(row)
     for group in grouped.values():
+        group.sort(key=lambda row: int(row["seq"]))
         pairs = tuple((str(row["from"]), str(row["to"])) for row in group)
         if (
             str(group[0]["table"]) == target_table
             and pairs == expected
             and all(str(row["on_delete"]) == on_delete for row in group)
+            and all(str(row["on_update"]) == "NO ACTION" for row in group)
+            and all(str(row["match"]) == "NONE" for row in group)
         ):
             return True
     return False
@@ -864,6 +874,10 @@ def _has_foreign_key(
 
 def _normalize_sql(value: str) -> str:
     return "".join(value.lower().split())
+
+
+def _normalize_default(value: object) -> str | None:
+    return None if value is None else str(value).strip().lower()
 
 
 def _quote_identifier(value: str) -> str:

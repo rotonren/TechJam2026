@@ -106,6 +106,23 @@ def _schema_names(path: Path) -> list[str]:
         connection.close()
 
 
+def _schema_objects(path: Path) -> list[tuple[str, str]]:
+    connection = _raw_connection(path)
+    try:
+        return [
+            (str(row[0]), str(row[1]))
+            for row in connection.execute(
+                """
+                SELECT type, name FROM sqlite_master
+                WHERE name NOT LIKE 'sqlite_%'
+                ORDER BY type, name
+                """
+            )
+        ]
+    finally:
+        connection.close()
+
+
 def test_initialize_rejects_newer_delete_journal_database_without_mutation(
     tmp_path: Path,
 ) -> None:
@@ -135,6 +152,31 @@ def test_initialize_rejects_newer_delete_journal_database_without_mutation(
     finally:
         connection.close()
     assert _schema_names(path) == before
+
+
+def test_initialize_rejects_view_only_database_without_mutation(tmp_path: Path) -> None:
+    path = tmp_path / "view.sqlite3"
+    connection = _raw_connection(path)
+    try:
+        assert (
+            connection.execute("PRAGMA journal_mode=DELETE").fetchone()[0] == "delete"
+        )
+        connection.execute("CREATE VIEW foreign_view AS SELECT 1 AS value")
+        connection.commit()
+    finally:
+        connection.close()
+    before = _schema_objects(path)
+
+    with pytest.raises(_repository_module().RepositoryVersionError):
+        _repository(path).initialize()
+
+    connection = _raw_connection(path)
+    try:
+        assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+    finally:
+        connection.close()
+    assert _schema_objects(path) == before
+    assert _repository(path).health() is False
 
 
 def test_initialize_rejects_nonempty_foreign_database_without_mutation(
@@ -167,6 +209,115 @@ def test_initialize_and_health_reject_malformed_v1_schema(
         connection.execute("PRAGMA foreign_keys=OFF")
         connection.execute(f"DROP TABLE {table}")
         connection.execute(f"CREATE TABLE {table} (broken TEXT)")
+        connection.commit()
+    finally:
+        connection.close()
+
+    with pytest.raises(_repository_module().RepositoryVersionError):
+        _repository(path).initialize()
+    assert _repository(path).health() is False
+
+
+def _replace_sessions_table(connection: sqlite3.Connection, foreign_key: str) -> None:
+    connection.execute("PRAGMA foreign_keys=OFF")
+    connection.execute("DROP TABLE sessions")
+    connection.execute(
+        f"""
+        CREATE TABLE sessions (
+            session_id TEXT PRIMARY KEY, name TEXT NOT NULL, profile_json TEXT NOT NULL,
+            agent_version TEXT NOT NULL, catalog_sha256 TEXT NOT NULL,
+            config_sha256 TEXT NOT NULL, assets_sha256 TEXT, source_session_id TEXT,
+            archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0,1)),
+            dirty INTEGER NOT NULL DEFAULT 0 CHECK (dirty IN (0,1)),
+            read_only_reason TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+            {foreign_key}
+        )
+        """
+    )
+
+
+def test_initialize_rejects_sessions_without_required_default(tmp_path: Path) -> None:
+    path = tmp_path / "missing-default.sqlite3"
+    repository = _repository(path)
+    repository.initialize()
+    connection = _raw_connection(path)
+    try:
+        _replace_sessions_table(
+            connection,
+            "FOREIGN KEY (source_session_id) REFERENCES sessions(session_id)",
+        )
+        connection.execute("DROP TABLE sessions")
+        connection.execute(
+            """
+            CREATE TABLE sessions (
+                session_id TEXT PRIMARY KEY, name TEXT NOT NULL, profile_json TEXT NOT NULL,
+                agent_version TEXT NOT NULL, catalog_sha256 TEXT NOT NULL,
+                config_sha256 TEXT NOT NULL, assets_sha256 TEXT, source_session_id TEXT,
+                archived INTEGER NOT NULL CHECK (archived IN (0,1)),
+                dirty INTEGER NOT NULL DEFAULT 0 CHECK (dirty IN (0,1)),
+                read_only_reason TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                FOREIGN KEY (source_session_id) REFERENCES sessions(session_id)
+            )
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    with pytest.raises(_repository_module().RepositoryVersionError):
+        _repository(path).initialize()
+    assert _repository(path).health() is False
+
+
+def test_initialize_rejects_partial_unique_turn_index(tmp_path: Path) -> None:
+    path = tmp_path / "partial-index.sqlite3"
+    repository = _repository(path)
+    repository.initialize()
+    connection = _raw_connection(path)
+    try:
+        connection.execute("PRAGMA foreign_keys=OFF")
+        connection.execute("DROP TABLE turns")
+        connection.execute(
+            """
+            CREATE TABLE turns (
+                session_id TEXT NOT NULL, turn INTEGER NOT NULL CHECK (turn BETWEEN 1 AND 10),
+                request_id TEXT NOT NULL, status TEXT NOT NULL CHECK (status IN ('pending','completed','failed')),
+                user_message TEXT NOT NULL, response_json TEXT, products_json TEXT,
+                state_json TEXT, trace_json TEXT, error_json TEXT,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                PRIMARY KEY (session_id,turn),
+                FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE UNIQUE INDEX turns_session_request_partial
+            ON turns(session_id, request_id) WHERE request_id IS NOT NULL
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    with pytest.raises(_repository_module().RepositoryVersionError):
+        _repository(path).initialize()
+    assert _repository(path).health() is False
+
+
+def test_initialize_rejects_foreign_key_with_on_update_cascade(tmp_path: Path) -> None:
+    path = tmp_path / "on-update.sqlite3"
+    repository = _repository(path)
+    repository.initialize()
+    connection = _raw_connection(path)
+    try:
+        _replace_sessions_table(
+            connection,
+            """
+            FOREIGN KEY (source_session_id) REFERENCES sessions(session_id)
+            ON UPDATE CASCADE
+            """,
+        )
         connection.commit()
     finally:
         connection.close()
@@ -719,20 +870,25 @@ def test_failure_of_completed_turn_preserves_immutable_observation(
 def test_concurrent_different_requests_leave_one_next_pending_turn(
     tmp_path: Path,
 ) -> None:
-    repository = _repository(tmp_path / "debug.sqlite3")
+    gate = _TransactionGate()
+    repository = _blocking_repository(tmp_path / "debug.sqlite3", gate)
     repository.initialize()
     _create_session(repository)
-    barrier = threading.Barrier(2)
+    gate.armed = True
 
     def reserve(request_id: str):
-        barrier.wait()
         try:
             return repository.reserve_turn("session-1", request_id, request_id)
         except Exception as error:  # noqa: BLE001 - assert the concrete service error below.
             return error
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        results = list(executor.map(reserve, ["request-1", "request-2"]))
+        first = executor.submit(reserve, "request-1")
+        assert gate.first_entered.wait(2)
+        second = executor.submit(reserve, "request-2")
+        assert gate.second_attempted.wait(2)
+        gate.release.set()
+        results = [first.result(timeout=5), second.result(timeout=5)]
 
     records = [item for item in results if hasattr(item, "turn")]
     errors = [item for item in results if isinstance(item, Exception)]
@@ -747,17 +903,22 @@ def test_concurrent_different_requests_leave_one_next_pending_turn(
 def test_concurrent_identical_reservations_return_one_pending_turn(
     tmp_path: Path,
 ) -> None:
-    repository = _repository(tmp_path / "debug.sqlite3")
+    gate = _TransactionGate()
+    repository = _blocking_repository(tmp_path / "debug.sqlite3", gate)
     repository.initialize()
     _create_session(repository)
-    barrier = threading.Barrier(2)
+    gate.armed = True
 
     def reserve() -> object:
-        barrier.wait()
         return repository.reserve_turn("session-1", "request-1", "show shoes")
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        results = list(executor.map(lambda _: reserve(), range(2)))
+        first = executor.submit(reserve)
+        assert gate.first_entered.wait(2)
+        second = executor.submit(reserve)
+        assert gate.second_attempted.wait(2)
+        gate.release.set()
+        results = [first.result(timeout=5), second.result(timeout=5)]
 
     assert results[0] == results[1]
     assert results[0].turn == 1
