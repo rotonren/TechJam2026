@@ -802,3 +802,30 @@ def test_authenticated_api_rejects_traversal_invalid_segments_and_unknown_routes
         app.close()
     assert status == 404
     assert payload["error"]["code"] == "not_found"
+
+
+def test_debug_shell_has_semantic_three_pane_markup_and_module_entrypoint() -> None:
+    static_root = Path(__file__).parents[2] / "src" / "compasscart_debug" / "static"
+    index = (static_root / "index.html").read_text(encoding="utf-8")
+
+    assert '<main id="debug-workspace"' in index
+    assert '<section id="conversation-pane"' in index
+    assert '<section id="recommendations-pane"' in index
+    assert '<aside id="inspector-pane"' in index
+    assert '<script type="module" src="/static/js/app.js"></script>' in index
+    assert 'id="login-view"' in index
+    assert 'id="access-token"' in index
+    assert 'id="new-session-dialog"' in index
+    assert 'id="aria-status"' in index
+    assert "当前 Agent 未记录最终分数与召回源贡献" in index
+    assert "<script>" not in index
+    assert " style=" not in index
+
+    for relative in (
+        "styles.css",
+        "js/api.js",
+        "js/dom.js",
+        "js/store.js",
+        "js/app.js",
+    ):
+        assert (static_root / relative).is_file(), relative

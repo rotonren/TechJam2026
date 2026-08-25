@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>CompassCart Debug</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <div id="login-view" class="login-view">
+      <form id="login-form" class="login-form" novalidate>
+        <div class="wordmark" aria-label="CompassCart Debug">CompassCart Debug</div>
+        <h1>调试控制台</h1>
+        <p class="login-copy">输入访问口令以连接当前 Agent 服务。</p>
+        <label for="access-token">访问口令</label>
+        <input id="access-token" name="token" type="password" autocomplete="current-password" required>
+        <p id="login-error" class="form-error" role="alert" hidden></p>
+        <button class="button button-primary button-wide" type="submit">连接服务</button>
+      </form>
+    </div>
+
+    <div id="app-view" class="app-view" hidden>
+      <header id="app-header" class="app-header">
+        <div class="brand-block">
+          <div class="wordmark">CompassCart Debug</div>
+          <div class="agent-health" id="agent-health"><span class="status-dot" aria-hidden="true"></span><span id="agent-status">未连接</span></div>
+        </div>
+        <div class="session-context">
+          <span class="context-label">当前会话</span>
+          <strong id="current-session-name">未选择</strong>
+          <span id="turn-counter" class="turn-counter">0 / 10 turns</span>
+        </div>
+        <div class="header-actions" aria-label="会话命令">
+          <button class="button button-secondary" type="button" data-action="new-session">新建</button>
+          <button class="button button-secondary" type="button" data-action="import">导入</button>
+          <button class="button button-secondary" type="button" data-action="export" disabled>导出</button>
+          <button class="button button-secondary" type="button" data-action="archive" disabled>归档</button>
+          <button class="button button-secondary" type="button" data-action="clone" disabled>克隆</button>
+          <button class="button button-quiet" type="button" data-action="logout">退出</button>
+        </div>
+      </header>
+
+      <div class="mobile-tabs" role="tablist" aria-label="工作区视图">
+        <button class="tab-button is-active" type="button" role="tab" aria-selected="true" data-tab="conversation">对话</button>
+        <button class="tab-button" type="button" role="tab" aria-selected="false" data-tab="recommendations">推荐</button>
+        <button class="tab-button" type="button" role="tab" aria-selected="false" data-tab="inspector">诊断</button>
+      </div>
+
+      <main id="debug-workspace" class="debug-workspace">
+        <section id="conversation-pane" class="workspace-pane conversation-pane" aria-labelledby="conversation-title">
+          <header class="pane-header">
+            <div>
+              <p class="eyebrow">SESSION LOG</p>
+              <h2 id="conversation-title">对话</h2>
+            </div>
+            <button class="icon-button inspector-toggle" type="button" data-action="toggle-inspector" aria-label="切换诊断栏" title="切换诊断栏">◫</button>
+          </header>
+          <div class="session-picker">
+            <label for="session-select">会话</label>
+            <select id="session-select" aria-label="选择会话"></select>
+          </div>
+          <div id="session-list" class="session-list" aria-label="会话列表"></div>
+          <div id="conversation-history" class="conversation-history" role="log" aria-live="polite" aria-relevant="additions text"></div>
+          <div id="empty-conversation" class="empty-state" hidden>
+            <strong>尚未开始对话</strong>
+            <span>新建会话后，在下方发送第一条消息。</span>
+          </div>
+          <form id="message-composer" class="message-composer">
+            <label class="sr-only" for="message-input">发送消息</label>
+            <textarea id="message-input" name="message" rows="3" maxlength="10000" placeholder="输入购物需求" aria-describedby="composer-hint"></textarea>
+            <div class="composer-footer">
+              <span id="composer-hint" class="composer-hint">Enter 发送 · Shift+Enter 换行</span>
+              <button id="send-button" class="button button-primary" type="submit">发送</button>
+            </div>
+          </form>
+          <div id="turn-limit-actions" class="turn-limit-actions" hidden>
+            <span>已达到 10 轮上限。</span>
+            <button class="button button-secondary" type="button" data-action="new-session">新建会话</button>
+            <button class="button button-secondary" type="button" data-action="clone">克隆会话</button>
+          </div>
+        </section>
+
+        <section id="recommendations-pane" class="workspace-pane recommendations-pane" aria-labelledby="recommendations-title">
+          <header class="pane-header pane-header-with-meta">
+            <div>
+              <p class="eyebrow">RESPONSE ORDER</p>
+              <h2 id="recommendations-title">推荐结果</h2>
+            </div>
+            <span id="recommendation-count" class="count-badge">0</span>
+          </header>
+          <div id="recommendation-context" class="recommendation-context"></div>
+          <div id="recommendations-list" class="recommendations-list" aria-live="polite"></div>
+          <div id="empty-recommendations" class="empty-state" hidden>
+            <strong>选择一轮查看推荐</strong>
+            <span>商品顺序来自 Agent 的原始响应。</span>
+          </div>
+        </section>
+
+        <aside id="inspector-pane" class="workspace-pane inspector-pane" aria-labelledby="inspector-title">
+          <header class="pane-header">
+            <div>
+              <p class="eyebrow">AGENT OBSERVATION</p>
+              <h2 id="inspector-title">诊断</h2>
+            </div>
+            <button class="icon-button inspector-close" type="button" data-action="toggle-inspector" aria-label="关闭诊断栏" title="关闭诊断栏">×</button>
+          </header>
+          <div id="inspector-content" class="inspector-content"></div>
+          <p class="score-notice">当前 Agent 未记录最终分数与召回源贡献</p>
+        </aside>
+      </main>
+    </div>
+
+    <dialog id="new-session-dialog" class="dialog">
+      <form id="new-session-form" method="dialog">
+        <div class="dialog-header"><h2>新建会话</h2><button class="icon-button" type="button" data-dialog-close="new-session-dialog" aria-label="关闭">×</button></div>
+        <label for="session-name">会话名称</label>
+        <input id="session-name" name="name" maxlength="120" placeholder="例如：通勤装备" required>
+        <label for="preference-tags">偏好标签 <span class="label-hint">可选，用逗号分隔</span></label>
+        <input id="preference-tags" name="preference_tags" maxlength="1000" placeholder="轻量, 防水">
+        <div class="dialog-actions"><button class="button button-quiet" type="button" data-dialog-close="new-session-dialog">取消</button><button class="button button-primary" type="submit">创建会话</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="import-dialog" class="dialog">
+      <form id="import-form" method="dialog">
+        <div class="dialog-header"><h2>导入会话</h2><button class="icon-button" type="button" data-dialog-close="import-dialog" aria-label="关闭">×</button></div>
+        <label for="import-file">JSON 快照</label>
+        <input id="import-file" name="file" type="file" accept="application/json,.json" required>
+        <div id="import-error" class="form-error" role="alert" hidden></div>
+        <div class="dialog-actions"><button class="button button-quiet" type="button" data-dialog-close="import-dialog">取消</button><button class="button button-primary" type="submit">导入</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="archive-dialog" class="dialog">
+      <form id="archive-form" method="dialog">
+        <div class="dialog-header"><h2>归档会话</h2><button class="icon-button" type="button" data-dialog-close="archive-dialog" aria-label="关闭">×</button></div>
+        <p>归档后会话保留在历史记录中，但不能继续发送消息。</p>
+        <div class="dialog-actions"><button class="button button-quiet" type="button" data-dialog-close="archive-dialog">取消</button><button class="button button-danger" type="submit">确认归档</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="clone-dialog" class="dialog">
+      <form id="clone-form" method="dialog">
+        <div class="dialog-header"><h2>克隆会话</h2><button class="icon-button" type="button" data-dialog-close="clone-dialog" aria-label="关闭">×</button></div>
+        <label for="clone-through-turn">重放到轮次 <span class="label-hint">留空表示全部已完成轮次</span></label>
+        <input id="clone-through-turn" name="through_turn" type="number" min="0" max="10" placeholder="全部">
+        <div class="dialog-actions"><button class="button button-quiet" type="button" data-dialog-close="clone-dialog">取消</button><button class="button button-primary" type="submit">开始克隆</button></div>
+      </form>
+    </dialog>
+
+    <div id="aria-status" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+    <script type="module" src="/static/js/app.js"></script>
+  </body>
+</html>
