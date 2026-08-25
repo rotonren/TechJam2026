@@ -4,6 +4,7 @@ import io
 import json
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -68,6 +69,145 @@ class FakeService:
         return method
 
 
+@dataclass
+class _RouteTurn:
+    status: str
+
+
+class RouteRepository(FakeRepository):
+    """Small repository seam used to exercise HTTP status classification."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.turns: dict[tuple[str, str], _RouteTurn] = {}
+
+    def find_turn_by_request_id(
+        self, session_id: str, request_id: str
+    ) -> _RouteTurn | None:
+        return self.turns.get((session_id, request_id))
+
+
+class ContractService:
+    """A deterministic service double for the route contract tests."""
+
+    def __init__(self, repository: RouteRepository) -> None:
+        self.repository = repository
+        self.calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
+        self.next_turn_status = "completed"
+        self.session = {
+            "session_id": "session-1",
+            "name": "Running shoes",
+            "profile": {"preference_tags": ["comfort"]},
+            "archived": False,
+        }
+        self.turn = {
+            "session_id": "session-1",
+            "turn": 1,
+            "request_id": "r1",
+            "status": "completed",
+            "user_message": "running shoes",
+            "response": {"message": "Found it"},
+            "products": [{"rank": 1, "parent_asin": "SHOE1"}],
+            "state": {},
+            "trace": {},
+            "feedback": [],
+            "error": None,
+        }
+
+    def list_sessions(self, scope: str = "active") -> list[dict[str, Any]]:
+        self.calls.append(("list_sessions", (scope,), {}))
+        return [self.session] if scope != "archived" else []
+
+    def create_session(self, name: object, profile: object) -> dict[str, Any]:
+        self.calls.append(("create_session", (name, profile), {}))
+        return {"session": {**self.session, "name": name, "profile": profile}}
+
+    def get_session(self, session_id: str) -> dict[str, Any]:
+        self.calls.append(("get_session", (session_id,), {}))
+        return {
+            "session": self.session,
+            "turns": [self.turn],
+            "continuation": "ready",
+            "can_send": True,
+        }
+
+    def patch_session(self, session_id: str, **values: object) -> dict[str, Any]:
+        self.calls.append(("patch_session", (session_id,), values))
+        return {"session": {**self.session, **values}}
+
+    def send_message(
+        self, session_id: str, request_id: object, user_message: object
+    ) -> dict[str, Any]:
+        self.calls.append(("send_message", (session_id, request_id, user_message), {}))
+        turn = {
+            **self.turn,
+            "session_id": session_id,
+            "request_id": request_id,
+            "status": self.next_turn_status,
+        }
+        self.repository.turns[(session_id, str(request_id))] = _RouteTurn(
+            turn["status"]
+        )
+        return {"turn": turn}
+
+    def set_feedback(
+        self,
+        session_id: str,
+        turn: int,
+        parent_asin: object,
+        incorrect: object,
+        reason: object,
+        note: object,
+    ) -> dict[str, Any] | None:
+        self.calls.append(
+            (
+                "set_feedback",
+                (session_id, turn, parent_asin, incorrect, reason, note),
+                {},
+            )
+        )
+        if not incorrect:
+            return None
+        return {
+            "session_id": session_id,
+            "turn": turn,
+            "parent_asin": parent_asin,
+            "reason": reason,
+            "note": note,
+        }
+
+    def export_session(self, session_id: str) -> dict[str, Any]:
+        self.calls.append(("export_session", (session_id,), {}))
+        return {
+            "format": "compasscart-debug-session",
+            "schema_version": 1,
+            "session": self.session,
+            "turns": [],
+        }
+
+    def import_session(self, payload: object) -> dict[str, Any]:
+        self.calls.append(("import_session", (payload,), {}))
+        return {
+            "session": {**self.session, "session_id": "imported-1"},
+            "turns": [],
+            "continuation": "ready",
+            "can_send": True,
+        }
+
+    def clone_session(
+        self, session_id: str, through_turn: object = None
+    ) -> dict[str, Any]:
+        self.calls.append(("clone_session", (session_id, through_turn), {}))
+        return {
+            "session": {
+                **self.session,
+                "session_id": "clone-1",
+                "source_session_id": session_id,
+            },
+            "turns": [],
+        }
+
+
 class SentinelInput(io.BytesIO):
     def __init__(self, payload: bytes):
         super().__init__(payload)
@@ -121,10 +261,11 @@ def _request(
     body: bytes = b"",
     input_stream: io.BytesIO | None = None,
 ):
+    path, separator, embedded_query = path.partition("?")
     environ: dict[str, Any] = {
         "REQUEST_METHOD": method,
         "PATH_INFO": path,
-        "QUERY_STRING": "",
+        "QUERY_STRING": embedded_query if separator else "",
         "SERVER_NAME": "localhost",
         "SERVER_PORT": "80",
         "SERVER_PROTOCOL": "HTTP/1.1",
@@ -474,3 +615,190 @@ def test_error_envelopes_do_not_expose_secret_or_exception_details(
     assert "Traceback" not in serialized
     assert "ValueError" not in serialized
     assert str(tmp_path) not in serialized
+
+
+def _route_app(tmp_path: Path) -> tuple[Any, RouteRepository, ContractService]:
+    repository = RouteRepository()
+    service = ContractService(repository)
+    app = create_application(
+        _config(tmp_path, max_body_bytes=4096),
+        repository=repository,
+        worker=FakeWorker(),
+        service=service,
+    )
+    return app, repository, service
+
+
+def _json_body(payload: object) -> bytes:
+    return json.dumps(payload, separators=(",", ":")).encode("utf-8")
+
+
+def _auth_json_request(
+    app: Any,
+    path: str,
+    *,
+    method: str = "GET",
+    payload: object | None = None,
+):
+    body = b"" if payload is None else _json_body(payload)
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    if method in {"POST", "PUT", "PATCH", "DELETE"}:
+        headers["Content-Type"] = "application/json"
+    return _request(app, path, method=method, headers=headers, body=body)
+
+
+def test_session_message_feedback_and_export_route_contract(tmp_path: Path) -> None:
+    app, repository, service = _route_app(tmp_path)
+    try:
+        created = _auth_json_request(
+            app,
+            "/api/sessions",
+            method="POST",
+            payload={
+                "name": "Running shoes",
+                "profile": {"preference_tags": ["comfort"]},
+            },
+        )
+        assert created[0] == 201
+        assert created[3]["session"]["session_id"] == "session-1"
+
+        listed = _auth_json_request(app, "/api/sessions?scope=all")
+        assert listed[0] == 200
+        assert listed[3]["sessions"][0]["session_id"] == "session-1"
+        assert service.calls[-1] == ("list_sessions", ("all",), {})
+
+        sent = _auth_json_request(
+            app,
+            "/api/sessions/session-1/messages",
+            method="POST",
+            payload={"request_id": "r1", "user_message": "running shoes"},
+        )
+        assert sent[0] == 201
+        assert sent[3]["turn"]["products"][0]["rank"] == 1
+
+        repeated = _auth_json_request(
+            app,
+            "/api/sessions/session-1/messages",
+            method="POST",
+            payload={"request_id": "r1", "user_message": "running shoes"},
+        )
+        assert repeated[0] == 200
+
+        feedback = _auth_json_request(
+            app,
+            "/api/sessions/session-1/turns/1/feedback/SHOE1",
+            method="PUT",
+            payload={
+                "is_inaccurate": True,
+                "reason": "over_budget",
+                "note": "too expensive",
+            },
+        )
+        assert feedback[0] == 200
+        assert feedback[3]["feedback"]["parent_asin"] == "SHOE1"
+
+        detail = _auth_json_request(app, "/api/sessions/session-1")
+        assert detail[0] == 200
+        assert detail[3]["turns"][0]["feedback"] == []
+
+        exported = _auth_json_request(app, "/api/sessions/session-1/export")
+        assert exported[0] == 200
+        assert exported[3]["format"] == "compasscart-debug-session"
+    finally:
+        app.close()
+    assert repository.turns[("session-1", "r1")].status == "completed"
+
+
+def test_existing_pending_request_returns_202_without_reading_body_twice(
+    tmp_path: Path,
+) -> None:
+    app, repository, service = _route_app(tmp_path)
+    service.next_turn_status = "pending"
+    sentinel = SentinelInput(
+        _json_body({"request_id": "pending-1", "user_message": "blue"})
+    )
+    try:
+        status, _, _, payload = _request(
+            app,
+            "/api/sessions/session-1/messages",
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {TOKEN}",
+                "Content-Type": "application/json",
+            },
+            body=sentinel.getvalue(),
+            input_stream=sentinel,
+        )
+    finally:
+        app.close()
+    assert status == 202
+    assert payload["turn"]["status"] == "pending"
+    assert sentinel.read_calls == 1
+    assert repository.turns[("session-1", "pending-1")].status == "pending"
+
+
+def test_archive_clone_and_import_routes_use_service_payloads(tmp_path: Path) -> None:
+    app, _, service = _route_app(tmp_path)
+    try:
+        archived = _auth_json_request(
+            app,
+            "/api/sessions/session-1",
+            method="PATCH",
+            payload={"archived": True},
+        )
+        assert archived[0] == 200
+        assert service.calls[-1] == (
+            "patch_session",
+            ("session-1",),
+            {"archived": True},
+        )
+
+        clone = _auth_json_request(
+            app,
+            "/api/sessions/session-1/clone",
+            method="POST",
+            payload={"through_turn": 1},
+        )
+        assert clone[0] == 201
+        assert clone[3]["session"]["source_session_id"] == "session-1"
+
+        full_clone = _auth_json_request(
+            app,
+            "/api/sessions/session-1/clone",
+            method="POST",
+            payload=None,
+        )
+        assert full_clone[0] == 201
+
+        imported = _auth_json_request(
+            app,
+            "/api/import",
+            method="POST",
+            payload={"format": "compasscart-debug-session", "schema_version": 1},
+        )
+        assert imported[0] == 201
+    finally:
+        app.close()
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/sessions/../messages",
+        "/api/sessions/%2e%2e/messages",
+        "/api/sessions/session%2F1",
+        "/api/sessions/session-1/turns/0/feedback/SHOE1",
+        "/api/sessions/session-1/turns/1/feedback/bad%2Fasin",
+        "/api/sessions/session-1/unknown-route",
+    ],
+)
+def test_authenticated_api_rejects_traversal_invalid_segments_and_unknown_routes(
+    tmp_path: Path, path: str
+) -> None:
+    app, _, _ = _route_app(tmp_path)
+    try:
+        status, _, _, payload = _auth_json_request(app, path)
+    finally:
+        app.close()
+    assert status == 404
+    assert payload["error"]["code"] == "not_found"
