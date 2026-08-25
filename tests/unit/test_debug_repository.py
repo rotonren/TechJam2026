@@ -4,7 +4,7 @@ import importlib
 import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -86,11 +86,137 @@ def test_initialize_rejects_unsupported_schema_versions(
 
     with pytest.raises(_repository_module().RepositoryVersionError, match="schema"):
         _repository(path).initialize()
+    assert _repository(path).health() is False
+
+
+def _raw_connection(path: Path) -> sqlite3.Connection:
+    return sqlite3.connect(path)
+
+
+def _schema_names(path: Path) -> list[str]:
+    connection = _raw_connection(path)
+    try:
+        return [
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"
+            )
+        ]
+    finally:
+        connection.close()
+
+
+def test_initialize_rejects_newer_delete_journal_database_without_mutation(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "v2.sqlite3"
+    connection = _raw_connection(path)
+    try:
+        assert (
+            connection.execute("PRAGMA journal_mode=DELETE").fetchone()[0] == "delete"
+        )
+        connection.execute(
+            "CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO metadata(key, value) VALUES ('schema_version', '2')"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    before = _schema_names(path)
+
+    with pytest.raises(_repository_module().RepositoryVersionError):
+        _repository(path).initialize()
+
+    connection = _raw_connection(path)
+    try:
+        assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+    finally:
+        connection.close()
+    assert _schema_names(path) == before
+
+
+def test_initialize_rejects_nonempty_foreign_database_without_mutation(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "foreign.sqlite3"
+    connection = _raw_connection(path)
+    try:
+        connection.execute("CREATE TABLE foreign_data (value TEXT)")
+        connection.commit()
+    finally:
+        connection.close()
+    before = _schema_names(path)
+
+    with pytest.raises(_repository_module().RepositoryVersionError):
+        _repository(path).initialize()
+
+    assert _schema_names(path) == before
+
+
+@pytest.mark.parametrize("table", ["sessions", "turns", "product_feedback"])
+def test_initialize_and_health_reject_malformed_v1_schema(
+    tmp_path: Path, table: str
+) -> None:
+    path = tmp_path / f"malformed-{table}.sqlite3"
+    repository = _repository(path)
+    repository.initialize()
+    connection = _raw_connection(path)
+    try:
+        connection.execute("PRAGMA foreign_keys=OFF")
+        connection.execute(f"DROP TABLE {table}")
+        connection.execute(f"CREATE TABLE {table} (broken TEXT)")
+        connection.commit()
+    finally:
+        connection.close()
+
+    with pytest.raises(_repository_module().RepositoryVersionError):
+        _repository(path).initialize()
+    assert _repository(path).health() is False
+
+
+def test_health_and_schema_version_do_not_create_or_accept_unready_databases(
+    tmp_path: Path,
+) -> None:
+    missing = tmp_path / "missing.sqlite3"
+    empty = tmp_path / "empty.sqlite3"
+    foreign = tmp_path / "foreign.sqlite3"
+    corrupt = tmp_path / "corrupt.sqlite3"
+    _raw_connection(empty).close()
+    connection = _raw_connection(foreign)
+    try:
+        connection.execute("CREATE TABLE foreign_data (value TEXT)")
+        connection.commit()
+    finally:
+        connection.close()
+    corrupt.write_bytes(b"not a sqlite database")
+
+    for path in (missing, empty, foreign, corrupt):
+        repository = _repository(path)
+        assert repository.health() is False
+        with pytest.raises(_repository_module().RepositoryVersionError):
+            repository.schema_version()
+
+    assert not missing.exists()
 
 
 def test_repository_rejects_memory_database() -> None:
     with pytest.raises(ValueError, match="path-backed"):
         _repository_module().DebugRepository(":memory:")
+
+
+def test_repository_rejects_naive_clock_values(tmp_path: Path) -> None:
+    repository = _repository_module().DebugRepository(
+        tmp_path / "debug.sqlite3",
+        clock=lambda: datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc).replace(
+            tzinfo=None
+        ),
+    )
+    repository.initialize()
+
+    with pytest.raises(ValueError, match="timezone-aware"):
+        _create_session(repository)
 
 
 def test_session_records_are_decoded_and_persisted_across_reopen(
@@ -147,6 +273,167 @@ def test_connections_close_after_success_and_exception(tmp_path: Path) -> None:
     with pytest.raises(_repository_module().NotFoundError):
         repository.get_session("missing")
     assert connections[-1].close_calls == 1
+
+
+@dataclass
+class _TransactionGate:
+    armed: bool = False
+    first_entered: threading.Event = field(default_factory=threading.Event)
+    second_attempted: threading.Event = field(default_factory=threading.Event)
+    release: threading.Event = field(default_factory=threading.Event)
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    first_seen: bool = False
+
+
+class _BlockingImmediateConnection(sqlite3.Connection):
+    gate: _TransactionGate
+
+    def execute(self, sql: str, parameters=()):
+        if sql.strip().upper() != "BEGIN IMMEDIATE" or not self.gate.armed:
+            return super().execute(sql, parameters)
+        with self.gate.lock:
+            first = not self.gate.first_seen
+            self.gate.first_seen = True
+            if not first:
+                self.gate.second_attempted.set()
+        result = super().execute(sql, parameters)
+        if first:
+            self.gate.first_entered.set()
+            assert self.gate.release.wait(5), (
+                "test did not release the held transaction"
+            )
+        return result
+
+
+class _LockedImmediateConnection(sqlite3.Connection):
+    def execute(self, sql: str, parameters=()):
+        if sql.strip().upper() == "BEGIN IMMEDIATE":
+            raise sqlite3.OperationalError("database is locked")
+        return super().execute(sql, parameters)
+
+
+def _blocking_repository(path: Path, gate: _TransactionGate):
+    def factory(*args, **kwargs) -> _BlockingImmediateConnection:
+        connection = sqlite3.connect(
+            *args, factory=_BlockingImmediateConnection, **kwargs
+        )
+        connection.gate = gate
+        return connection
+
+    return _repository_module().DebugRepository(
+        path,
+        clock=lambda: datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc),
+        connection_factory=factory,
+    )
+
+
+def test_feedback_upserts_overlap_after_first_transaction_acquires_lock(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "debug.sqlite3"
+    gate = _TransactionGate()
+    repository = _blocking_repository(path, gate)
+    repository.initialize()
+    _create_session(repository)
+    pending = repository.reserve_turn("session-1", "request-1", "show shoes")
+    repository.complete_turn(
+        "session-1",
+        pending.turn,
+        _Observation(
+            response={},
+            products=[
+                {"rank": 1, "parent_asin": "A1"},
+                {"rank": 2, "parent_asin": "B2"},
+            ],
+            state={},
+            trace={},
+        ),
+    )
+    gate.armed = True
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(
+            repository.upsert_feedback,
+            "session-1",
+            pending.turn,
+            "A1",
+            "other",
+            "first",
+        )
+        assert gate.first_entered.wait(2)
+        second = executor.submit(
+            repository.upsert_feedback,
+            "session-1",
+            pending.turn,
+            "B2",
+            "other",
+            "second",
+        )
+        assert gate.second_attempted.wait(2)
+        gate.release.set()
+        assert first.result(timeout=5).parent_asin == "A1"
+        assert second.result(timeout=5).parent_asin == "B2"
+
+    assert [item.parent_asin for item in repository.list_feedback("session-1", 1)] == [
+        "A1",
+        "B2",
+    ]
+
+
+def test_failed_turn_retries_race_after_first_transaction_acquires_lock(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "debug.sqlite3"
+    gate = _TransactionGate()
+    repository = _blocking_repository(path, gate)
+    repository.initialize()
+    _create_session(repository)
+    pending = repository.reserve_turn("session-1", "request-1", "show shoes")
+    repository.fail_turn("session-1", pending.turn, {"code": "worker_failed"})
+    gate.armed = True
+
+    def retry() -> object:
+        try:
+            return repository.retry_failed("session-1", "request-1", "show shoes")
+        except Exception as error:  # noqa: BLE001 - assert the state-machine error below.
+            return error
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(retry)
+        assert gate.first_entered.wait(2)
+        second = executor.submit(retry)
+        assert gate.second_attempted.wait(2)
+        gate.release.set()
+        results = [first.result(timeout=5), second.result(timeout=5)]
+
+    assert sum(hasattr(result, "turn") for result in results) == 1
+    assert (
+        sum(
+            isinstance(result, _repository_module().ConflictError) for result in results
+        )
+        == 1
+    )
+    assert repository.get_turn("session-1", pending.turn).status == "pending"
+
+
+def test_locked_storage_is_mapped_to_a_stable_busy_error(tmp_path: Path) -> None:
+    path = tmp_path / "debug.sqlite3"
+    repository = _repository(path)
+    repository.initialize()
+    _create_session(repository)
+
+    def factory(*args, **kwargs) -> _LockedImmediateConnection:
+        return sqlite3.connect(*args, factory=_LockedImmediateConnection, **kwargs)
+
+    locked_repository = _repository_module().DebugRepository(
+        path, connection_factory=factory
+    )
+    try:
+        locked_repository.set_dirty("session-1")
+    except Exception as error:  # noqa: BLE001 - require the repository boundary error.
+        assert type(error).__name__ == "RepositoryBusyError"
+    else:
+        pytest.fail("A locked SQLite operation escaped the repository boundary.")
 
 
 def test_reserve_turn_is_idempotent_for_the_same_request(tmp_path: Path) -> None:
@@ -260,7 +547,9 @@ def test_feedback_is_ranked_persistent_and_only_targets_completed_products(
     errors = _repository_module()
 
     with pytest.raises(errors.ConflictError):
-        repository.upsert_feedback("session-1", pending.turn, "A1", "fit", "too wide")
+        repository.upsert_feedback(
+            "session-1", pending.turn, "A1", "explicit_constraint", "too wide"
+        )
     repository.complete_turn(
         "session-1",
         pending.turn,
@@ -274,9 +563,11 @@ def test_feedback_is_ranked_persistent_and_only_targets_completed_products(
             trace={},
         ),
     )
-    repository.upsert_feedback("session-1", 1, "B2", "price", "too expensive")
-    updated = repository.upsert_feedback("session-1", 1, "A1", "fit", "too wide")
-    repository.upsert_feedback("session-1", 1, "A1", "fit", "better now")
+    repository.upsert_feedback("session-1", 1, "B2", "over_budget", "too expensive")
+    updated = repository.upsert_feedback(
+        "session-1", 1, "A1", "attribute_mismatch", "too wide"
+    )
+    repository.upsert_feedback("session-1", 1, "A1", "attribute_mismatch", "better now")
 
     assert updated.parent_asin == "A1"
     assert [item.parent_asin for item in repository.list_feedback("session-1", 1)] == [
@@ -292,6 +583,73 @@ def test_feedback_is_ranked_persistent_and_only_targets_completed_products(
     ]
     repository.clear_feedback("session-1", 1)
     assert repository.list_feedback("session-1", 1) == []
+
+
+def test_feedback_reasons_are_fixed_and_notes_may_be_empty(tmp_path: Path) -> None:
+    repository = _repository(tmp_path / "debug.sqlite3")
+    repository.initialize()
+    _create_session(repository)
+    pending = repository.reserve_turn("session-1", "request-1", "show shoes")
+    repository.complete_turn("session-1", pending.turn, _observation())
+
+    accepted = repository.upsert_feedback("session-1", 1, "A1", "other", "")
+    assert accepted.note == ""
+    with pytest.raises(_repository_module().ValidationError):
+        repository.upsert_feedback("session-1", 1, "A1", "fit", "not valid")
+    with pytest.raises(_repository_module().ValidationError):
+        repository.upsert_feedback("session-1", 1, "A1", 42, "not valid")
+
+
+@pytest.mark.parametrize("payload", ["NaN", "{not-json"])
+def test_tampered_turn_json_raises_stable_corruption_error(
+    tmp_path: Path, payload: str
+) -> None:
+    path = tmp_path / "debug.sqlite3"
+    repository = _repository(path)
+    repository.initialize()
+    _create_session(repository)
+    pending = repository.reserve_turn("session-1", "request-1", "show shoes")
+    repository.complete_turn("session-1", pending.turn, _observation())
+    connection = _raw_connection(path)
+    try:
+        connection.execute(
+            "UPDATE turns SET response_json = ? WHERE session_id = ? AND turn = ?",
+            (payload, "session-1", pending.turn),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    try:
+        repository.get_turn("session-1", pending.turn)
+    except Exception as error:  # noqa: BLE001 - require the repository boundary error.
+        assert type(error).__name__ == "RepositoryCorruptionError"
+    else:
+        pytest.fail("Tampered JSON was returned instead of rejected.")
+
+
+def test_tampered_session_profile_raises_stable_corruption_error(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "debug.sqlite3"
+    repository = _repository(path)
+    repository.initialize()
+    _create_session(repository)
+    connection = _raw_connection(path)
+    try:
+        connection.execute(
+            "UPDATE sessions SET profile_json = 'NaN' WHERE session_id = 'session-1'"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    try:
+        repository.get_session("session-1")
+    except Exception as error:  # noqa: BLE001 - require the repository boundary error.
+        assert type(error).__name__ == "RepositoryCorruptionError"
+    else:
+        pytest.fail("Tampered session JSON was returned instead of rejected.")
 
 
 def test_reserve_completed_request_returns_the_exact_completed_turn(

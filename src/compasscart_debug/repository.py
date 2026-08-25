@@ -20,6 +20,60 @@ from .errors import (
 
 _SCHEMA_VERSION = 1
 _UNSET = object()
+_FEEDBACK_REASONS = frozenset(
+    {
+        "explicit_constraint",
+        "wrong_category",
+        "over_budget",
+        "attribute_mismatch",
+        "duplicate_or_too_similar",
+        "other",
+    }
+)
+_REQUIRED_TABLES = {"metadata", "sessions", "turns", "product_feedback"}
+_TABLE_COLUMNS = {
+    "metadata": (
+        ("key", "TEXT", False, 1),
+        ("value", "TEXT", True, 0),
+    ),
+    "sessions": (
+        ("session_id", "TEXT", False, 1),
+        ("name", "TEXT", True, 0),
+        ("profile_json", "TEXT", True, 0),
+        ("agent_version", "TEXT", True, 0),
+        ("catalog_sha256", "TEXT", True, 0),
+        ("config_sha256", "TEXT", True, 0),
+        ("assets_sha256", "TEXT", False, 0),
+        ("source_session_id", "TEXT", False, 0),
+        ("archived", "INTEGER", True, 0),
+        ("dirty", "INTEGER", True, 0),
+        ("read_only_reason", "TEXT", False, 0),
+        ("created_at", "TEXT", True, 0),
+        ("updated_at", "TEXT", True, 0),
+    ),
+    "turns": (
+        ("session_id", "TEXT", True, 1),
+        ("turn", "INTEGER", True, 2),
+        ("request_id", "TEXT", True, 0),
+        ("status", "TEXT", True, 0),
+        ("user_message", "TEXT", True, 0),
+        ("response_json", "TEXT", False, 0),
+        ("products_json", "TEXT", False, 0),
+        ("state_json", "TEXT", False, 0),
+        ("trace_json", "TEXT", False, 0),
+        ("error_json", "TEXT", False, 0),
+        ("created_at", "TEXT", True, 0),
+        ("updated_at", "TEXT", True, 0),
+    ),
+    "product_feedback": (
+        ("session_id", "TEXT", True, 1),
+        ("turn", "INTEGER", True, 2),
+        ("parent_asin", "TEXT", True, 3),
+        ("reason", "TEXT", True, 0),
+        ("note", "TEXT", True, 0),
+        ("updated_at", "TEXT", True, 0),
+    ),
+}
 _SCHEMA_STATEMENTS = (
     """
     CREATE TABLE IF NOT EXISTS metadata (
@@ -62,6 +116,18 @@ _SCHEMA_STATEMENTS = (
 
 class RepositoryVersionError(RuntimeError):
     """Raised when a database needs a newer repository implementation."""
+
+
+class RepositoryCorruptionError(RuntimeError):
+    """Raised when persisted repository data cannot be decoded safely."""
+
+
+class RepositoryBusyError(RuntimeError):
+    """Raised when SQLite cannot acquire a repository write lock."""
+
+
+class RepositoryStorageError(RuntimeError):
+    """Raised when SQLite storage cannot safely complete an operation."""
 
 
 @dataclass(frozen=True)
@@ -130,39 +196,48 @@ class DebugRepository:
 
     def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as connection:
-            connection.execute("PRAGMA journal_mode=WAL")
-            connection.execute("BEGIN")
+        with self._connect(mode="rwc") as connection:
+            connection.execute("BEGIN IMMEDIATE")
             try:
-                for statement in _SCHEMA_STATEMENTS:
-                    connection.execute(statement)
-                row = connection.execute(
-                    "SELECT value FROM metadata WHERE key = 'schema_version'"
-                ).fetchone()
-                if row is None:
+                if not _user_tables(connection):
+                    for statement in _SCHEMA_STATEMENTS:
+                        connection.execute(statement)
                     connection.execute(
                         "INSERT INTO metadata(key, value) VALUES ('schema_version', ?)",
                         (str(_SCHEMA_VERSION),),
                     )
                 else:
-                    _validate_schema_version(row["value"])
+                    _validate_existing_v1(connection)
                 connection.commit()
             except BaseException:
                 connection.rollback()
                 raise
+            connection.execute("PRAGMA journal_mode=WAL")
 
     def schema_version(self) -> int:
-        with self._connect() as connection:
-            row = connection.execute(
-                "SELECT value FROM metadata WHERE key = 'schema_version'"
-            ).fetchone()
-        if row is None:
-            raise RepositoryVersionError("The database schema is not initialized.")
-        return _validate_schema_version(row["value"])
+        try:
+            with self._connect(mode="ro") as connection:
+                return _validate_existing_v1(connection)
+        except RepositoryVersionError:
+            raise
+        except (RepositoryStorageError, sqlite3.DatabaseError) as error:
+            raise RepositoryVersionError(
+                "The database schema is unavailable."
+            ) from error
 
     def health(self) -> bool:
-        with self._connect() as connection:
-            return connection.execute("SELECT 1").fetchone()[0] == 1
+        try:
+            with self._connect(mode="ro") as connection:
+                _validate_existing_v1(connection)
+                result = connection.execute("PRAGMA quick_check").fetchone()
+                return result is not None and result[0] == "ok"
+        except (
+            RepositoryVersionError,
+            RepositoryStorageError,
+            sqlite3.DatabaseError,
+            OSError,
+        ):
+            return False
 
     def create_session(
         self,
@@ -462,8 +537,12 @@ class DebugRepository:
     def upsert_feedback(
         self, session_id: str, turn: int, parent_asin: str, reason: str, note: str
     ) -> FeedbackRecord:
-        if not reason or not note:
-            raise ValidationError({"feedback": "Reason and note are required."})
+        if not isinstance(parent_asin, str):
+            raise ValidationError({"parent_asin": "A product identifier is required."})
+        if not isinstance(reason, str) or reason not in _FEEDBACK_REASONS:
+            raise ValidationError({"reason": "Feedback reason is invalid."})
+        if not isinstance(note, str):
+            raise ValidationError({"note": "Feedback note must be text."})
         with self._connect() as connection:
             self._begin(connection)
             try:
@@ -605,22 +684,43 @@ class DebugRepository:
         return row
 
     @contextmanager
-    def _connect(self) -> Iterator[sqlite3.Connection]:
-        connection = self._connection_factory(self.path, timeout=5)
+    def _connect(self, *, mode: str = "rw") -> Iterator[sqlite3.Connection]:
+        connection: sqlite3.Connection | None = None
         try:
+            connection = self._connection_factory(
+                _sqlite_uri(self.path, mode), timeout=5, uri=True
+            )
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA foreign_keys=ON")
             connection.execute("PRAGMA busy_timeout=5000")
             yield connection
+        except sqlite3.IntegrityError:
+            raise
+        except sqlite3.OperationalError as error:
+            if _is_busy_error(error):
+                raise RepositoryBusyError("The repository is busy.") from error
+            raise RepositoryStorageError(
+                "The repository storage is unavailable."
+            ) from error
+        except sqlite3.DatabaseError as error:
+            raise RepositoryStorageError(
+                "The repository storage is unavailable."
+            ) from error
         finally:
-            connection.close()
+            if connection is not None:
+                connection.close()
 
     @staticmethod
     def _begin(connection: sqlite3.Connection) -> None:
-        connection.execute("BEGIN")
+        connection.execute("BEGIN IMMEDIATE")
 
     def _timestamp(self) -> str:
-        value = self._clock().astimezone(UTC).replace(microsecond=0)
+        value = self._clock()
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError(
+                "The repository clock must return a timezone-aware datetime."
+            )
+        value = value.astimezone(UTC).replace(microsecond=0)
         return value.isoformat().replace("+00:00", "Z")
 
 
@@ -640,11 +740,146 @@ def _validate_schema_version(value: str) -> int:
     return _SCHEMA_VERSION
 
 
+def _sqlite_uri(path: Path, mode: str) -> str:
+    return f"{path.resolve().as_uri()}?mode={mode}"
+
+
+def _user_tables(connection: sqlite3.Connection) -> dict[str, str]:
+    rows = connection.execute(
+        "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+    ).fetchall()
+    return {str(row["name"]): str(row["sql"] or "") for row in rows}
+
+
+def _validate_existing_v1(connection: sqlite3.Connection) -> int:
+    tables = _user_tables(connection)
+    if set(tables) != _REQUIRED_TABLES:
+        raise RepositoryVersionError("The database schema is incompatible.")
+    for table, expected_columns in _TABLE_COLUMNS.items():
+        rows = connection.execute(
+            f"PRAGMA table_info({_quote_identifier(table)})"
+        ).fetchall()
+        actual_columns = tuple(
+            (
+                str(row["name"]),
+                str(row["type"]).upper(),
+                bool(row["notnull"]),
+                row["pk"],
+            )
+            for row in rows
+        )
+        if actual_columns != expected_columns:
+            raise RepositoryVersionError("The database schema is incompatible.")
+    row = connection.execute(
+        "SELECT value FROM metadata WHERE key = 'schema_version'"
+    ).fetchone()
+    if row is None:
+        raise RepositoryVersionError("The database schema is incompatible.")
+    _validate_schema_version(row["value"])
+    _validate_schema_constraints(connection, tables)
+    return _SCHEMA_VERSION
+
+
+def _validate_schema_constraints(
+    connection: sqlite3.Connection, tables: dict[str, str]
+) -> None:
+    sessions_sql = _normalize_sql(tables["sessions"])
+    turns_sql = _normalize_sql(tables["turns"])
+    if (
+        "check(archivedin(0,1))" not in sessions_sql
+        or "check(dirtyin(0,1))" not in sessions_sql
+        or "check(turnbetween1and10)" not in turns_sql
+        or "check(statusin('pending','completed','failed'))" not in turns_sql
+    ):
+        raise RepositoryVersionError("The database schema is incompatible.")
+    if not _has_unique_index(connection, "turns", ("session_id", "request_id")):
+        raise RepositoryVersionError("The database schema is incompatible.")
+    if not _has_foreign_key(
+        connection,
+        "sessions",
+        "sessions",
+        (("source_session_id", "session_id"),),
+        "NO ACTION",
+    ):
+        raise RepositoryVersionError("The database schema is incompatible.")
+    if not _has_foreign_key(
+        connection,
+        "turns",
+        "sessions",
+        (("session_id", "session_id"),),
+        "CASCADE",
+    ):
+        raise RepositoryVersionError("The database schema is incompatible.")
+    if not _has_foreign_key(
+        connection,
+        "product_feedback",
+        "turns",
+        (("session_id", "session_id"), ("turn", "turn")),
+        "CASCADE",
+    ):
+        raise RepositoryVersionError("The database schema is incompatible.")
+
+
+def _has_unique_index(
+    connection: sqlite3.Connection, table: str, expected: tuple[str, ...]
+) -> bool:
+    rows = connection.execute(
+        f"PRAGMA index_list({_quote_identifier(table)})"
+    ).fetchall()
+    for row in rows:
+        if not row["unique"]:
+            continue
+        index_rows = connection.execute(
+            f"PRAGMA index_info({_quote_identifier(str(row['name']))})"
+        ).fetchall()
+        columns = tuple(str(index_row["name"]) for index_row in index_rows)
+        if columns == expected:
+            return True
+    return False
+
+
+def _has_foreign_key(
+    connection: sqlite3.Connection,
+    table: str,
+    target_table: str,
+    expected: tuple[tuple[str, str], ...],
+    on_delete: str,
+) -> bool:
+    rows = connection.execute(
+        f"PRAGMA foreign_key_list({_quote_identifier(table)})"
+    ).fetchall()
+    grouped: dict[int, list[sqlite3.Row]] = {}
+    for row in rows:
+        grouped.setdefault(int(row["id"]), []).append(row)
+    for group in grouped.values():
+        pairs = tuple((str(row["from"]), str(row["to"])) for row in group)
+        if (
+            str(group[0]["table"]) == target_table
+            and pairs == expected
+            and all(str(row["on_delete"]) == on_delete for row in group)
+        ):
+            return True
+    return False
+
+
+def _normalize_sql(value: str) -> str:
+    return "".join(value.lower().split())
+
+
+def _quote_identifier(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
+def _is_busy_error(error: sqlite3.OperationalError) -> bool:
+    message = str(error).lower()
+    return "locked" in message or "busy" in message
+
+
 def _decode_session(row: sqlite3.Row) -> SessionRecord:
     return SessionRecord(
         session_id=row["session_id"],
         name=row["name"],
-        profile=json.loads(row["profile_json"]),
+        profile=_decode_json(row["profile_json"]),
         agent_version=row["agent_version"],
         catalog_sha256=row["catalog_sha256"],
         config_sha256=row["config_sha256"],
@@ -676,7 +911,18 @@ def _decode_turn(row: sqlite3.Row) -> TurnRecord:
 
 
 def _decode_json(value: str | None) -> Any | None:
-    return json.loads(value) if value is not None else None
+    if value is None:
+        return None
+    try:
+        return json.loads(value, parse_constant=_reject_nonstandard_json_constant)
+    except (json.JSONDecodeError, ValueError) as error:
+        raise RepositoryCorruptionError(
+            "Persisted repository data is invalid."
+        ) from error
+
+
+def _reject_nonstandard_json_constant(value: str) -> None:
+    raise ValueError(f"Non-standard JSON constant: {value}")
 
 
 def _decode_feedback(row: sqlite3.Row) -> FeedbackRecord:
