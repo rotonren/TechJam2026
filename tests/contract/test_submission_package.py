@@ -18,6 +18,9 @@ REQUIRED_ENTRIES = {
     "assets/product_vectors/product_ids.npy",
     "assets/product_vectors/scales.npy",
     "assets/product_vectors/vectors.int8.npy",
+    "reports/final/devpost.md",
+    "reports/final/final-results.json",
+    "reports/final/release-checklist.md",
     "src/compasscart/agent.py",
 }
 

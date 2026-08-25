@@ -31,6 +31,6 @@ Agent contract still returns valid catalog IDs through lexical fallback.
 ## Evidence (2:35-3:00)
 
 Close on the official metrics: starter `0.106710`, selected development CV mean
-`0.424038`, selection score `0.405810`, zero fallbacks across folds 1-4, zero
-runtime API cost, and deterministic package SHA256. Do not claim the sealed
-fold-5 or final full-set number until the release evidence file is generated.
+`0.424038`, sealed fold 5 `0.370375`, and full public score `0.413305`. State
+zero fallbacks across all five folds, zero runtime API cost, and the
+deterministic package SHA256 printed by the release command.

@@ -13,6 +13,8 @@ CV is reported separately to avoid implying that unlike scopes are equivalent.
 | + bounded versioned query history | Dev fold 1 | 0.500 | 0.182946 | 7.30 | 0.378884 |
 | + answerable clarification policy | Dev fold 1 | 0.575 | 0.194673 | 6.05 | 0.444902 |
 | Selected full system | Dev folds 1-4 | - | - | - | 0.424038 mean |
+| Selected full system | Sealed fold 5, once | 0.450 | 0.254583 | 7.55 | 0.370375 |
+| Selected full system | Full public set | 0.520 | 0.231685 | 6.81 | 0.413305 |
 
 Selected configuration: commit `dc71a7a`, config hash
 `0b6bcec8230b618c71604d2770b49b83495845d59f9ae452e11a607b7127373c`,

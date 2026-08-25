@@ -68,6 +68,11 @@ score `0.405810`. Fold scores were `0.444902`, `0.362723`, `0.431955`, and
 `0.456572`; no runtime fallback occurred. Per-fold P95 response latency ranged
 from 211 ms to 416 ms on the development host.
 
+The once-only sealed fold 5 scored `0.370375` with no fallback. The final
+unchanged official 200-session public evaluation scored `0.413305`, with
+HitRate@10 `0.52`, MRR `0.231685`, and MTTC `6.81`. Scenario HitRate@10 was
+`0.60` Boundary, `0.5375` Browsing, `0.575` Buying, and `0.30` Intent Override.
+
 The agent reports zero prompt and completion tokens. Official runtime API cost
 is USD 0.00 per session and USD 0.00 for the full 800-session private set.
 Development experiments also used no paid API calls; local asset generation was

@@ -26,6 +26,7 @@ ROOT_FILES = (
 OPTIONAL_REPORTS = (
     "reports/final/architecture.md",
     "reports/final/demo-script.md",
+    "reports/final/devpost.md",
     "reports/final/final-results.json",
     "reports/final/release-checklist.md",
 )
