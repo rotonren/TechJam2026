@@ -263,7 +263,7 @@ Expected: import failure for `DebugRepository`.
 
 - [ ] **Step 3: Implement per-operation connections and schema v1**
 
-Every method opens a fresh `sqlite3.connect(path, timeout=5)`, sets row factory, `foreign_keys=ON`, and `busy_timeout=5000`; initialization enables WAL. Schema:
+Every method opens and explicitly closes a fresh `sqlite3.connect(path, timeout=5)`, sets row factory, `foreign_keys=ON`, and `busy_timeout=5000`; initialization enables WAL only after accepting the existing database identity/version/shape. Initialization creates schema v1 only for a truly empty database, rejects a nonempty foreign/malformed/unsupported database without mutating it, and validates required columns, uniqueness, checks, and foreign keys. `health()` opens an existing file without create-on-probe and validates supported metadata plus schema shape; missing, locked, corrupt, or uninitialized databases return false. Schema:
 
 ```sql
 CREATE TABLE sessions (
@@ -651,7 +651,7 @@ default-src 'self'; script-src 'self'; style-src 'self'; img-src 'none'; connect
 
 - [ ] **Step 4: Implement app factory and local threaded server**
 
-`create_application()` initializes only DebugRepository synchronously, constructs `AgentWorker(factory)`, then calls `worker.start()` and immediately returns the WSGI app. The factory itself runs inside the worker: it calls `config.resolve_runtime_paths()`, imports root `Agent`, builds the explicit `RuntimeConfig`, constructs the Agent, computes `RuntimeIdentity`, and returns `AgentAdapter(agent, identity)`. Missing runtime files are caught by the worker as `setup_required`, so liveness and the login shell remain available. Readiness probes both a short repository `SELECT 1` and worker state without touching catalog contents. `wsgi.py` exports a module-level `application = create_application()` for Gunicorn. The local CLI combines `ThreadingMixIn` with WSGI server, prints URL without token, and closes worker on interrupt.
+`create_application()` initializes only DebugRepository synchronously, constructs `AgentWorker(factory)`, then calls `worker.start()` and immediately returns the WSGI app. The factory itself runs inside the worker: it calls `config.resolve_runtime_paths()`, imports root `Agent`, builds the explicit `RuntimeConfig`, constructs the Agent, computes `RuntimeIdentity`, and returns `AgentAdapter(agent, identity)`. Missing runtime files are caught by the worker as `setup_required`, so liveness and the login shell remain available. Readiness calls the repository's non-mutating structural health probe and checks worker state without touching catalog contents. `wsgi.py` exports a module-level `application = create_application()` for Gunicorn. The local CLI combines `ThreadingMixIn` with WSGI server, prints URL without token, and closes worker on interrupt.
 
 - [ ] **Step 5: Add body/path/startup tests**
 
