@@ -24,6 +24,9 @@
 
 * { box-sizing: border-box; }
 
+/* Component display rules must not override the semantic hidden attribute. */
+[hidden] { display: none !important; }
+
 html, body { margin: 0; min-height: 100%; background: var(--canvas); }
 body { min-width: 320px; overflow-x: hidden; font-size: 14px; line-height: 1.45; }
 button, input, select, textarea { font: inherit; }

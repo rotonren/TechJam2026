@@ -123,8 +123,10 @@ function renderConversation(state) {
   send.disabled = blocked;
   setVisible(composer, !limited);
   setVisible(limitActions, limited);
+  // The preference field belongs to the new-session dialog, not the active
+  // conversation. Keep it editable even when the current session has turns.
   const tagInput = byId("preference-tags");
-  if (tagInput) tagInput.readOnly = turns.length > 0;
+  if (tagInput) tagInput.readOnly = false;
   if (state.currentSession?.archived) input.disabled = true;
   const hint = byId("composer-hint");
   if (hint) hint.textContent = state.currentSession?.archived ? "该会话已归档" : (limited ? "" : "Enter 发送 · Shift+Enter 换行");
@@ -368,6 +370,13 @@ function render(state, ui) {
 function openDialog(id) { const dialog = byId(id); if (dialog?.showModal) dialog.showModal(); }
 function closeDialog(id) { const dialog = byId(id); if (dialog?.open) dialog.close(); }
 
+function prepareNewSessionDialog() {
+  const name = byId("session-name");
+  const tags = byId("preference-tags");
+  if (name) name.value = "";
+  if (tags) { tags.value = ""; tags.readOnly = false; }
+}
+
 function wire(store, ui) {
   const loginForm = byId("login-form");
   const composer = byId("message-composer");
@@ -406,13 +415,15 @@ function wire(store, ui) {
     if (clearFeedback) {
       const [turnNumber, ...asinParts] = clearFeedback.dataset.feedbackClear.split(":");
       await store.actions.feedback(Number(turnNumber), asinParts.join(":"), { incorrect: false, note: "" });
+      delete ui.feedbackDrafts[clearFeedback.dataset.feedbackClear];
       ui.feedbackKey = null;
+      render(store.getState(), ui);
       return;
     }
     const action = event.target.closest("[data-action]");
     if (!action) return;
     switch (action.dataset.action) {
-      case "new-session": openDialog("new-session-dialog"); break;
+      case "new-session": prepareNewSessionDialog(); openDialog("new-session-dialog"); break;
       case "import": openDialog("import-dialog"); break;
       case "export": {
         const payload = await store.actions.export();
@@ -465,6 +476,7 @@ function wire(store, ui) {
       ui.feedbackDrafts[form.dataset.feedbackForm] = { reason, note };
       await store.actions.feedback(Number(turnNumber), asinParts.join(":"), { incorrect: true, reason, note });
       ui.feedbackKey = null;
+      render(store.getState(), ui);
     }
   });
 }
