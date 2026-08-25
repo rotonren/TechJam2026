@@ -52,7 +52,7 @@ The official `evaluator/`, `data/public_set.jsonl`, starter, competition docs, a
 
 **Files:**
 - Create: `tools/download_kit.ps1`
-- Import unchanged: `.gitignore`, `DATA_ATTRIBUTION.md`, `data/`, `docs/agent_api_contract.json`, `docs/baseline_results.json`, `docs/competition_specification.md`, `docs/evaluation_config.json`, `docs/submission_rules.md`, `evaluator/`, `starter/`, `tests/test_evaluator.py`
+- Import unchanged: `DATA_ATTRIBUTION.md`, `data/`, `docs/agent_api_contract.json`, `docs/baseline_results.json`, `docs/competition_specification.md`, `docs/evaluation_config.json`, `docs/submission_rules.md`, `evaluator/`, `starter/`, `tests/test_evaluator.py`
 - Create locally, ignored by Git: `data/catalog.jsonl`
 
 - [ ] **Step 1: Add the official repository as a read-only remote**
@@ -71,7 +71,6 @@ Expected: `official/main` resolves successfully without changing the working tre
 Run each command separately:
 
 ```powershell
-git checkout official/main -- .gitignore
 git checkout official/main -- DATA_ATTRIBUTION.md
 git checkout official/main -- data
 git checkout official/main -- evaluator
@@ -80,7 +79,7 @@ git checkout official/main -- tests
 git checkout official/main -- docs/agent_api_contract.json docs/baseline_results.json docs/competition_specification.md docs/evaluation_config.json docs/submission_rules.md
 ```
 
-Expected: no `organizer/` directory and the existing `docs/superpowers/` files remain intact.
+Expected: no `organizer/` directory, the existing `docs/superpowers/` files remain intact, and the project-local `.gitignore` keeps `.worktrees/`, `.venv/`, generated catalog, and asset directories ignored.
 
 - [ ] **Step 3: Create a reproducible catalog downloader**
 

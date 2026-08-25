@@ -1,0 +1,24 @@
+.worktrees/
+.venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+.env
+*.log
+results.json
+dist/
+data/catalog.jsonl
+data/catalog.jsonl.gz
+data/releases/
+assets/model/
+assets/product_vectors/
+reports/experiments/*.json
+
+# Organizer-only code, private evaluation data, manifests, and build reports.
+organizer/
+secure/
+docs/audits/
+docs/data_selection_audit.md
+docs/participant_release_checklist.md
+tests/test_5core_builder.py
+tests/test_organizer_pipeline.py
