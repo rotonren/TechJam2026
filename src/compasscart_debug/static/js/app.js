@@ -204,6 +204,14 @@ function renderProduct(product, turn, ui) {
   details.append(createElement("p", {}, [createElement("strong", { textContent: "Features · " }), product.metadata_missing ? "未记录" : formatDetail(product.features)]));
   details.append(createElement("p", {}, [createElement("strong", { textContent: "Details · " }), product.metadata_missing ? "未记录" : formatDetail(product.details)]));
   row.append(main, meta, details);
+  if (existing) {
+    const reasonLabel = FEEDBACK_REASONS.find(([value]) => value === existing.reason)?.[1] || existing.reason;
+    const summary = createElement("div", { className: "feedback-summary" }, [
+      createElement("strong", { textContent: `已标记：${nullable(reasonLabel)}` }),
+    ]);
+    if (existing.note) summary.append(createElement("span", { textContent: ` · ${existing.note}` }));
+    row.append(summary);
+  }
   if (expanded) row.append(renderFeedbackEditor(product, turn, existing, ui));
   return row;
 }
@@ -213,18 +221,21 @@ function renderFeedbackEditor(product, turn, existing, ui) {
   const draft = ui.feedbackDrafts[key] || existing || {};
   const form = createElement("form", { className: "feedback-editor", dataset: { feedbackForm: key } });
   const fieldset = createElement("fieldset");
-  fieldset.append(createElement("legend", { textContent: existing ? "更新不准确标记" : "为什么不准确？" }));
+  fieldset.append(createElement("legend", { textContent: existing ? "更新不准确标记" : "原因" }));
   const reasonList = createElement("div", { className: "reason-list" });
+  const reasonSelect = createElement("select", { name: "reason", id: `feedback-reason-${key}`, "aria-label": "原因", required: true });
+  reasonSelect.append(createElement("option", { value: "", textContent: "选择原因", disabled: true, selected: !draft.reason }));
   for (const [value, label] of FEEDBACK_REASONS) {
-    const input = createElement("input", { type: "radio", name: `reason-${key}`, value, checked: draft.reason === value, required: true });
-    reasonList.append(createElement("label", { className: "reason-option" }, [input, createElement("span", { textContent: label })]));
+    reasonSelect.append(createElement("option", { value, textContent: label, selected: draft.reason === value }));
   }
+  reasonList.append(reasonSelect);
   fieldset.append(reasonList);
-  const note = createElement("textarea", { name: "note", rows: 2, maxlength: 2000, placeholder: "补充备注（可选）", textContent: draft.note || "" });
+  const noteLabel = createElement("label", { htmlFor: `feedback-note-${key}`, textContent: "备注" });
+  const note = createElement("textarea", { name: "note", id: `feedback-note-${key}`, rows: 2, maxlength: 2000, placeholder: "补充备注（可选）", textContent: draft.note || "", "aria-label": "备注" });
   const actions = createElement("div", { className: "feedback-actions" });
-  actions.append(button("清除", { className: "button button-quiet", dataset: { feedbackClear: key } }));
-  actions.append(button(existing ? "更新" : "保存", { className: "button button-primary", type: "submit" }));
-  form.append(fieldset, note, actions);
+  actions.append(button("清除标记", { className: "button button-quiet", dataset: { feedbackClear: key } }));
+  actions.append(button(existing ? "更新标记" : "保存标记", { className: "button button-primary", type: "submit" }));
+  form.append(fieldset, noteLabel, note, actions);
   return form;
 }
 
@@ -449,7 +460,7 @@ function wire(store, ui) {
     } else if (form.dataset.feedbackForm) {
       event.preventDefault();
       const [turnNumber, ...asinParts] = form.dataset.feedbackForm.split(":");
-      const reason = form.querySelector('input[type="radio"]:checked')?.value;
+      const reason = form.querySelector("select[name=reason]")?.value;
       const note = form.querySelector("textarea")?.value || "";
       ui.feedbackDrafts[form.dataset.feedbackForm] = { reason, note };
       await store.actions.feedback(Number(turnNumber), asinParts.join(":"), { incorrect: true, reason, note });

@@ -137,10 +137,13 @@ input::placeholder, textarea::placeholder { color: var(--quiet); }
 .feedback-editor { margin: 0 12px 12px 60px; padding: 10px; border-top: 1px solid var(--line); background: #fbfcfc; }
 .feedback-editor fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
 .feedback-editor legend { margin-bottom: 7px; color: var(--ink); font-size: 12px; font-weight: 750; }
-.reason-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
+.reason-list { display: grid; gap: 5px; }
+.reason-list select { min-height: 38px; padding: 6px 8px; font-size: 12px; }
 .reason-option { display: flex; align-items: flex-start; gap: 5px; min-height: 32px; padding: 5px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); background: #fff; font-size: 11px; font-weight: 550; }
 .reason-option input { width: 15px; min-height: 15px; margin-top: 1px; accent-color: var(--teal); }
 .feedback-editor textarea { min-height: 54px; margin-top: 8px; font-size: 12px; }
+.feedback-summary { margin: 0 12px 10px 60px; padding: 7px 9px; border-left: 3px solid var(--danger); color: var(--muted); background: var(--danger-soft); font-size: 11px; overflow-wrap: anywhere; }
+.feedback-summary strong { color: var(--danger); }
 .feedback-actions { display: flex; justify-content: flex-end; gap: 5px; margin-top: 7px; }
 .feedback-actions .button { min-height: 34px; padding: 6px 10px; font-size: 12px; }
 

@@ -16,7 +16,7 @@
         <label for="access-token">访问口令</label>
         <input id="access-token" name="token" type="password" autocomplete="current-password" required>
         <p id="login-error" class="form-error" role="alert" hidden></p>
-        <button class="button button-primary button-wide" type="submit">连接服务</button>
+        <button class="button button-primary button-wide" type="submit">进入调试台</button>
       </form>
     </div>
 
@@ -32,7 +32,7 @@
           <span id="turn-counter" class="turn-counter">0 / 10 turns</span>
         </div>
         <div class="header-actions" aria-label="会话命令">
-          <button class="button button-secondary" type="button" data-action="new-session">新建</button>
+          <button class="button button-secondary" type="button" data-action="new-session">新建会话</button>
           <button class="button button-secondary" type="button" data-action="import">导入</button>
           <button class="button button-secondary" type="button" data-action="export" disabled>导出</button>
           <button class="button button-secondary" type="button" data-action="archive" disabled>归档</button>
@@ -67,7 +67,7 @@
             <span>新建会话后，在下方发送第一条消息。</span>
           </div>
           <form id="message-composer" class="message-composer">
-            <label class="sr-only" for="message-input">发送消息</label>
+            <label class="sr-only" for="message-input">消息</label>
             <textarea id="message-input" name="message" rows="3" maxlength="10000" placeholder="输入购物需求" aria-describedby="composer-hint"></textarea>
             <div class="composer-footer">
               <span id="composer-hint" class="composer-hint">Enter 发送 · Shift+Enter 换行</span>
