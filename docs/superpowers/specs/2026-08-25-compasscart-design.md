@@ -84,14 +84,14 @@ user_message --> Intent & Slot Parser
                     v
         Buying / Browsing / Override Router
                     |
-          +---------+---------+
-          |                   |
-          v                   v
-    Hybrid Retriever    Question Value Estimator
-          |                   |
-          +---------+---------+
+                    v
+            Hybrid Retriever
+                    |
                     v
           Constraint-aware Ranker
+                    |
+                    v
+          Question Value Estimator
                     |
                     v
              Response Builder
@@ -148,7 +148,6 @@ class RetrievalPlan:
     hard_filters: dict[str, tuple[str, ...]]
     soft_preferences: dict[str, tuple[str, ...]]
     excluded_values: dict[str, tuple[str, ...]]
-    ask_attribute: str | None
     candidate_limit: int = 500
 ```
 
@@ -156,10 +155,11 @@ class RetrievalPlan:
 
 ```python
 state = dialog_engine.update(session_id, user_message, turn)
-plan = question_policy.build_plan(state, user_profile)
+plan = route_planner.build_plan(state, user_profile)
 candidates = catalog_index.search(plan)
 ranked = ranker.rank(candidates, state, user_profile)
-response = response_builder.build(ranked[:10], plan.ask_attribute)
+question = question_policy.choose(ranked, state)
+response = response_builder.build(ranked[:10], question)
 ```
 
 任何模块失败时，调用方只能使用该模块声明的 fallback，不能访问其内部实现临时修补。
@@ -294,8 +294,8 @@ Response Builder 不承担检索推理，只保证协议正确：
 2. `respond()` 接收 user_message、turn 和 top_k，并校验 turn 在 1 到 10。
 3. Parser 抽取意图和约束；Ledger 完成版本化合并。
 4. Router 根据查询具体度、约束数量和候选规模选择 Buying 或 Browsing。
-5. Question Value Estimator 基于上轮候选分布选择 ask_attribute。
-6. Retriever 产生最多 500 个候选；Ranker 输出完整排序。
+5. Retriever 产生最多 500 个候选；Ranker 输出完整排序。
+6. Question Value Estimator 基于本轮候选分布选择 ask_attribute。
 7. Response Builder 返回问题和 Top 10，并记录推荐 ID。
 8. Trace Sink 记录路由、约束、候选数量、组件耗时、提问属性和 fallback，但不记录密钥或敏感数据。
 
