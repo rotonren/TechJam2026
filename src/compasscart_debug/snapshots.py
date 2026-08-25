@@ -108,18 +108,25 @@ def snapshot_response(response: object) -> dict[str, object]:
         raise TypeError("Agent response is invalid.")
     if not isinstance(response["recommendations"], list):
         raise TypeError("Agent response is invalid.")
+    recommendations: list[dict[str, str]] = []
     for recommendation in response["recommendations"]:
         try:
-            _recommendation_identifier(recommendation)
+            identifier = _recommendation_identifier(recommendation)
         except (TypeError, ValueError) as error:
             raise ValueError("Agent response is invalid.") from error
+        recommendations.append({"parent_asin": identifier})
     if response["ask_attribute"] is not None and not isinstance(
         response["ask_attribute"], str
     ):
         raise TypeError("Agent response is invalid.")
     if not isinstance(response["usage"], Mapping):
         raise TypeError("Agent response is invalid.")
-    return {name: json_safe(response[name]) for name in _RESPONSE_FIELDS}
+    return {
+        "message": response["message"],
+        "ask_attribute": response["ask_attribute"],
+        "recommendations": recommendations,
+        "usage": json_safe(response["usage"]),
+    }
 
 
 def _recommendation_identifier(recommendation: object) -> str:

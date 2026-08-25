@@ -3,10 +3,11 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import math
 import os
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,11 @@ from .errors import RuntimeSetupError
 
 _MIN_TOKEN_LENGTH = 43
 _RUNTIME_ID = re.compile(r"[0-9a-f]{64}\Z")
+_DENSE_PATH_FIELDS = {
+    "dense_model_dir",
+    "dense_vector_dir",
+    "dense_manifest_path",
+}
 
 
 @dataclass(frozen=True)
@@ -33,7 +39,7 @@ class DebugConfig:
     runtime_root: Path | None = None
     host: str = "127.0.0.1"
     port: int = 8765
-    access_token: str = ""
+    access_token: str = field(default="", repr=False)
     max_body_bytes: int = 1_048_576
     max_import_bytes: int = 16_777_216
     command_queue_size: int = 32
@@ -166,7 +172,7 @@ def _positive_float(values: Mapping[str, str], name: str, default: float) -> flo
         value = float(raw)
     except ValueError as error:
         raise ValueError(f"{name} must be a positive number.") from error
-    if value <= 0:
+    if not math.isfinite(value) or value <= 0:
         raise ValueError(f"{name} must be a positive number.")
     return value
 
@@ -185,7 +191,7 @@ def _optional_sha256_file(path: Path | None) -> str | None:
 
 def _canonical_config_value(name: str, value: Any) -> Any:
     if isinstance(value, Path):
-        if name.startswith("dense_") and value.is_absolute():
+        if name in _DENSE_PATH_FIELDS:
             return None
         return value.as_posix()
     if isinstance(value, tuple):

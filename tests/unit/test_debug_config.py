@@ -48,6 +48,24 @@ def test_from_env_uses_fixed_deployment_defaults() -> None:
     assert config.static_root.parent.name == "compasscart_debug"
 
 
+def test_config_repr_excludes_access_token() -> None:
+    token = "secret-token-" + "t" * 43
+    config = DebugConfig.from_env({"COMPASSCART_DEBUG_TOKEN": token})
+
+    assert token not in repr(config)
+
+
+@pytest.mark.parametrize("timeout", ["nan", "inf", "-inf"])
+def test_from_env_rejects_non_finite_command_timeout(timeout: str) -> None:
+    with pytest.raises(ValueError, match="positive number"):
+        DebugConfig.from_env(
+            {
+                "COMPASSCART_DEBUG_TOKEN": "t" * 43,
+                "COMPASSCART_DEBUG_COMMAND_TIMEOUT_SECONDS": timeout,
+            }
+        )
+
+
 def test_from_env_preserves_explicit_catalog_and_asset_paths(tmp_path: Path) -> None:
     catalog = tmp_path / "catalog.jsonl"
     assets = tmp_path / "assets"
@@ -89,6 +107,20 @@ def test_runtime_identity_ignores_absolute_dense_paths(tmp_path: Path) -> None:
     assert left.config_sha256 == right.config_sha256
     assert left.catalog_sha256 == right.catalog_sha256
     assert left.assets_sha256 == right.assets_sha256
+
+
+def test_runtime_identity_ignores_cross_platform_dense_path_spellings(
+    tmp_path: Path,
+) -> None:
+    catalog = tmp_path / "catalog.jsonl"
+    catalog.write_text('{"parent_asin":"A"}\n', encoding="utf-8")
+    windows_style = RuntimeConfig(dense_model_dir=Path("C:/one"))
+    posix_style = RuntimeConfig(dense_model_dir=Path("/two"))
+
+    left = RuntimeIdentity.build("v1", catalog, windows_style, None, True)
+    right = RuntimeIdentity.build("v1", catalog, posix_style, None, True)
+
+    assert left.config_sha256 == right.config_sha256
 
 
 @pytest.mark.parametrize("manifest", [None, Path("does-not-exist")])

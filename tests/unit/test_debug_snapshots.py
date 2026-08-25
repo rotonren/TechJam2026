@@ -162,6 +162,23 @@ def test_snapshot_response_keeps_only_official_agent_response_fields() -> None:
     }
 
 
+def test_snapshot_response_strips_unofficial_recommendation_fields() -> None:
+    response = {
+        "message": "Matches",
+        "recommendations": [
+            {"parent_asin": "A", "score": 0.9, "source_scores": {"dense": 0.9}},
+            {"parent_asin": "B", "unexpected": "discard"},
+        ],
+        "ask_attribute": None,
+        "usage": {"prompt_tokens": 0},
+    }
+
+    assert snapshot_response(response)["recommendations"] == [
+        {"parent_asin": "A"},
+        {"parent_asin": "B"},
+    ]
+
+
 @pytest.mark.parametrize(
     "response", [{}, {"message": "only"}, {"message": object(), "recommendations": []}]
 )
