@@ -302,7 +302,7 @@ Implement typed CRUD for session create/list/get/patch, dirty/read-only flags, t
 
 - [ ] **Step 5: Add feedback/persistence/concurrency tests**
 
-Test reopen persistence, feedback update/clear, rejection of feedback for an ASIN absent from the completed turn, turn-10 enforcement, two concurrent `BEGIN IMMEDIATE` reservations yielding different turns, rollback on completion failure, and newer-schema rejection.
+Test reopen persistence, feedback update/clear, rejection of feedback for an ASIN absent from the completed turn, turn-10 enforcement, and rollback on completion failure. For two concurrent different requests against one ready session, assert exactly one `BEGIN IMMEDIATE` reservation creates the next pending turn and the other receives `UnresolvedTurnError`; for two concurrent identical request IDs/messages, assert both callers observe the same single reserved row. No concurrency case may create duplicate turn numbers or skip an unresolved turn. Also test newer-schema rejection.
 
 - [ ] **Step 6: Verify GREEN and commit**
 
