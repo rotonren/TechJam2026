@@ -78,6 +78,21 @@ def test_representative_ids_reject_duplicate_parent_asins() -> None:
         representative_ids(records, count=4, seed=20260826)
 
 
+def test_representative_ids_validate_population_and_coverage_boundaries() -> None:
+    records = make_products(4)
+
+    assert representative_ids([], count=0, seed=20260826) == []
+
+    with pytest.raises(ValueError, match="count"):
+        representative_ids(records, count=-1, seed=20260826)
+
+    with pytest.raises(ValueError, match="count"):
+        representative_ids(records, count=3, seed=20260826)
+
+    with pytest.raises(ValueError, match="count"):
+        representative_ids(records, count=5, seed=20260826)
+
+
 def test_representative_ids_match_quota_greedy_selection_and_stable_order() -> None:
     records = [
         ProxyProduct("A0", "a", "low", "high", "full", "easy"),
@@ -137,17 +152,27 @@ def test_stress_ids_are_disjoint_unique_and_include_a_rare_category() -> None:
 
 def test_stress_ids_use_full_population_frequencies_and_are_order_independent() -> None:
     records = [
-        ProxyProduct("A0", "a", "low", "high", "full", "easy"),
-        ProxyProduct("A1", "a", "high", "low", "sparse", "medium"),
-        ProxyProduct("B0", "b", "low", "low", "full", "hard"),
-        ProxyProduct("B1", "b", "high", "high", "sparse", "easy"),
-        ProxyProduct("B2", "b", "high", "high", "full", "medium"),
+        ProxyProduct("R0", "c2", "p2", "o2", "m2", "easy"),
+        ProxyProduct("R1", "c1", "p2", "o0", "m2", "easy"),
+        ProxyProduct("R2", "c1", "p0", "o2", "m0", "easy"),
+        ProxyProduct("R3", "c1", "p1", "o2", "m1", "easy"),
+        ProxyProduct("R4", "c1", "p1", "o0", "m1", "easy"),
+        ProxyProduct("R5", "c0", "p1", "o0", "m2", "easy"),
+        ProxyProduct("R6", "c0", "p1", "o1", "m1", "easy"),
+        ProxyProduct("R7", "c1", "p1", "o0", "m2", "easy"),
+        ProxyProduct("R8", "c1", "p2", "o2", "m0", "easy"),
+        ProxyProduct("R9", "c2", "p0", "o1", "m2", "easy"),
     ]
+    excluded = {"R0", "R1", "R2", "R3"}
 
-    selected = stress_ids(records, count=3, seed=20260826, excluded=set())
+    selected = stress_ids(records, count=6, seed=20260826, excluded=excluded)
 
-    assert selected == ["A1", "B0", "B1"]
-    assert stress_ids(list(reversed(records)), count=3, seed=20260826, excluded=set()) == selected
+    # Candidate-only frequencies would incorrectly order R4 before R5.
+    assert selected == ["R6", "R5", "R4", "R7", "R9", "R8"]
+    assert (
+        stress_ids(list(reversed(records)), count=6, seed=20260826, excluded=excluded)
+        == selected
+    )
 
 
 def test_stress_ids_reject_duplicate_parent_asins() -> None:
