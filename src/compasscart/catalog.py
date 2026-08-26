@@ -24,7 +24,8 @@ from .normalization import (
 class CatalogIndex:
     def __init__(self, catalog_path: str | Path, *, enable_fts: bool = True) -> None:
         self.catalog_path = Path(catalog_path)
-        self.connection = sqlite3.connect(":memory:")
+        # An empty filename gives SQLite an automatically deleted temporary database.
+        self.connection = sqlite3.connect("")
         self.products: dict[str, dict[str, object]] = {}
         self.valid_ids: set[str] = set()
         self.attributes: dict[str, dict[str, tuple[str, ...]]] = {}
@@ -71,10 +72,6 @@ class CatalogIndex:
                 self.searchable_terms[parent_asin] = searchable_terms
                 for term in category_terms:
                     self.category_term_inverted[term].add(parent_asin)
-                if not self._fts_enabled:
-                    self.field_terms[parent_asin] = tuple(
-                        set(terms(field)) for field in fields
-                    )
                 for attribute, values in attributes.items():
                     for value in values:
                         self.attribute_inverted[attribute][value].add(parent_asin)
@@ -201,14 +198,6 @@ class CatalogIndex:
 
         return self._fallback_search(plan, query_terms, limit)
 
-    def _ensure_field_terms(self) -> None:
-        if self.field_terms:
-            return
-        self.field_terms = {
-            parent_asin: tuple(set(terms(field)) for field in searchable_fields(product))
-            for parent_asin, product in self.products.items()
-        }
-
     def _matches_hard(self, parent_asin: str, plan: RetrievalPlan) -> bool:
         constraints = plan.effective_hard_constraints()
         if constraints:
@@ -227,16 +216,19 @@ class CatalogIndex:
     def _fallback_search(
         self, plan: RetrievalPlan, query_terms: list[str], limit: int
     ) -> list[Candidate]:
-        self._ensure_field_terms()
-        query = set(query_terms)
+        query = frozenset(query_terms)
         field_weights = (6.0, 4.0, 2.5, 2.5, 1.5, 1.0)
         scored: list[tuple[float, float, str]] = []
-        for parent_asin, fields in self.field_terms.items():
+        for parent_asin, product in self.products.items():
             if not self._matches_hard(parent_asin, plan):
                 continue
+            if not query.intersection(self.searchable_terms[parent_asin]):
+                continue
             score = sum(
-                weight * len(query.intersection(field))
-                for weight, field in zip(field_weights, fields, strict=True)
+                weight * len(query.intersection(terms(field)))
+                for weight, field in zip(
+                    field_weights, searchable_fields(product), strict=True
+                )
             )
             if score > 0:
                 scored.append((score, self.quality[parent_asin], parent_asin))

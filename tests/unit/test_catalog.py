@@ -16,12 +16,13 @@ def test_catalog_returns_valid_unique_matches(fixture_catalog_path):
     assert all(item.parent_asin in index.valid_ids for item in matches)
 
 
-def test_catalog_only_builds_python_term_index_when_fts_is_unavailable(
-    fixture_catalog_path,
+@pytest.mark.parametrize("enable_fts", (True, False))
+def test_catalog_does_not_build_a_duplicate_field_term_index(
+    fixture_catalog_path, enable_fts
 ):
-    index = CatalogIndex(fixture_catalog_path)
+    index = CatalogIndex(fixture_catalog_path, enable_fts=enable_fts)
 
-    assert bool(index.field_terms) is not index._fts_enabled
+    assert index.field_terms == {}
 
 
 def test_attribute_lookup_filters_material(fixture_catalog_path):
@@ -41,6 +42,18 @@ def test_catalog_builds_shared_semantic_caches_independent_of_fts(
     assert index.searchable_terms["SHOE1"] == searchable_term_set(product)
     assert index.category_term_inverted["shoe"] == {"SHOE1"}
     assert index.category_ids("athletic shoes") == {"SHOE1"}
+
+
+def test_catalog_searchable_cache_reuses_token_objects(fixture_catalog_path):
+    index = CatalogIndex(fixture_catalog_path)
+
+    shoe_token = next(
+        token for token in index.searchable_terms["SHOE1"] if token == "clothing"
+    )
+    dress_token = next(
+        token for token in index.searchable_terms["DRESS1"] if token == "clothing"
+    )
+    assert shoe_token is dress_token
 
 
 def test_catalog_matches_and_violations_use_shared_semantics(fixture_catalog_path):

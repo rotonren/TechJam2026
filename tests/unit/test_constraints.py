@@ -64,6 +64,14 @@ def test_category_not_in_negates_matches_but_empty_availability_never_matches():
     assert not matches_constraint({}, {"category": ()}, excluded)
 
 
+def test_empty_category_constraint_never_matches_not_in():
+    assert not matches_constraint(
+        {},
+        {"category": ("Shoes",)},
+        _constraint("category", "", operator="not_in"),
+    )
+
+
 def test_soft_clarification_matches_open_text_but_hard_message_stays_structured():
     product = {
         "features": ["Machine washable with reinforced seams"],
@@ -101,6 +109,16 @@ def test_not_in_matches_a_present_non_excluded_value():
     assert matches_constraint(
         {}, {"color": ("blue",)}, _constraint("color", "red", operator="not_in")
     )
+
+
+def test_empty_exact_values_fail_closed_for_all_set_operators():
+    assert not matches_constraint(
+        {}, {"color": ("",)}, _constraint("color", "red", operator="not_in")
+    )
+    assert not matches_constraint(
+        {}, {"color": ("blue",)}, _constraint("color", "", operator="not_in")
+    )
+    assert not matches_constraint({}, {"color": ("",)}, _constraint("color", ""))
 
 
 def test_numeric_budget_bounds_and_between_are_inclusive():

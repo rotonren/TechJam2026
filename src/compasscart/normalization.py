@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+import sys
+from collections.abc import Iterable, Mapping
 
 TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
 WHITESPACE_RE = re.compile(r"\s+")
@@ -91,9 +92,16 @@ CATEGORY_PLURAL_EXCEPTIONS = {
 def flatten_text(value: object) -> str:
     if value is None:
         return ""
-    if isinstance(value, dict):
-        return " ".join(f"{key} {flatten_text(item)}" for key, item in value.items())
-    if isinstance(value, (list, tuple, set)):
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return bytes(value).decode("utf-8", errors="replace")
+    if isinstance(value, Mapping):
+        return " ".join(
+            f"{flatten_text(key)} {flatten_text(item)}"
+            for key, item in value.items()
+        )
+    if isinstance(value, Iterable):
         return " ".join(flatten_text(item) for item in value)
     return str(value)
 
@@ -120,17 +128,23 @@ def _singular_category_term(token: str) -> str:
     if token in CATEGORY_PLURAL_EXCEPTIONS:
         return CATEGORY_PLURAL_EXCEPTIONS[token]
     if len(token) > 3 and token.endswith("ies"):
-        return f"{token[:-3]}y"
-    if len(token) > 3 and token.endswith("ses"):
-        return token[:-2]
-    if len(token) > 2 and token.endswith("s") and not token.endswith("ss"):
-        return token[:-1]
-    return token
+        singular = f"{token[:-3]}y"
+    elif (len(token) > 3 and token.endswith("ses")) or (
+        len(token) > 4 and token.endswith(("ches", "shes", "xes", "zes"))
+    ):
+        singular = token[:-2]
+    elif len(token) > 2 and token.endswith("s") and not token.endswith("ss"):
+        singular = token[:-1]
+    else:
+        singular = token
+    return sys.intern(singular)
 
 
 def terms(text: object) -> list[str]:
     return list(
-        dict.fromkeys(token.lower() for token in TOKEN_RE.findall(flatten_text(text)))
+        dict.fromkeys(
+            sys.intern(token.lower()) for token in TOKEN_RE.findall(flatten_text(text))
+        )
     )
 
 

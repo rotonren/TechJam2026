@@ -34,12 +34,15 @@ def matches_constraint(
             if category_terms is not None
             else category_term_set(attributes.get("category", ()))
         )
-        match = any(
-            wanted and wanted.issubset(available)
+        requested = tuple(
+            wanted
             for value in constraint.values()
             if (wanted := category_term_set(value))
         )
-        return _apply_set_operator(match, bool(available), constraint)
+        if not available or not requested:
+            return False
+        match = any(wanted.issubset(available) for wanted in requested)
+        return _apply_set_operator(match, constraint)
 
     if constraint.source == "clarification" and not constraint.is_hard:
         available = frozenset(
@@ -47,18 +50,29 @@ def matches_constraint(
             if searchable_terms is not None
             else searchable_term_set(product)
         )
-        match = any(
-            wanted and wanted.issubset(available)
+        requested = tuple(
+            wanted
             for value in constraint.values()
             if (wanted := frozenset(terms(value)))
         )
-        return _apply_set_operator(match, bool(available), constraint)
+        if not available or not requested:
+            return False
+        match = any(wanted.issubset(available) for wanted in requested)
+        return _apply_set_operator(match, constraint)
 
     values = _product_values(attributes, constraint.attribute)
     if not values:
         return False
-    wanted = {normalize_value(value) for value in constraint.values()}
-    normalized_values = {normalize_value(value) for value in values}
+    wanted = {
+        normalized
+        for value in constraint.values()
+        if (normalized := normalize_value(value))
+    }
+    normalized_values = {
+        normalized for value in values if (normalized := normalize_value(value))
+    }
+    if not wanted or not normalized_values:
+        return False
     if constraint.operator in {"eq", "in"}:
         return bool(normalized_values & wanted)
     if constraint.operator == "not_in":
@@ -88,11 +102,7 @@ def hard_constraint_violations(
     )
 
 
-def _apply_set_operator(
-    match: bool, has_available: bool, constraint: Constraint
-) -> bool:
-    if not has_available:
-        return False
+def _apply_set_operator(match: bool, constraint: Constraint) -> bool:
     if constraint.operator in {"eq", "in"}:
         return match
     if constraint.operator == "not_in":
