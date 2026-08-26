@@ -269,7 +269,7 @@ def select_proxy_rows(
     if audit_label is not None:
         if audit_label not in {"baseline", "final"}:
             raise ValueError("audit label must be baseline or final")
-        if folds is not None and sorted(set(folds)) != [5]:
+        if folds is not None and folds != [5]:
             raise ValueError("representative audit is restricted to fold 5")
         audit_rows = [row for row in rows if row.get("proxy_fold") == 5]
         if not audit_rows:
@@ -287,11 +287,21 @@ def select_proxy_rows(
     return selected
 
 
+def _contains_sessions(value: object) -> bool:
+    if isinstance(value, dict):
+        return "sessions" in value or any(_contains_sessions(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_sessions(item) for item in value)
+    return False
+
+
 def write_audit_report(destination: Path, result: dict[str, object], metadata: dict[str, object]) -> None:
     """Write a one-shot audit report that can never include session-level evidence."""
-    destination.parent.mkdir(parents=True, exist_ok=True)
     aggregate = {key: value for key, value in result.items() if key != "sessions"}
+    if _contains_sessions(metadata) or _contains_sessions(aggregate):
+        raise ValueError("audit report must not contain sessions")
     payload = {**metadata, "aggregate": aggregate}
+    destination.parent.mkdir(parents=True, exist_ok=True)
     with destination.open("x", encoding="utf-8", newline="\n") as handle:
         json.dump(payload, handle, sort_keys=True, indent=2)
         handle.write("\n")
@@ -340,17 +350,7 @@ def _write_normal_report(destination: Path, report: dict[str, object]) -> None:
     )
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Run sealed CompassCart proxy suites")
-    parser.add_argument("--catalog", type=Path, default=Path("data/catalog.jsonl"))
-    parser.add_argument("--proxy-root", type=Path, required=True)
-    parser.add_argument("--suite", choices=("representative", "stress"), required=True)
-    parser.add_argument("--folds", type=int, nargs="+")
-    parser.add_argument("--audit-label", choices=("baseline", "final"))
-    parser.add_argument("--agent", default="agent:Agent")
-    parser.add_argument("--output", type=Path, required=True)
-    args = parser.parse_args()
-
+def run_proxy(args: argparse.Namespace) -> None:
     _manifest, rows = load_proxy_suite(args.proxy_root, args.suite)
     selections = select_proxy_rows(rows, args.suite, args.folds, args.audit_label)
     catalog_ids, categories, products = catalog_index(args.catalog)
@@ -361,7 +361,6 @@ def main() -> None:
     config_hash = ""
     total_fallback_count = 0
     total_invalid_count = 0
-    total_possible_turns = 0
     audit_result: dict[str, object] | None = None
     for fold, selected_rows in selections:
         agent = agent_class(args.catalog)
@@ -371,7 +370,6 @@ def main() -> None:
         invalid_count = int(result["invalid_response_count"])
         total_fallback_count += fallback_count
         total_invalid_count += invalid_count
-        total_possible_turns += len(selected_rows) * MAX_TURNS
         aggregate = {key: value for key, value in result.items() if key != "sessions"}
         fold_report: dict[str, object] = {
             "fold": fold,
@@ -404,12 +402,15 @@ def main() -> None:
     if args.audit_label is not None:
         if audit_result is None:
             raise RuntimeError("audit selection did not produce a result")
+        if total_fallback_count or total_invalid_count:
+            raise SystemExit(1)
         write_audit_report(args.output, audit_result, {**metadata, "audit_label": args.audit_label})
         print(json.dumps({**metadata, "audit_label": args.audit_label, "aggregate": {key: value for key, value in audit_result.items() if key != "sessions"}}, sort_keys=True))
         return
 
     scores = [float(item["aggregate"]["recommended_technical_score"]) for item in fold_reports]
-    invalid_rate = total_invalid_count / total_possible_turns if total_possible_turns else 0.0
+    selected_sample_count = sum(len(selected_rows) for _, selected_rows in selections)
+    invalid_rate = total_invalid_count / max(selected_sample_count, 1)
     report = {
         **metadata,
         "folds": fold_reports,
@@ -422,6 +423,18 @@ def main() -> None:
     print(json.dumps({key: value for key, value in report.items() if key != "folds"}, sort_keys=True))
     if total_fallback_count or total_invalid_count:
         raise SystemExit(1)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run sealed CompassCart proxy suites")
+    parser.add_argument("--catalog", type=Path, default=Path("data/catalog.jsonl"))
+    parser.add_argument("--proxy-root", type=Path, required=True)
+    parser.add_argument("--suite", choices=("representative", "stress"), required=True)
+    parser.add_argument("--folds", type=int, nargs="+")
+    parser.add_argument("--audit-label", choices=("baseline", "final"))
+    parser.add_argument("--agent", default="agent:Agent")
+    parser.add_argument("--output", type=Path, required=True)
+    run_proxy(parser.parse_args())
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -116,6 +117,28 @@ def test_write_audit_report_is_aggregate_only_and_exclusive(tmp_path: Path):
         write_audit_report(destination, result, {"suite": "representative"})
 
 
+@pytest.mark.parametrize(
+    ("result", "metadata"),
+    [
+        ({"metric": {"sessions": ["secret"]}, "sessions": []}, {}),
+        ({"metric": [{"nested": {"sessions": ["secret"]}}], "sessions": []}, {}),
+        ({"sessions": []}, {"sessions": ["secret"]}),
+        ({"sessions": []}, {"nested": {"sessions": ["secret"]}}),
+    ],
+)
+def test_write_audit_report_rejects_nested_sessions_without_creating_destination(
+    tmp_path: Path, result: dict, metadata: dict
+):
+    from tools.run_proxy import write_audit_report
+
+    destination = tmp_path / "audit.json"
+
+    with pytest.raises(ValueError, match="sessions"):
+        write_audit_report(destination, result, metadata)
+
+    assert not destination.exists()
+
+
 def test_load_proxy_suite_validates_manifest_hash_and_count(tmp_path: Path):
     from tools.run_proxy import load_proxy_suite
 
@@ -136,6 +159,25 @@ def test_load_proxy_suite_validates_manifest_hash_and_count(tmp_path: Path):
         load_proxy_suite(tmp_path, "representative")
 
 
+def test_load_proxy_suite_rejects_matching_hash_with_wrong_manifest_count(tmp_path: Path):
+    from tools.run_proxy import load_proxy_suite
+
+    dataset = tmp_path / "representative.jsonl"
+    dataset.write_text('{"sample_id":"one"}\n', encoding="utf-8")
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "counts": {"representative": 2},
+                "output_hashes": {"representative.jsonl": sha256_file(dataset)},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="count"):
+        load_proxy_suite(tmp_path, "representative")
+
+
 def test_select_proxy_rows_enforces_dev_audit_and_stress_guards():
     from tools.run_proxy import select_proxy_rows
 
@@ -151,6 +193,16 @@ def test_select_proxy_rows_enforces_dev_audit_and_stress_guards():
         select_proxy_rows(stress, "stress", None, "baseline")
     with pytest.raises(ValueError):
         select_proxy_rows([], "stress", None, None)
+
+
+@pytest.mark.parametrize("folds", ([5, 5], [5, 1], [1, 5], [5, 5, 5]))
+def test_audit_folds_must_be_exactly_one_fold_five(folds: list[int]):
+    from tools.run_proxy import select_proxy_rows
+
+    rows = [{"sample_id": f"r{fold}", "proxy_fold": fold} for fold in range(1, 6)]
+
+    with pytest.raises(ValueError, match="fold 5"):
+        select_proxy_rows(rows, "representative", folds, "baseline")
 
 
 def test_evaluate_proxy_matches_official_metrics_and_counts_invalid_responses():
@@ -217,6 +269,103 @@ def test_evaluate_proxy_counts_exception_once_and_preserves_later_usage():
 
     assert result["invalid_response_count"] == 1
     assert result["reported_token_usage"] == {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+
+
+def test_evaluate_proxy_does_not_count_target_before_override_and_stops_after():
+    from tools.run_proxy import evaluate_proxy
+
+    sample = _sample("intent_override")
+    messages: list[tuple[int, str]] = []
+
+    class OverrideAgent:
+        def reset(self, session_id: str, user_profile: dict) -> None:
+            pass
+
+        def respond(self, session_id: str, user_message: str, turn: int, top_k: int) -> dict:
+            messages.append((turn, user_message))
+            return {"message": "ok", "ask_attribute": None, "recommendations": ["A"]}
+
+    result = evaluate_proxy(
+        OverrideAgent(),
+        [sample],
+        {"A"},
+        {"A": ["Clothing", "Shirts"]},
+        {"A": {"parent_asin": "A"}},
+    )
+
+    assert [turn for turn, _ in messages] == [1, 2, 3]
+    assert "soft blue" in messages[0][1]
+    assert messages[2][1] == sample["behavior"]["override"]["message"]
+    assert result["sessions"] == [{"sample_id": "proxy_sample_1", "scenario_type": "intent_override", "hit": True, "first_hit_turn": 3, "best_rank": 1, "reciprocal_rank": 1.0}]
+
+
+def _run_args(tmp_path: Path, *, audit_label: str | None) -> SimpleNamespace:
+    return SimpleNamespace(
+        catalog=tmp_path / "catalog.jsonl",
+        proxy_root=tmp_path / "proxy",
+        suite="representative",
+        folds=None,
+        audit_label=audit_label,
+        agent="test:Agent",
+        output=tmp_path / ("audit.json" if audit_label else "report.json"),
+    )
+
+
+def _patch_small_proxy_run(
+    monkeypatch: pytest.MonkeyPatch, *, invalid_count: int, fallback_count: int = 0
+) -> None:
+    from tools import run_proxy
+
+    result = {
+        "recommended_technical_score": 0.5,
+        "invalid_response_count": invalid_count,
+        "sessions": [{"sample_id": "one", "scenario_type": "buying"}],
+    }
+    monkeypatch.setattr(run_proxy, "load_proxy_suite", lambda root, suite: ({}, [{"sample_id": "one"}]))
+    monkeypatch.setattr(run_proxy, "select_proxy_rows", lambda rows, suite, folds, audit: [(1, rows)])
+    monkeypatch.setattr(run_proxy, "catalog_index", lambda path: (set(), {}, {}))
+    monkeypatch.setattr(run_proxy, "_load_agent", lambda spec: lambda catalog: object())
+    monkeypatch.setattr(run_proxy, "evaluate_proxy", lambda *args: result)
+    monkeypatch.setattr(
+        run_proxy, "_trace_details", lambda agent: ({"count": 0}, fallback_count, {})
+    )
+    monkeypatch.setattr(run_proxy, "sha256_file", lambda path: "hash")
+    monkeypatch.setattr(run_proxy, "_git_commit", lambda: "commit")
+    monkeypatch.setattr(run_proxy, "_config_hash", lambda agent: "config")
+
+
+@pytest.mark.parametrize(("invalid_count", "fallback_count"), [(1, 0), (0, 1)])
+def test_run_proxy_audit_failure_does_not_create_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, invalid_count: int, fallback_count: int
+):
+    from tools.run_proxy import run_proxy
+
+    _patch_small_proxy_run(
+        monkeypatch, invalid_count=invalid_count, fallback_count=fallback_count
+    )
+    args = _run_args(tmp_path, audit_label="baseline")
+
+    with pytest.raises(SystemExit, match="1"):
+        run_proxy(args)
+
+    assert not args.output.exists()
+
+
+def test_run_proxy_non_audit_failure_writes_diagnostic_and_uses_sample_invalid_rate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from tools.run_cv import selection_score
+    from tools.run_proxy import run_proxy
+
+    _patch_small_proxy_run(monkeypatch, invalid_count=1)
+    args = _run_args(tmp_path, audit_label=None)
+
+    with pytest.raises(SystemExit, match="1"):
+        run_proxy(args)
+
+    report = json.loads(args.output.read_text(encoding="utf-8"))
+    assert report["selection_score"] == selection_score([0.5], 0.0, 1.0)
+    assert report["folds"][0]["sessions"] == [{"sample_id": "one", "scenario_type": "buying"}]
 
 
 def test_frozen_evaluator_hash_is_unchanged():
