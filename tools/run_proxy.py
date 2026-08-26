@@ -583,14 +583,15 @@ def _reserve_audit_output(proxy_root: Path, audit_label: str, output: Path) -> P
     created = False
     try:
         handle = lock.open("x", encoding="utf-8")
-        created = True
+    except FileExistsError as error:
+        raise FileExistsError("sealed audit reservation already exists") from error
+    created = True
+    try:
         handle.write("reserved\n")
         handle.flush()
         os.fsync(handle.fileno())
         handle.close()
         handle = None
-    except FileExistsError as error:
-        raise FileExistsError("sealed audit reservation already exists") from error
     except BaseException:
         if handle is not None:
             try:

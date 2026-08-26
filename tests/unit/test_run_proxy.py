@@ -929,3 +929,31 @@ def test_reserve_audit_output_preserves_preexisting_lock(tmp_path: Path):
         _reserve_audit_output(tmp_path / "proxy", "baseline", output)
 
     assert lock.read_text(encoding="utf-8") == "other reservation\n"
+
+
+def test_reserve_audit_output_cleans_owned_lock_after_post_create_file_exists_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from tools import run_proxy
+
+    output = tmp_path / "proxy" / "audit" / "baseline.json"
+    original_open = Path.open
+
+    class FileExistsWriteLock:
+        def __init__(self, handle: object) -> None:
+            self.handle = handle
+
+        def write(self, value: str) -> int:
+            raise FileExistsError("write collision")
+
+        def close(self) -> None:
+            self.handle.close()
+
+    def file_exists_write_open(path: Path, *args: object, **kwargs: object):
+        return FileExistsWriteLock(original_open(path, *args, **kwargs))
+
+    monkeypatch.setattr(Path, "open", file_exists_write_open)
+    with pytest.raises(FileExistsError, match="write collision"):
+        run_proxy._reserve_audit_output(tmp_path / "proxy", "baseline", output)
+
+    assert not output.with_suffix(".lock").exists()
