@@ -124,6 +124,8 @@ def test_write_audit_report_is_aggregate_only_and_exclusive(tmp_path: Path):
         ({"metric": [{"nested": {"sessions": ["secret"]}}], "sessions": []}, {}),
         ({"sessions": []}, {"sessions": ["secret"]}),
         ({"sessions": []}, {"nested": {"sessions": ["secret"]}}),
+        ({"metric": ({"sessions": ["secret"]},), "sessions": []}, {}),
+        ({"sessions": []}, {"nested": ({"sessions": ["secret"]},)}),
     ],
 )
 def test_write_audit_report_rejects_nested_sessions_without_creating_destination(

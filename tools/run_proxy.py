@@ -290,7 +290,7 @@ def select_proxy_rows(
 def _contains_sessions(value: object) -> bool:
     if isinstance(value, dict):
         return "sessions" in value or any(_contains_sessions(item) for item in value.values())
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         return any(_contains_sessions(item) for item in value)
     return False
 
