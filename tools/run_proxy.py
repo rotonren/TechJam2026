@@ -493,35 +493,17 @@ def _validate_audit_aggregate(aggregate: dict[str, object], metadata: dict[str, 
     ):
         raise ValueError("audit invalid response count is invalid")
     if count == 0:
-        expected_hit_rate = expected_mrr = expected_efficiency = expected_score = 0.0
-        expected_mttc = None
+        expected_efficiency = expected_score = 0.0
     else:
-        expected_hit_rate = round(
-            sum(float(scenarios[name]["hit_rate_at_10"]) * scenario_counts[name] for name in AUDIT_SCENARIOS) / count,
-            6,
-        )
-        expected_mrr = round(
-            sum(float(scenarios[name]["mrr"]) * scenario_counts[name] for name in AUDIT_SCENARIOS) / count,
-            6,
-        )
-        expected_mttc = round(
-            sum(
-                float(scenarios[name]["mttc"]) * scenario_counts[name]
-                for name in AUDIT_SCENARIOS
-                if scenario_counts[name]
-            ) / count,
-            6,
-        )
-        expected_efficiency = round(max(0.0, min(1.0, (11.0 - float(expected_mttc)) / 10.0)), 6)
+        expected_efficiency = round(max(0.0, min(1.0, (11.0 - float(mttc)) / 10.0)), 6)
         expected_score = round(
-            0.50 * expected_hit_rate + 0.30 * expected_mrr + 0.20 * expected_efficiency,
+            0.50 * float(aggregate["hit_rate_at_10"])
+            + 0.30 * float(aggregate["mrr"])
+            + 0.20 * expected_efficiency,
             6,
         )
     if (
-        aggregate["hit_rate_at_10"] != expected_hit_rate
-        or aggregate["mrr"] != expected_mrr
-        or aggregate["mttc"] != expected_mttc
-        or aggregate["efficiency"] != expected_efficiency
+        aggregate["efficiency"] != expected_efficiency
         or aggregate["recommended_technical_score"] != expected_score
     ):
         raise ValueError("audit aggregate metrics are inconsistent")

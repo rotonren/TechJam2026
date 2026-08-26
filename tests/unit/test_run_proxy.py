@@ -1033,6 +1033,51 @@ def test_audit_report_accepts_weighted_metric_summary_at_write_boundary(tmp_path
     assert payload["aggregate"]["recommended_technical_score"] == 0.4525
 
 
+def test_audit_report_accepts_official_metrics_with_subgroup_rounding_drift(tmp_path: Path):
+    from evaluator.local_evaluator import metric_summary
+    from tools.run_proxy import write_audit_report
+
+    groups = {
+        scenario: [
+            {
+                "hit": index < hit_count,
+                "reciprocal_rank": 1.0 if index < hit_count else 0.0,
+                "first_hit_turn": 1 if index < hit_count else None,
+            }
+            for index in range(sample_count)
+        ]
+        for scenario, sample_count, hit_count in (
+            ("boundary", 3, 0),
+            ("browsing", 7, 0),
+            ("buying", 11, 0),
+            ("intent_override", 13, 2),
+        )
+    }
+    scenario_metrics = {scenario: metric_summary(sessions) for scenario, sessions in groups.items()}
+    overall = metric_summary([session for sessions in groups.values() for session in sessions])
+    recombined_hit_rate = round(
+        sum(metric["hit_rate_at_10"] * metric["sample_count"] for metric in scenario_metrics.values())
+        / overall["sample_count"],
+        6,
+    )
+    assert recombined_hit_rate != overall["hit_rate_at_10"]
+    efficiency = round(max(0.0, min(1.0, (11.0 - float(overall["mttc"])) / 10.0)), 6)
+    result = {
+        **overall,
+        "efficiency": efficiency,
+        "recommended_technical_score": round(
+            0.50 * overall["hit_rate_at_10"] + 0.30 * overall["mrr"] + 0.20 * efficiency,
+            6,
+        ),
+        "reported_token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        "scenario_metrics": scenario_metrics,
+        "invalid_response_count": 0,
+        "sessions": [],
+    }
+
+    write_audit_report(tmp_path / "audit.json", result, _legal_audit_metadata())
+
+
 @pytest.mark.parametrize(
     "mutate",
     [
