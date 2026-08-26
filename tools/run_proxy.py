@@ -9,10 +9,13 @@ import importlib
 import json
 import math
 import os
+import secrets
+import stat
 import statistics
 import subprocess
 import tempfile
 from collections import Counter, defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -105,6 +108,13 @@ class _CallEvidence:
     session_id: str
     turn: int
     trace_required: bool
+
+
+@dataclass(frozen=True)
+class _AuditLockOwnership:
+    path: Path
+    token: str
+    identity: tuple[int, int, int, int, int]
 
 
 def opaque_session_id(sample_id: str) -> str:
@@ -321,6 +331,35 @@ def _load_verified_proxy_suite(proxy_root: str | Path, suite: str) -> _VerifiedP
         if session_id in session_ids:
             raise ValueError("proxy suite opaque session ID collision")
         session_ids.add(session_id)
+        if row.get("scenario_type") not in AUDIT_SCENARIOS:
+            raise ValueError("proxy suite scenario_type is invalid")
+        if not isinstance(row.get("user_profile"), dict):
+            raise ValueError("proxy suite user_profile is invalid")  # noqa: TRY004
+        ground_truth = row.get("ground_truth")
+        if not isinstance(ground_truth, dict):
+            raise ValueError("proxy suite ground_truth is invalid")  # noqa: TRY004
+        parent_asin = ground_truth.get("parent_asin")
+        if not isinstance(parent_asin, str) or not parent_asin.strip():
+            raise ValueError("proxy suite ground_truth parent_asin is invalid")
+        if not isinstance(row.get("intent_card"), dict):
+            raise ValueError("proxy suite intent_card is invalid")  # noqa: TRY004
+        if not isinstance(row.get("behavior"), dict):
+            raise ValueError("proxy suite behavior is invalid")  # noqa: TRY004
+        variant = row.get("dialogue_variant")
+        if isinstance(variant, bool) or not isinstance(variant, int):
+            raise ValueError("proxy suite dialogue_variant is invalid")  # noqa: TRY004
+        if row.get("proxy_suite") != suite:
+            raise ValueError("proxy suite proxy_suite is invalid")
+        for key in ("category_bucket", "difficulty_bucket"):
+            value = row.get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"proxy suite {key} is invalid")
+        if suite == "representative":
+            fold = row.get("proxy_fold")
+            if isinstance(fold, bool) or not isinstance(fold, int) or fold not in {1, 2, 3, 4, 5}:
+                raise ValueError("proxy suite proxy_fold is invalid")
+        elif "proxy_fold" in row:
+            raise ValueError("stress proxy suite must not include proxy_fold")
     return _VerifiedProxySuite(manifest, rows, manifest_hash, actual_hash)
 
 
@@ -408,11 +447,16 @@ def _validate_audit_metadata(metadata: dict[str, object]) -> None:
     for key in ("created_at", "commit", "config_hash", "manifest_hash", "dataset_hash"):
         if not isinstance(metadata[key], str) or not metadata[key]:
             raise ValueError("audit metadata scalar is invalid")
-    if metadata["suite"] not in {"representative", "stress"}:
+    if metadata["suite"] != "representative":
         raise ValueError("audit metadata suite is invalid")
     if metadata["audit_label"] not in {"baseline", "final"}:
         raise ValueError("audit metadata label is invalid")
-    if not _is_nonnegative_int(metadata["fallback_count"]) or not _is_nonnegative_int(metadata["invalid_response_count"]):
+    if (
+        not _is_nonnegative_int(metadata["fallback_count"])
+        or not _is_nonnegative_int(metadata["invalid_response_count"])
+        or metadata["fallback_count"] != 0
+        or metadata["invalid_response_count"] != 0
+    ):
         raise ValueError("audit metadata count is invalid")
 
 
@@ -439,12 +483,48 @@ def _validate_audit_aggregate(aggregate: dict[str, object], metadata: dict[str, 
     scenarios = aggregate["scenario_metrics"]
     if not isinstance(scenarios, dict) or set(scenarios) != AUDIT_SCENARIOS:
         raise ValueError("audit scenario_metrics schema is invalid")
-    if sum(_validate_metric_summary(scenarios[name]) for name in AUDIT_SCENARIOS) != count:
+    scenario_counts = {name: _validate_metric_summary(scenarios[name]) for name in AUDIT_SCENARIOS}
+    if sum(scenario_counts.values()) != count:
         raise ValueError("audit scenario sample counts are inconsistent")
-    if not _is_nonnegative_int(aggregate["invalid_response_count"]) or (
-        aggregate["invalid_response_count"] != metadata["invalid_response_count"]
+    if (
+        not _is_nonnegative_int(aggregate["invalid_response_count"])
+        or aggregate["invalid_response_count"] != 0
+        or aggregate["invalid_response_count"] != metadata["invalid_response_count"]
     ):
         raise ValueError("audit invalid response count is invalid")
+    if count == 0:
+        expected_hit_rate = expected_mrr = expected_efficiency = expected_score = 0.0
+        expected_mttc = None
+    else:
+        expected_hit_rate = round(
+            sum(float(scenarios[name]["hit_rate_at_10"]) * scenario_counts[name] for name in AUDIT_SCENARIOS) / count,
+            6,
+        )
+        expected_mrr = round(
+            sum(float(scenarios[name]["mrr"]) * scenario_counts[name] for name in AUDIT_SCENARIOS) / count,
+            6,
+        )
+        expected_mttc = round(
+            sum(
+                float(scenarios[name]["mttc"]) * scenario_counts[name]
+                for name in AUDIT_SCENARIOS
+                if scenario_counts[name]
+            ) / count,
+            6,
+        )
+        expected_efficiency = round(max(0.0, min(1.0, (11.0 - float(expected_mttc)) / 10.0)), 6)
+        expected_score = round(
+            0.50 * expected_hit_rate + 0.30 * expected_mrr + 0.20 * expected_efficiency,
+            6,
+        )
+    if (
+        aggregate["hit_rate_at_10"] != expected_hit_rate
+        or aggregate["mrr"] != expected_mrr
+        or aggregate["mttc"] != expected_mttc
+        or aggregate["efficiency"] != expected_efficiency
+        or aggregate["recommended_technical_score"] != expected_score
+    ):
+        raise ValueError("audit aggregate metrics are inconsistent")
 
 
 def _audit_payload(result: dict[str, object], metadata: dict[str, object]) -> dict[str, object]:
@@ -475,7 +555,9 @@ def _reject_existing_destination(destination: Path) -> None:
         raise FileExistsError(f"proxy output already exists: {destination}")
 
 
-def _publish_exclusive(destination: Path, payload: dict[str, object]) -> None:
+def _publish_exclusive(
+    destination: Path, payload: dict[str, object], *, prepublish: Callable[[], None] | None = None
+) -> None:
     """Atomically create a report, failing closed on collisions and link failures."""
     encoded = _serialize_json(payload)
     _reject_existing_destination(destination)
@@ -489,6 +571,9 @@ def _publish_exclusive(destination: Path, payload: dict[str, object]) -> None:
             handle.write(encoded)
             handle.flush()
             os.fsync(handle.fileno())
+        if prepublish is not None:
+            prepublish()
+        _reject_existing_destination(destination)
         try:
             os.link(temporary, destination)
         except FileExistsError:
@@ -499,9 +584,15 @@ def _publish_exclusive(destination: Path, payload: dict[str, object]) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def write_audit_report(destination: Path, result: dict[str, object], metadata: dict[str, object]) -> None:
+def write_audit_report(
+    destination: Path,
+    result: dict[str, object],
+    metadata: dict[str, object],
+    *,
+    prepublish: Callable[[], None] | None = None,
+) -> None:
     """Write a one-shot audit report that can never include session-level evidence."""
-    _publish_exclusive(destination, _audit_payload(result, metadata))
+    _publish_exclusive(destination, _audit_payload(result, metadata), prepublish=prepublish)
 
 
 def _load_agent(specification: str) -> type:
@@ -542,8 +633,14 @@ def _trace_details(
             if evidence.trace_required:
                 raise ValueError("trace records are stale, malformed, or out of order")
             continue
-        if not isinstance(record.get("elapsed_ms"), (int, float)) or isinstance(record.get("elapsed_ms"), bool):
-            raise ValueError("trace records are stale, malformed, or out of order")  # noqa: TRY004
+        elapsed_ms = record.get("elapsed_ms")
+        if (
+            not isinstance(elapsed_ms, (int, float))
+            or isinstance(elapsed_ms, bool)
+            or not math.isfinite(elapsed_ms)
+            or elapsed_ms < 0
+        ):
+            raise ValueError("trace records are stale, malformed, or out of order")
         if not isinstance(record.get("fallbacks"), (list, tuple, set)):
             raise ValueError("trace records are stale, malformed, or out of order")  # noqa: TRY004
         matched.append(record)
@@ -573,48 +670,139 @@ def _audit_paths(proxy_root: Path, audit_label: str) -> tuple[Path, Path]:
     return audit_dir / f"{audit_label}.json", audit_dir / f"{audit_label}.lock"
 
 
-def _reserve_audit_output(proxy_root: Path, audit_label: str, output: Path) -> Path:
+def _file_identity(info: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (
+        int(info.st_dev),
+        int(info.st_ino),
+        int(getattr(info, "st_birthtime_ns", 0)),
+        int(getattr(info, "st_file_attributes", 0)),
+        int(getattr(info, "st_reparse_tag", 0)),
+    )
+
+
+def _matches_lock_identity(path: Path, identity: tuple[int, int, int, int, int]) -> bool:
+    try:
+        info = path.lstat()
+    except OSError:
+        return False
+    return stat.S_ISREG(info.st_mode) and _file_identity(info) == identity
+
+
+def _verify_lock_owner(ownership: _AuditLockOwnership) -> bool:
+    if not _matches_lock_identity(ownership.path, ownership.identity):
+        return False
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(ownership.path, flags)
+    except OSError:
+        return False
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or _file_identity(info) != ownership.identity:
+            return False
+        expected = (ownership.token + os.linesep).encode("ascii")
+        content = os.read(descriptor, len(expected) + 1)
+        return content == expected
+    except OSError:
+        return False
+    finally:
+        os.close(descriptor)
+
+
+def _release_audit_lock(ownership: _AuditLockOwnership) -> None:
+    if not _verify_lock_owner(ownership):
+        return
+    try:
+        ownership.path.unlink()
+    except FileNotFoundError:
+        return
+
+
+def _cleanup_failed_reservation(
+    path: Path, identity: tuple[int, int, int, int, int] | None
+) -> None:
+    if identity is None or not _matches_lock_identity(path, identity):
+        return
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+
+
+def _preflight_audit_publish(ownership: _AuditLockOwnership, output: Path) -> None:
+    if not _verify_lock_owner(ownership):
+        raise ValueError("audit lock ownership verification failed")
+    _reject_existing_destination(output)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{output.name}.", suffix=".probe-source", dir=output.parent
+    )
+    temporary = Path(temporary_name)
+    probe = output.parent / f".{output.name}.{secrets.token_hex(16)}.probe"
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(b"audit hardlink preflight\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, probe)
+        except OSError as error:
+            raise RuntimeError("exclusive audit publication requires hardlink support") from error
+        if not probe.is_file() or _file_identity(temporary.stat()) != _file_identity(probe.stat()):
+            raise RuntimeError("exclusive audit publication hardlink preflight failed")
+    finally:
+        probe.unlink(missing_ok=True)
+        temporary.unlink(missing_ok=True)
+
+
+def _reserve_audit_output(proxy_root: Path, audit_label: str, output: Path) -> _AuditLockOwnership:
     expected, lock = _audit_paths(proxy_root, audit_label)
     if output.resolve() != expected:
         raise ValueError("audit output must use the canonical sealed audit path")
     _reject_existing_destination(expected)
     lock.parent.mkdir(parents=True, exist_ok=True)
     handle: object | None = None
-    created = False
+    identity: tuple[int, int, int, int, int] | None = None
+    token = secrets.token_hex(32)
     try:
         handle = lock.open("x", encoding="utf-8")
     except FileExistsError as error:
         raise FileExistsError("sealed audit reservation already exists") from error
-    created = True
     try:
-        handle.write("reserved\n")
+        handle.write(token + "\n")
         handle.flush()
         os.fsync(handle.fileno())
+        identity = _file_identity(os.fstat(handle.fileno()))
         handle.close()
         handle = None
     except BaseException:
         if handle is not None:
             try:
+                identity = identity or _file_identity(lock.lstat())
+            except OSError:
+                pass
+            try:
                 handle.close()
             except OSError:
                 pass
-        if created:
-            lock.unlink(missing_ok=True)
+        _cleanup_failed_reservation(lock, identity)
         raise
-    return lock
+    if identity is None:
+        raise RuntimeError("audit lock identity was not recorded")
+    return _AuditLockOwnership(lock, token, identity)
 
 
 def run_proxy(args: argparse.Namespace) -> None:
     proxy_root = Path(args.proxy_root)
     output = Path(args.output)
-    audit_lock: Path | None = None
-    if args.audit_label is not None:
-        audit_lock = _reserve_audit_output(proxy_root, args.audit_label, output)
-    else:
-        if _is_within(output.resolve(), (proxy_root.resolve() / "audit").resolve()):
-            raise ValueError("non-audit reports cannot target the sealed audit directory")
-        _reject_existing_destination(output)
+    audit_lock: _AuditLockOwnership | None = None
     try:
+        if args.audit_label is not None:
+            audit_lock = _reserve_audit_output(proxy_root, args.audit_label, output)
+            _preflight_audit_publish(audit_lock, output)
+        else:
+            if _is_within(output.resolve(), (proxy_root.resolve() / "audit").resolve()):
+                raise ValueError("non-audit reports cannot target the sealed audit directory")
+            _reject_existing_destination(output)
         verified = _load_verified_proxy_suite(proxy_root, args.suite)
         rows = verified.rows
         selections = select_proxy_rows(rows, args.suite, args.folds, args.audit_label)
@@ -678,7 +866,12 @@ def run_proxy(args: argparse.Namespace) -> None:
             if total_fallback_count or total_invalid_count:
                 raise SystemExit(1)
             audit_metadata = {**metadata, "audit_label": args.audit_label}
-            write_audit_report(output, audit_result, audit_metadata)
+            write_audit_report(
+                output,
+                audit_result,
+                audit_metadata,
+                prepublish=lambda: _preflight_audit_publish(audit_lock, output),
+            )
             print(json.dumps(_audit_payload(audit_result, audit_metadata), sort_keys=True))
             return
 
@@ -699,7 +892,7 @@ def run_proxy(args: argparse.Namespace) -> None:
             raise SystemExit(1)
     finally:
         if audit_lock is not None:
-            audit_lock.unlink(missing_ok=True)
+            _release_audit_lock(audit_lock)
 
 
 def parse_proxy_args(argv: list[str] | None = None) -> argparse.Namespace:

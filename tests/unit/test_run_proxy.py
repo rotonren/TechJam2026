@@ -146,7 +146,7 @@ def test_write_audit_report_rejects_nested_sessions_without_creating_destination
 def test_load_proxy_suite_validates_manifest_hash_and_count(tmp_path: Path):
     from tools.run_proxy import load_proxy_suite
 
-    rows = [{"sample_id": "one"}, {"sample_id": "two"}]
+    rows = [_valid_suite_row("one"), _valid_suite_row("two")]
     dataset = tmp_path / "representative.jsonl"
     dataset.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
     manifest = {
@@ -167,7 +167,7 @@ def test_load_proxy_suite_rejects_matching_hash_with_wrong_manifest_count(tmp_pa
     from tools.run_proxy import load_proxy_suite
 
     dataset = tmp_path / "representative.jsonl"
-    dataset.write_text('{"sample_id":"one"}\n', encoding="utf-8")
+    dataset.write_text(json.dumps(_valid_suite_row("one")) + "\n", encoding="utf-8")
     (tmp_path / "manifest.json").write_text(
         json.dumps(
             {
@@ -324,7 +324,6 @@ def _patch_small_proxy_run(
     result = _legal_audit_result()
     result.update(
         {
-            "recommended_technical_score": 0.5,
             "invalid_response_count": invalid_count,
             "sessions": [{"sample_id": "one", "scenario_type": "buying"}],
         }
@@ -374,7 +373,7 @@ def test_run_proxy_non_audit_failure_writes_diagnostic_and_uses_sample_invalid_r
         run_proxy(args)
 
     report = json.loads(args.output.read_text(encoding="utf-8"))
-    assert report["selection_score"] == selection_score([0.5], 0.0, 1.0)
+    assert report["selection_score"] == selection_score([1.0], 0.0, 1.0)
     assert report["folds"][0]["sessions"] == [{"sample_id": "one", "scenario_type": "buying"}]
 
 
@@ -382,15 +381,31 @@ def test_frozen_evaluator_hash_is_unchanged():
     assert sha256_file(Path("evaluator/local_evaluator.py")) == "84ea899707452de249ca62abee77c4b40ab7a3139b5cc798ac30c9f521f91b30"
 
 
-def _write_suite(root: Path, rows: list[dict], *, count: object | None = None) -> None:
+def _valid_suite_row(sample_id: str = "one", suite: str = "representative") -> dict:
+    row = {
+        **_sample(),
+        "sample_id": sample_id,
+        "category_bucket": "shirts",
+        "difficulty_bucket": "easy",
+        "dialogue_variant": 0,
+        "proxy_suite": suite,
+    }
+    if suite == "representative":
+        row["proxy_fold"] = 1
+    return row
+
+
+def _write_suite(
+    root: Path, rows: list[dict], *, suite: str = "representative", count: object | None = None
+) -> None:
     root.mkdir(parents=True, exist_ok=True)
-    dataset = root / "representative.jsonl"
+    dataset = root / f"{suite}.jsonl"
     dataset.write_bytes(b"".join(json.dumps(row).encode() + b"\n" for row in rows))
     (root / "manifest.json").write_text(
         json.dumps(
             {
-                "counts": {"representative": len(rows) if count is None else count},
-                "output_hashes": {"representative.jsonl": sha256_file(dataset)},
+                "counts": {suite: len(rows) if count is None else count},
+                "output_hashes": {f"{suite}.jsonl": sha256_file(dataset)},
             }
         ),
         encoding="utf-8",
@@ -400,10 +415,10 @@ def _write_suite(root: Path, rows: list[dict], *, count: object | None = None) -
 @pytest.mark.parametrize(
     ("rows", "count", "message"),
     [
-        ([{"sample_id": "one"}], True, "count"),
-        ([{"sample_id": "one"}], -1, "count"),
-        ([{"sample_id": ""}], 1, "sample_id"),
-        ([{"sample_id": "one"}, {"sample_id": "one"}], 2, "duplicate"),
+        ([_valid_suite_row("one")], True, "count"),
+        ([_valid_suite_row("one")], -1, "count"),
+        ([_valid_suite_row("")], 1, "sample_id"),
+        ([_valid_suite_row("one"), _valid_suite_row("one")], 2, "duplicate"),
     ],
 )
 def test_verified_proxy_suite_rejects_invalid_counts_and_sample_ids(
@@ -420,7 +435,8 @@ def test_verified_proxy_suite_rejects_invalid_counts_and_sample_ids(
 def test_verified_proxy_suite_hashes_the_same_bytes_it_parses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from tools.run_proxy import _load_verified_proxy_suite
 
-    _write_suite(tmp_path, [{"sample_id": "one"}])
+    row = _valid_suite_row("one")
+    _write_suite(tmp_path, [row])
     dataset = tmp_path / "representative.jsonl"
     original_read_bytes = Path.read_bytes
     calls = 0
@@ -430,15 +446,15 @@ def test_verified_proxy_suite_hashes_the_same_bytes_it_parses(tmp_path: Path, mo
         value = original_read_bytes(path)
         if path == dataset:
             calls += 1
-            dataset.write_bytes(b'{"sample_id":"swapped"}\n')
+            dataset.write_bytes((json.dumps(_valid_suite_row("swapped")) + "\n").encode())
         return value
 
     monkeypatch.setattr(Path, "read_bytes", read_once_then_swap)
     verified = _load_verified_proxy_suite(tmp_path, "representative")
 
     assert calls == 1
-    assert verified.rows == [{"sample_id": "one"}]
-    assert verified.dataset_hash == hashlib.sha256(b'{"sample_id": "one"}\n').hexdigest()
+    assert verified.rows == [row]
+    assert verified.dataset_hash == hashlib.sha256((json.dumps(row) + "\n").encode()).hexdigest()
 
 
 def test_verified_proxy_suite_rejects_opaque_session_id_collisions(
@@ -446,7 +462,7 @@ def test_verified_proxy_suite_rejects_opaque_session_id_collisions(
 ):
     from tools import run_proxy
 
-    _write_suite(tmp_path, [{"sample_id": "one"}, {"sample_id": "two"}])
+    _write_suite(tmp_path, [_valid_suite_row("one"), _valid_suite_row("two")])
     monkeypatch.setattr(run_proxy, "opaque_session_id", lambda sample_id: "collision")
 
     with pytest.raises(ValueError, match="collision"):
@@ -957,3 +973,332 @@ def test_reserve_audit_output_cleans_owned_lock_after_post_create_file_exists_er
         run_proxy._reserve_audit_output(tmp_path / "proxy", "baseline", output)
 
     assert not output.with_suffix(".lock").exists()
+
+
+def _weighted_audit_result() -> dict:
+    scenarios = {
+        "boundary": {"sample_count": 2, "hit_rate_at_10": 0.5, "mrr": 0.25, "mttc": 7.0},
+        "browsing": {"sample_count": 1, "hit_rate_at_10": 1.0, "mrr": 1.0, "mttc": 1.0},
+        "buying": {"sample_count": 0, "hit_rate_at_10": 0.0, "mrr": 0.0, "mttc": None},
+        "intent_override": {"sample_count": 1, "hit_rate_at_10": 0.0, "mrr": 0.0, "mttc": 11.0},
+    }
+    return {
+        "sample_count": 4,
+        "hit_rate_at_10": 0.5,
+        "mrr": 0.375,
+        "mttc": 6.5,
+        "efficiency": 0.45,
+        "recommended_technical_score": 0.4525,
+        "reported_token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        "scenario_metrics": scenarios,
+        "invalid_response_count": 0,
+        "sessions": [],
+    }
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda result, metadata: metadata.update({"suite": "stress"}),
+        lambda result, metadata: metadata.update({"fallback_count": 1}),
+        lambda result, metadata: (metadata.update({"invalid_response_count": 1}), result.update({"invalid_response_count": 1})),
+        lambda result, metadata: result.update({"efficiency": 0.4}),
+        lambda result, metadata: result.update({"recommended_technical_score": 0.4}),
+        lambda result, metadata: result.update({"hit_rate_at_10": 0.75}),
+        lambda result, metadata: result.update({"mrr": 0.5}),
+        lambda result, metadata: result.update({"mttc": 7.0}),
+        lambda result, metadata: result.update({"sample_count": 5}),
+    ],
+)
+def test_audit_report_rejects_noncanonical_semantics_at_write_boundary(
+    tmp_path: Path, mutate
+):
+    from tools.run_proxy import write_audit_report
+
+    result = _weighted_audit_result()
+    metadata = _legal_audit_metadata()
+    mutate(result, metadata)
+
+    with pytest.raises(ValueError):
+        write_audit_report(tmp_path / "audit.json", result, metadata)
+
+
+def test_audit_report_accepts_weighted_metric_summary_at_write_boundary(tmp_path: Path):
+    from tools.run_proxy import write_audit_report
+
+    destination = tmp_path / "audit.json"
+    write_audit_report(destination, _weighted_audit_result(), _legal_audit_metadata())
+    payload = json.loads(destination.read_text(encoding="utf-8"))
+
+    assert payload["aggregate"]["recommended_technical_score"] == 0.4525
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda result, metadata: metadata.update({"fallback_count": False}),
+        lambda result, metadata: metadata.update({"invalid_response_count": False}),
+        lambda result, metadata: result.update({"invalid_response_count": False}),
+    ],
+)
+def test_audit_report_rejects_boolean_zero_counts(tmp_path: Path, mutate):
+    from tools.run_proxy import write_audit_report
+
+    result = _weighted_audit_result()
+    metadata = _legal_audit_metadata()
+    mutate(result, metadata)
+
+    with pytest.raises(ValueError):
+        write_audit_report(tmp_path / "audit.json", result, metadata)
+
+
+@pytest.mark.parametrize("elapsed_ms", (float("nan"), float("inf"), float("-inf"), -0.1))
+def test_trace_details_rejects_nonfinite_and_negative_elapsed_ms(elapsed_ms: float):
+    from tools.run_proxy import _CallEvidence, _trace_details, opaque_session_id
+
+    session_id = opaque_session_id("one")
+    agent = SimpleNamespace(
+        traces=SimpleNamespace(records=[
+            {"session_id": session_id, "turn": 1, "elapsed_ms": elapsed_ms, "fallbacks": []}
+        ])
+    )
+
+    with pytest.raises(ValueError, match="trace"):
+        _trace_details(agent, [_CallEvidence(session_id, 1, True)])
+
+
+def test_verified_proxy_suite_accepts_complete_representative_and_stress_rows(tmp_path: Path):
+    from tools.run_proxy import _load_verified_proxy_suite
+
+    _write_suite(tmp_path / "representative", [_valid_suite_row("representative")])
+    _write_suite(tmp_path / "stress", [_valid_suite_row("stress", "stress")], suite="stress")
+
+    assert _load_verified_proxy_suite(tmp_path / "representative", "representative").rows[0]["sample_id"] == "representative"
+    assert _load_verified_proxy_suite(tmp_path / "stress", "stress").rows[0]["sample_id"] == "stress"
+
+
+@pytest.mark.parametrize(
+    ("suite", "mutate", "message"),
+    [
+        ("representative", lambda row: row.update({"scenario_type": "unknown"}), "scenario_type"),
+        ("representative", lambda row: row.update({"user_profile": []}), "user_profile"),
+        ("representative", lambda row: row.update({"ground_truth": {"parent_asin": ""}}), "parent_asin"),
+        ("representative", lambda row: row.update({"intent_card": []}), "intent_card"),
+        ("representative", lambda row: row.update({"behavior": []}), "behavior"),
+        ("representative", lambda row: row.update({"dialogue_variant": True}), "dialogue_variant"),
+        ("representative", lambda row: row.update({"proxy_suite": "stress"}), "proxy_suite"),
+        ("representative", lambda row: row.update({"category_bucket": ""}), "category_bucket"),
+        ("representative", lambda row: row.update({"difficulty_bucket": 1}), "difficulty_bucket"),
+        ("representative", lambda row: row.update({"proxy_fold": True}), "proxy_fold"),
+        ("representative", lambda row: row.update({"proxy_fold": 6}), "proxy_fold"),
+        ("stress", lambda row: row.update({"proxy_fold": 1}), "proxy_fold"),
+    ],
+)
+def test_verified_proxy_suite_rejects_invalid_row_schema(
+    tmp_path: Path, suite: str, mutate, message: str
+):
+    from tools.run_proxy import _load_verified_proxy_suite
+
+    row = _valid_suite_row("bad", suite)
+    mutate(row)
+    _write_suite(tmp_path, [row], suite=suite)
+
+    with pytest.raises(ValueError, match=message):
+        _load_verified_proxy_suite(tmp_path, suite)
+
+
+def test_audit_reservation_returns_distinct_opaque_lock_ownership_tokens(tmp_path: Path):
+    from tools.run_proxy import _release_audit_lock, _reserve_audit_output
+
+    output = tmp_path / "proxy" / "audit" / "baseline.json"
+    first = _reserve_audit_output(tmp_path / "proxy", "baseline", output)
+    _release_audit_lock(first)
+    second = _reserve_audit_output(tmp_path / "proxy", "baseline", output)
+    _release_audit_lock(second)
+
+    assert first.path == second.path
+    assert first.token != second.token
+
+
+def test_audit_reservations_conflict_while_first_ownership_is_active(tmp_path: Path):
+    from tools.run_proxy import _release_audit_lock, _reserve_audit_output
+
+    output = tmp_path / "proxy" / "audit" / "baseline.json"
+    ownership = _reserve_audit_output(tmp_path / "proxy", "baseline", output)
+    try:
+        with pytest.raises(FileExistsError, match="reservation"):
+            _reserve_audit_output(tmp_path / "proxy", "baseline", output)
+    finally:
+        _release_audit_lock(ownership)
+
+
+@pytest.mark.parametrize("failure", ("link", "permission"))
+def test_audit_preflight_hardlink_failure_prevents_evaluation_and_releases_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+):
+    from tools import run_proxy
+
+    args = _run_args(tmp_path, audit_label="baseline")
+    calls = 0
+
+    def forbidden_load(*args: object):
+        nonlocal calls
+        calls += 1
+        raise AssertionError("must not load suite")
+
+    monkeypatch.setattr(run_proxy, "_load_verified_proxy_suite", forbidden_load)
+    monkeypatch.setattr(run_proxy.os, "link", lambda source, target: (_ for _ in ()).throw(OSError(failure)))
+
+    with pytest.raises(RuntimeError, match="hardlink"):
+        run_proxy.run_proxy(args)
+
+    assert calls == 0
+    assert not args.output.exists()
+    assert not args.output.with_suffix(".lock").exists()
+    assert not list(args.output.parent.glob("*.probe"))
+
+
+def test_audit_preflight_rejects_destination_created_after_reservation_before_evaluation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from tools import run_proxy
+
+    args = _run_args(tmp_path, audit_label="baseline")
+    original_reserve = run_proxy._reserve_audit_output
+    calls = 0
+
+    def reserve_then_create(*values: object):
+        ownership = original_reserve(*values)
+        args.output.write_text("racer", encoding="utf-8")
+        return ownership
+
+    def forbidden_load(*values: object):
+        nonlocal calls
+        calls += 1
+        raise AssertionError("must not load suite")
+
+    monkeypatch.setattr(run_proxy, "_reserve_audit_output", reserve_then_create)
+    monkeypatch.setattr(run_proxy, "_load_verified_proxy_suite", forbidden_load)
+    with pytest.raises(FileExistsError, match="output"):
+        run_proxy.run_proxy(args)
+
+    assert calls == 0
+    assert args.output.read_text(encoding="utf-8") == "racer"
+    assert not args.output.with_suffix(".lock").exists()
+
+
+def test_audit_replacement_after_reservation_stops_before_suite_access_and_preserves_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from tools import run_proxy
+
+    args = _run_args(tmp_path, audit_label="baseline")
+    original_reserve = run_proxy._reserve_audit_output
+    replacement = "replacement lock"
+    calls = 0
+
+    def reserve_then_replace(*values: object):
+        ownership = original_reserve(*values)
+        lock = getattr(ownership, "path", ownership)
+        lock.unlink()
+        lock.write_text(replacement, encoding="utf-8")
+        return ownership
+
+    def forbidden_load(*values: object):
+        nonlocal calls
+        calls += 1
+        raise AssertionError("must not load suite")
+
+    monkeypatch.setattr(run_proxy, "_reserve_audit_output", reserve_then_replace)
+    monkeypatch.setattr(run_proxy, "_load_verified_proxy_suite", forbidden_load)
+    with pytest.raises(ValueError, match="lock"):
+        run_proxy.run_proxy(args)
+
+    assert calls == 0
+    assert args.output.with_suffix(".lock").read_text(encoding="utf-8") == replacement
+
+
+def test_audit_replacement_during_evaluation_prevents_publication_and_preserves_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from tools import run_proxy
+
+    _patch_small_proxy_run(monkeypatch, invalid_count=0)
+    args = _run_args(tmp_path, audit_label="baseline")
+    replacement = "replacement lock"
+
+    def replace_during_evaluation(*values: object, **kwargs: object) -> dict:
+        lock = args.output.with_suffix(".lock")
+        lock.unlink()
+        lock.write_text(replacement, encoding="utf-8")
+        return _legal_audit_result()
+
+    monkeypatch.setattr(run_proxy, "evaluate_proxy", replace_during_evaluation)
+    with pytest.raises(ValueError, match="lock"):
+        run_proxy.run_proxy(args)
+
+    assert not args.output.exists()
+    assert args.output.with_suffix(".lock").read_text(encoding="utf-8") == replacement
+
+
+def test_audit_lock_cleanup_does_not_remove_replacement(tmp_path: Path):
+    from tools.run_proxy import _release_audit_lock, _reserve_audit_output
+
+    output = tmp_path / "proxy" / "audit" / "baseline.json"
+    ownership = _reserve_audit_output(tmp_path / "proxy", "baseline", output)
+    ownership.path.unlink()
+    ownership.path.write_text("replacement", encoding="utf-8")
+
+    _release_audit_lock(ownership)
+
+    assert ownership.path.read_text(encoding="utf-8") == "replacement"
+
+
+def test_audit_lock_cleanup_does_not_recreate_removed_lock(tmp_path: Path):
+    from tools.run_proxy import _release_audit_lock, _reserve_audit_output
+
+    output = tmp_path / "proxy" / "audit" / "baseline.json"
+    ownership = _reserve_audit_output(tmp_path / "proxy", "baseline", output)
+    ownership.path.unlink()
+
+    _release_audit_lock(ownership)
+
+    assert not ownership.path.exists()
+
+
+def test_audit_publish_rechecks_destination_after_ownership_guard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from tools import run_proxy
+
+    _patch_small_proxy_run(monkeypatch, invalid_count=0)
+    args = _run_args(tmp_path, audit_label="baseline")
+    original_preflight = run_proxy._preflight_audit_publish
+    calls = 0
+
+    def preflight_then_create(ownership: object, output: Path) -> None:
+        nonlocal calls
+        calls += 1
+        original_preflight(ownership, output)
+        if calls == 2:
+            output.write_text("racer", encoding="utf-8")
+
+    monkeypatch.setattr(run_proxy, "_preflight_audit_publish", preflight_then_create)
+    with pytest.raises(FileExistsError, match="output"):
+        run_proxy.run_proxy(args)
+
+    assert args.output.read_text(encoding="utf-8") == "racer"
+    assert not args.output.with_suffix(".lock").exists()
+
+
+def test_main_forwards_parsed_arguments(monkeypatch: pytest.MonkeyPatch):
+    from tools import run_proxy
+
+    expected = SimpleNamespace(value="args")
+    received: list[object] = []
+    monkeypatch.setattr(run_proxy, "parse_proxy_args", lambda: expected)
+    monkeypatch.setattr(run_proxy, "run_proxy", received.append)
+
+    run_proxy.main()
+
+    assert received == [expected]
