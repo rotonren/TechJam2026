@@ -45,7 +45,7 @@ def matches_constraint(
         return _apply_set_operator(match, constraint)
 
     if constraint.source == "clarification" and not constraint.is_hard:
-        available = frozenset(
+        available = (
             searchable_terms
             if searchable_terms is not None
             else searchable_term_set(product)
@@ -57,7 +57,7 @@ def matches_constraint(
         )
         if not available or not requested:
             return False
-        match = any(wanted.issubset(available) for wanted in requested)
+        match = any(all(term in available for term in wanted) for wanted in requested)
         return _apply_set_operator(match, constraint)
 
     values = _product_values(attributes, constraint.attribute)

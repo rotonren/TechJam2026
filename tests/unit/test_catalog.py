@@ -57,6 +57,59 @@ def test_catalog_searchable_cache_reuses_token_objects(fixture_catalog_path):
     assert shoe_token is dress_token
 
 
+def test_catalog_searchable_cache_uses_compact_term_ids(fixture_catalog_path):
+    index = CatalogIndex(fixture_catalog_path)
+    cached = index.searchable_terms["SHOE1"]
+
+    assert cached == searchable_term_set(index.product("SHOE1"))
+    assert cached.storage_bytes == len(cached) * 4
+
+
+def test_catalog_searchable_cache_preserves_frozenset_interface(
+    fixture_catalog_path,
+):
+    index = CatalogIndex(fixture_catalog_path)
+    cached = index.searchable_terms["SHOE1"]
+    expected = searchable_term_set(index.product("SHOE1"))
+    other = frozenset({"blue", "dress", "missing"})
+
+    assert "blue" in cached
+    assert "dress" in index.searchable_terms["DRESS1"]
+    assert "dress" not in cached
+    assert "missing" not in cached
+    assert frozenset(iter(cached)) == expected
+    assert len(cached) == len(expected)
+    assert cached == expected
+    assert expected == cached
+
+    binary_results = (
+        (cached & other, expected & other),
+        (cached | other, expected | other),
+        (cached - other, expected - other),
+        (cached ^ other, expected ^ other),
+    )
+    for actual, reference in binary_results:
+        assert type(actual) is frozenset
+        assert actual == reference
+
+    assert cached.isdisjoint({"dress", "missing"})
+    assert cached.issubset(expected | {"missing"})
+    assert cached.issuperset({"blue", "mesh"})
+
+    named_results = (
+        (cached.union(other), expected.union(other)),
+        (cached.intersection(other), expected.intersection(other)),
+        (cached.difference(other), expected.difference(other)),
+        (
+            cached.symmetric_difference(other),
+            expected.symmetric_difference(other),
+        ),
+    )
+    for actual, reference in named_results:
+        assert type(actual) is frozenset
+        assert actual == reference
+
+
 def test_catalog_matches_and_violations_use_shared_semantics(fixture_catalog_path):
     index = CatalogIndex(fixture_catalog_path)
     matching = Constraint("category", "athletic shoes", 1.0, True, "message", 1, 1)

@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
+from array import array
+from bisect import bisect_left
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
+from collections.abc import Set as AbstractSet
 from pathlib import Path
 from types import MappingProxyType
 
@@ -16,7 +19,6 @@ from .normalization import (
     extract_attributes,
     normalize_value,
     searchable_fields,
-    searchable_term_set,
     terms,
 )
 
@@ -25,6 +27,61 @@ FIELD_MASK_SCORES = tuple(
     sum(weight for index, weight in enumerate(FIELD_WEIGHTS) if mask & (1 << index))
     for mask in range(1 << len(FIELD_WEIGHTS))
 )
+
+
+class _CompactTermSet(AbstractSet[str]):
+    __slots__ = ("_ids", "_term_ids", "_terms")
+
+    def __init__(
+        self,
+        identifiers: array[int],
+        term_ids: dict[str, int],
+        terms_by_id: list[str],
+    ) -> None:
+        self._ids = identifiers
+        self._term_ids = term_ids
+        self._terms = terms_by_id
+
+    def __contains__(self, value: object) -> bool:
+        if not isinstance(value, str):
+            return False
+        identifier = self._term_ids.get(value)
+        if identifier is None:
+            return False
+        position = bisect_left(self._ids, identifier)
+        return position < len(self._ids) and self._ids[position] == identifier
+
+    def __iter__(self):
+        return (self._terms[identifier] for identifier in self._ids)
+
+    def __len__(self) -> int:
+        return len(self._ids)
+
+    @classmethod
+    def _from_iterable(cls, iterable: Iterable[str]) -> frozenset[str]:
+        return frozenset(iterable)
+
+    def issubset(self, other: Iterable[str]) -> bool:
+        return frozenset(self).issubset(other)
+
+    def issuperset(self, other: Iterable[str]) -> bool:
+        return frozenset(self).issuperset(other)
+
+    def union(self, *others: Iterable[str]) -> frozenset[str]:
+        return frozenset(self).union(*others)
+
+    def intersection(self, *others: Iterable[str]) -> frozenset[str]:
+        return frozenset(self).intersection(*others)
+
+    def difference(self, *others: Iterable[str]) -> frozenset[str]:
+        return frozenset(self).difference(*others)
+
+    def symmetric_difference(self, other: Iterable[str]) -> frozenset[str]:
+        return frozenset(self).symmetric_difference(other)
+
+    @property
+    def storage_bytes(self) -> int:
+        return len(self._ids) * self._ids.itemsize
 
 
 class CatalogIndex:
@@ -36,7 +93,9 @@ class CatalogIndex:
         self.valid_ids: set[str] = set()
         self.attributes: dict[str, dict[str, tuple[str, ...]]] = {}
         self.category_terms: dict[str, frozenset[str]] = {}
-        self.searchable_terms: dict[str, frozenset[str]] = {}
+        self.searchable_terms: dict[str, _CompactTermSet] = {}
+        self._search_term_ids: dict[str, int] = {}
+        self._search_terms: list[str] = []
         self.category_term_inverted: dict[str, set[str]] = defaultdict(set)
         self.attribute_inverted: dict[str, dict[str, set[str]]] = defaultdict(
             lambda: defaultdict(set)
@@ -70,8 +129,9 @@ class CatalogIndex:
                 fields = searchable_fields(product)
                 attributes = extract_attributes(product)
                 category_terms = category_term_set(attributes.get("category", ()))
-                searchable_terms = searchable_term_set(product)
-                field_masks = _field_masks(fields, searchable_terms)
+                searchable_terms, field_masks = _compact_searchable_terms(
+                    fields, self._search_term_ids, self._search_terms
+                )
 
                 self.products[parent_asin] = product
                 self.valid_ids.add(parent_asin)
@@ -225,19 +285,25 @@ class CatalogIndex:
     def _fallback_search(
         self, plan: RetrievalPlan, query_terms: list[str], limit: int
     ) -> list[Candidate]:
-        query = frozenset(query_terms)
+        query_ids = frozenset(
+            identifier
+            for term in query_terms
+            if (identifier := self._search_term_ids.get(term)) is not None
+        )
+        if not query_ids:
+            return []
         scored: list[tuple[float, float, str]] = []
         for parent_asin, searchable_terms in self.searchable_terms.items():
             if not self._matches_hard(parent_asin, plan):
                 continue
-            if query.isdisjoint(searchable_terms):
-                continue
             score = sum(
                 FIELD_MASK_SCORES[mask]
-                for term, mask in zip(
-                    searchable_terms, self.field_masks[parent_asin], strict=True
+                for term_id, mask in zip(
+                    searchable_terms._ids,
+                    self.field_masks[parent_asin],
+                    strict=True,
                 )
-                if term in query
+                if term_id in query_ids
             )
             if score > 0:
                 scored.append((score, self.quality[parent_asin], parent_asin))
@@ -260,12 +326,30 @@ class CatalogIndex:
         ]
 
 
-def _field_masks(
-    fields: tuple[str, ...], searchable_terms: frozenset[str]
-) -> bytes:
+def _compact_searchable_terms(
+    fields: tuple[str, ...],
+    term_ids: dict[str, int],
+    terms_by_id: list[str],
+) -> tuple[_CompactTermSet, bytes]:
     masks: dict[str, int] = {}
     for index, field in enumerate(fields):
         bit = 1 << index
         for term in terms(field):
             masks[term] = masks.get(term, 0) | bit
-    return bytes(masks[term] for term in searchable_terms)
+
+    encoded: list[tuple[int, int]] = []
+    for term, mask in masks.items():
+        identifier = term_ids.get(term)
+        if identifier is None:
+            identifier = len(terms_by_id)
+            if identifier >= 1 << 32:
+                raise OverflowError("searchable vocabulary exceeds 32-bit term IDs")
+            term_ids[term] = identifier
+            terms_by_id.append(term)
+        encoded.append((identifier, mask))
+    encoded.sort()
+    identifiers = array("I", (identifier for identifier, _ in encoded))
+    return (
+        _CompactTermSet(identifiers, term_ids, terms_by_id),
+        bytes(mask for _, mask in encoded),
+    )
