@@ -67,17 +67,51 @@ def test_build_proxy_bundle_is_deterministic_and_excludes_public_targets(tmp_pat
     stress = [json.loads(line) for line in (tmp_path / "one" / "stress.jsonl").read_text(encoding="utf-8").splitlines()]
 
     assert first["output_hashes"] == second["output_hashes"]
+    assert set(first) == {
+        "schema_version",
+        "generator_version",
+        "generator_config",
+        "generator_config_hash",
+        "seeds",
+        "input_hashes",
+        "excluded_target_hash",
+        "target_hashes",
+        "output_hashes",
+        "counts",
+    }
     assert "P000" not in {row["ground_truth"]["parent_asin"] for row in representative}
     assert {row["scenario_type"] for row in representative} == {
         "buying", "browsing", "intent_override", "boundary",
     }
     assert all(row["user_profile"]["summary"] != "source text must not be copied" for row in representative)
-    assert {row["fold"] for row in representative} == {1, 2, 3, 4, 5}
+    assert {row["proxy_fold"] for row in representative} == {1, 2, 3, 4, 5}
     assert {row["ground_truth"]["parent_asin"] for row in representative}.isdisjoint(
         {row["ground_truth"]["parent_asin"] for row in stress}
     )
     assert first["generator_config_hash"]
+    assert first["generator_config_hash"] == proxy_dataset._canonical_hash(first["generator_config"])
+    assert first["seeds"] == {
+        "representative": 20260826,
+        "stress": 20260827,
+        "profile": 20260828,
+    }
+    assert "dimensions" in first["generator_config"]
+    assert "dimension_names" not in first["generator_config"]
+    assert set(first["generator_config"]) == {
+        "scenario_weights",
+        "dimensions",
+        "price_bins",
+        "popularity_bins",
+        "completeness_bins",
+        "representative_count",
+        "stress_count",
+        "profile_summary_version",
+        "fold_count",
+    }
+    assert representative[0]["sample_id"] == "proxy_representative_0001"
+    assert stress[0]["sample_id"] == "proxy_stress_0001"
     assert first["target_hashes"] == second["target_hashes"]
+    assert "P000" not in {row["ground_truth"]["parent_asin"] for row in stress}
 
 
 def test_scenario_schedule_uses_largest_remainder_and_is_deterministic() -> None:
@@ -113,6 +147,102 @@ def test_build_records_uses_global_quartiles_and_missing_data_difficulty() -> No
     assert records["E"].difficulty == "hard"
 
 
+def test_finite_number_accepts_numeric_strings_and_rejects_invalid_values() -> None:
+    assert proxy_dataset._finite_number("12.5") == 12.5
+    assert proxy_dataset._finite_number(" 3 ") == 3.0
+    assert proxy_dataset._finite_number(7) == 7.0
+    assert all(proxy_dataset._finite_number(value) is None for value in (True, "", "nope", "nan", "inf"))
+
+
+def test_build_records_uses_nearest_rank_boundaries_for_numeric_strings() -> None:
+    products = {
+        f"P{index}": {
+            "parent_asin": f"P{index}",
+            "title": "title",
+            "features": ["feature"],
+            "details": {"detail": "value"},
+            "categories": ["Shoes"],
+            "price": str(index),
+            "rating_number": str(index),
+        }
+        for index in range(1, 9)
+    }
+    records = {record.parent_asin: record for record in _build_records(products, set())}
+
+    assert [records[f"P{index}"].price_bin for index in range(1, 9)] == [
+        "q1", "q1", "q2", "q2", "q3", "q3", "q4", "q4",
+    ]
+    assert [records[f"P{index}"].popularity_bin for index in range(1, 9)] == [
+        "q1", "q1", "q2", "q2", "q3", "q3", "q4", "q4",
+    ]
+
+
+def test_build_records_keeps_excluded_products_in_full_population_statistics() -> None:
+    products = {
+        "A": {"parent_asin": "A", "categories": ["Shoes"], "price": "1", "rating_number": "1"},
+        "B": {"parent_asin": "B", "categories": ["Shoes"], "price": "2", "rating_number": "2"},
+        "C": {"parent_asin": "C", "categories": ["Shoes"], "price": "3", "rating_number": "3"},
+        "included": {"parent_asin": "included", "categories": ["Shoes"], "price": "100", "rating_number": "100"},
+    }
+    records = _build_records(products, {"A", "B", "C"})
+
+    assert [record.parent_asin for record in records] == ["included"]
+    assert records[0].price_bin == "q4"
+    assert records[0].popularity_bin == "q4"
+
+
+def test_build_records_classifies_completeness_and_difficulty_buckets() -> None:
+    products = {
+        "hard": {"parent_asin": "hard", "title": "title", "categories": ["Shoes"], "price": 1, "rating_number": 1},
+        "medium": {"parent_asin": "medium", "title": "title", "features": ["feature"], "details": {"detail": "x"}, "categories": ["Shoes"], "price": 2, "rating_number": 2},
+        "filler": {"parent_asin": "filler", "title": "title", "features": ["feature"], "details": {"detail": "x"}, "description": "description", "categories": ["Shoes"], "store": "store", "price": 3, "rating_number": 3},
+        "easy": {"parent_asin": "easy", "title": "title", "features": ["feature"], "details": {"detail": "x"}, "description": "description", "categories": ["Shoes"], "store": "store", "price": 4, "rating_number": 4},
+    }
+    records = {record.parent_asin: record for record in _build_records(products, set())}
+
+    assert (records["hard"].completeness_bin, records["hard"].difficulty) == ("0-2", "hard")
+    assert (records["medium"].completeness_bin, records["medium"].difficulty) == ("3-4", "medium")
+    assert (records["easy"].completeness_bin, records["easy"].difficulty) == ("5+", "easy")
+
+
+def test_safe_profile_has_exact_allowlist_and_defaults() -> None:
+    profile = proxy_dataset._safe_profile({
+        "average_prior_rating": "not numeric",
+        "preference_tags": [" fit ", "", 3],
+        "purchase_frequency": None,
+        "rating_style": "",
+        "summary": "do not retain this",
+        "target": "do not retain this either",
+    })
+
+    assert profile == {
+        "average_prior_rating": 0.0,
+        "preference_tags": ["fit"],
+        "purchase_frequency": "unspecified",
+        "rating_style": "unspecified",
+        "summary": "Prior purchases emphasize fit; ratings are unspecified.",
+    }
+
+
+def test_assign_proxy_folds_groups_orders_and_round_robins() -> None:
+    rows = [
+        {"sample_id": f"proxy_representative_{index:04d}", "scenario_type": "buying", "difficulty_bucket": "hard"}
+        for index in range(1, 8)
+    ] + [
+        {"sample_id": "proxy_representative_0008", "scenario_type": "browsing", "difficulty_bucket": "hard"},
+    ]
+
+    proxy_dataset._assign_folds(rows, 20260826)
+    buying = sorted(
+        rows[:7],
+        key=lambda row: (stable_int(20260826, row["sample_id"]), row["sample_id"]),
+    )
+
+    assert [row["proxy_fold"] for row in buying] == [1, 2, 3, 4, 5, 1, 2]
+    assert rows[7]["proxy_fold"] == 1
+    assert all("fold" not in row for row in rows)
+
+
 def test_verify_frozen_inputs_reports_mismatches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(proxy_dataset, "FROZEN_SHA256", {"one.txt": "0" * 64})
     (tmp_path / "one.txt").write_text("changed", encoding="utf-8")
@@ -130,6 +260,12 @@ def test_frozen_hash_constants_match_checked_out_project_files() -> None:
 def test_enforced_frozen_paths_reject_unapproved_inputs_before_reading(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="data/catalog.jsonl"):
         build_proxy_bundle(tmp_path / "missing-catalog", tmp_path / "missing-public", tmp_path / "output")
+
+    root = Path(__file__).resolve().parents[2]
+    with pytest.raises(ValueError, match="data/public_set.jsonl"):
+        build_proxy_bundle(root / "data/catalog.jsonl", tmp_path / "missing-public", root / "var/proxy-test")
+    with pytest.raises(ValueError, match="under var"):
+        build_proxy_bundle(root / "data/catalog.jsonl", root / "data/public_set.jsonl", tmp_path / "output")
 
 
 def test_bundle_rejects_empty_profiles_duplicate_ids_and_insufficient_population(tmp_path: Path) -> None:
@@ -155,16 +291,43 @@ def test_bundle_is_independent_of_catalog_line_order(tmp_path: Path) -> None:
         {"parent_asin": f"P{index:03d}", "title": "t", "features": ["f"], "details": {"x": "y"}, "categories": ["Shoes", str(index % 3)], "price": index + 1, "rating_number": index}
         for index in range(30)
     ]
-    forward, reverse, public_set = tmp_path / "forward.jsonl", tmp_path / "reverse.jsonl", tmp_path / "public.jsonl"
+    forward, reverse = tmp_path / "forward.jsonl", tmp_path / "reverse.jsonl"
+    public_forward, public_reverse = tmp_path / "public-forward.jsonl", tmp_path / "public-reverse.jsonl"
     write_jsonl(forward, products)
     write_jsonl(reverse, list(reversed(products)))
-    write_jsonl(public_set, [{"user_profile": {"preference_tags": ["fit"], "rating_style": "brief"}}])
+    profiles = [
+        {"user_profile": {"preference_tags": ["fit"], "rating_style": "brief"}},
+        {"user_profile": {"preference_tags": ["comfort"], "rating_style": "detailed"}},
+    ]
+    write_jsonl(public_forward, profiles)
+    write_jsonl(public_reverse, list(reversed(profiles)))
 
-    first = build_proxy_bundle(forward, public_set, tmp_path / "forward", 15, 5, enforce_frozen=False)
-    second = build_proxy_bundle(reverse, public_set, tmp_path / "reverse", 15, 5, enforce_frozen=False)
+    first = build_proxy_bundle(forward, public_forward, tmp_path / "forward", 15, 5, enforce_frozen=False)
+    second = build_proxy_bundle(reverse, public_reverse, tmp_path / "reverse", 15, 5, enforce_frozen=False)
 
     assert first["target_hashes"] == second["target_hashes"]
     assert first["output_hashes"] == second["output_hashes"]
+
+
+def test_bundle_overwrite_only_replaces_known_proxy_output_files(tmp_path: Path) -> None:
+    catalog = tmp_path / "catalog.jsonl"
+    public_set = tmp_path / "public.jsonl"
+    output = tmp_path / "output"
+    write_jsonl(catalog, [
+        {"parent_asin": "A", "categories": ["Shoes"], "price": 1, "rating_number": 1},
+        {"parent_asin": "B", "categories": ["Shoes"], "price": 2, "rating_number": 2},
+        {"parent_asin": "C", "categories": ["Shoes"], "price": 3, "rating_number": 3},
+    ])
+    write_jsonl(public_set, [{"user_profile": {}}])
+    first = build_proxy_bundle(catalog, public_set, output, 2, 1, enforce_frozen=False)
+    (output / "unrelated.txt").write_text("preserve", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="already contains"):
+        build_proxy_bundle(catalog, public_set, output, 2, 1, enforce_frozen=False)
+    second = build_proxy_bundle(catalog, public_set, output, 2, 1, enforce_frozen=False, overwrite=True)
+
+    assert second["output_hashes"] == first["output_hashes"]
+    assert (output / "unrelated.txt").read_text(encoding="utf-8") == "preserve"
 
 
 def make_products(count: int = 40) -> list[ProxyProduct]:

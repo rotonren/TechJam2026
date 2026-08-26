@@ -260,9 +260,14 @@ def _write_jsonl(path: str | Path, rows: list[dict]) -> None:
 
 
 def _finite_number(value: object) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
         return None
-    number = float(value)
+    if isinstance(value, str) and not value.strip():
+        return None
+    try:
+        number = float(value)
+    except ValueError:
+        return None
     return number if math.isfinite(number) else None
 
 
@@ -299,22 +304,21 @@ def _categories(product: dict) -> list[str]:
 
 def _safe_profile(source: object) -> dict:
     profile = source if isinstance(source, dict) else {}
-    result: dict = {}
-    rating = _finite_number(profile.get("average_prior_rating"))
-    if rating is not None:
-        result["average_prior_rating"] = rating
     source_tags = profile.get("preference_tags")
     tags = [value.strip() for value in source_tags if isinstance(value, str) and value.strip()] if isinstance(source_tags, list) else []
-    result["preference_tags"] = tags
     purchase_frequency = profile.get("purchase_frequency")
-    if isinstance(purchase_frequency, str) and purchase_frequency.strip():
-        result["purchase_frequency"] = purchase_frequency.strip()
     rating_style = profile.get("rating_style")
-    style = rating_style.strip() if isinstance(rating_style, str) and rating_style.strip() else "not specified"
-    result["rating_style"] = style
+    rating = _finite_number(profile.get("average_prior_rating"))
+    frequency = purchase_frequency.strip() if isinstance(purchase_frequency, str) and purchase_frequency.strip() else "unspecified"
+    style = rating_style.strip() if isinstance(rating_style, str) and rating_style.strip() else "unspecified"
     preference_text = ", ".join(tags) if tags else "general preferences"
-    result["summary"] = f"Prior purchases emphasize {preference_text}; ratings are {style}."
-    return result
+    return {
+        "average_prior_rating": 0.0 if rating is None else rating,
+        "preference_tags": tags,
+        "purchase_frequency": frequency,
+        "rating_style": style,
+        "summary": f"Prior purchases emphasize {preference_text}; ratings are {style}.",
+    }
 
 
 def _read_catalog(path: Path) -> dict[str, dict]:
@@ -411,7 +415,7 @@ def _materialize_suite(
         ),
     )
     rows: list[dict] = []
-    for index, (target_id, scenario_type) in enumerate(zip(target_ids, schedule)):
+    for index, (target_id, scenario_type) in enumerate(zip(target_ids, schedule), start=1):
         sample_id = f"proxy_{suite}_{index:04d}"
         record = records_by_id[target_id]
         product = products_by_id[target_id]
@@ -422,7 +426,7 @@ def _materialize_suite(
             "category_bucket": record.category,
             "difficulty_bucket": record.difficulty,
             "ground_truth": {"parent_asin": target_id},
-            "user_profile": profile_order[index % len(profile_order)],
+            "user_profile": profile_order[(index - 1) % len(profile_order)],
             "intent_card": card,
             "behavior": behavior_for(scenario_type, card, random.Random(f"{seed}:{sample_id}")),
             "dialogue_variant": stable_int(seed, sample_id) % 4,
@@ -438,7 +442,7 @@ def _assign_folds(rows: list[dict], seed: int) -> None:
     for group in groups.values():
         group.sort(key=lambda row: (stable_int(seed, row["sample_id"]), row["sample_id"]))
         for position, row in enumerate(group):
-            row["fold"] = position % 5 + 1
+            row["proxy_fold"] = position % 5 + 1
 
 
 def _under(path: Path, directory: Path) -> bool:
@@ -456,6 +460,7 @@ def build_proxy_bundle(
     representative_count: int = 2000,
     stress_count: int = 800,
     enforce_frozen: bool = True,
+    overwrite: bool = False,
 ) -> dict:
     """Build deterministic, catalog-derived proxy suites and their manifest."""
     root = Path(__file__).resolve().parents[1]
@@ -474,7 +479,7 @@ def build_proxy_bundle(
         input_hashes = {"catalog": sha256_file(catalog), "public_set": sha256_file(public)}
 
     output_files = (output / "representative.jsonl", output / "stress.jsonl", output / "manifest.json")
-    if any(path.exists() for path in output_files):
+    if any(path.exists() for path in output_files) and not overwrite:
         raise ValueError("output directory already contains a proxy bundle")
     products_by_id = _read_catalog(catalog)
     excluded, profiles = _read_public_restrictions(public)
@@ -496,7 +501,7 @@ def build_proxy_bundle(
     _write_jsonl(stress_path, stress)
     generator_config = {
         "scenario_weights": SCENARIO_WEIGHTS,
-        "dimension_names": list(DIMENSION_NAMES),
+        "dimensions": list(DIMENSION_NAMES),
         "price_bins": ["missing", "q1", "q2", "q3", "q4"],
         "popularity_bins": ["q1", "q2", "q3", "q4"],
         "completeness_bins": ["0-2", "3-4", "5+"],
@@ -504,13 +509,17 @@ def build_proxy_bundle(
         "stress_count": stress_count,
         "profile_summary_version": 1,
         "fold_count": 5,
-        "seeds": {"representative": REPRESENTATIVE_SEED, "stress": STRESS_SEED, "profile": PROFILE_SEED},
     }
     manifest = {
         "schema_version": 1,
         "generator_version": GENERATOR_VERSION,
         "generator_config": generator_config,
         "generator_config_hash": _canonical_hash(generator_config),
+        "seeds": {
+            "representative": REPRESENTATIVE_SEED,
+            "stress": STRESS_SEED,
+            "profile": PROFILE_SEED,
+        },
         "input_hashes": input_hashes,
         "excluded_target_hash": _canonical_hash(sorted(excluded)),
         "target_hashes": {
@@ -535,12 +544,14 @@ def main() -> None:
     parser.add_argument("--representative-count", type=int, default=2000)
     parser.add_argument("--stress-count", type=int, default=800)
     parser.add_argument("--no-enforce-frozen", action="store_false", dest="enforce_frozen", help=argparse.SUPPRESS)
+    parser.add_argument("--force", action="store_true", dest="overwrite", help=argparse.SUPPRESS)
     args = parser.parse_args()
     manifest = build_proxy_bundle(
         args.catalog, args.public_set, args.output_dir,
         representative_count=args.representative_count,
         stress_count=args.stress_count,
         enforce_frozen=args.enforce_frozen,
+        overwrite=args.overwrite,
     )
     print(json.dumps(manifest, sort_keys=True, indent=2))
 
