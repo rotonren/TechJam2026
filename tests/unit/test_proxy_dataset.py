@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import get_type_hints
@@ -67,6 +68,10 @@ def test_build_proxy_bundle_is_deterministic_and_excludes_public_targets(tmp_pat
     stress = [json.loads(line) for line in (tmp_path / "one" / "stress.jsonl").read_text(encoding="utf-8").splitlines()]
 
     assert first["output_hashes"] == second["output_hashes"]
+    assert first["output_hashes"] == {
+        "representative.jsonl": proxy_dataset.sha256_file(tmp_path / "one" / "representative.jsonl"),
+        "stress.jsonl": proxy_dataset.sha256_file(tmp_path / "one" / "stress.jsonl"),
+    }
     assert set(first) == {
         "schema_version",
         "generator_version",
@@ -328,6 +333,85 @@ def test_bundle_overwrite_only_replaces_known_proxy_output_files(tmp_path: Path)
 
     assert second["output_hashes"] == first["output_hashes"]
     assert (output / "unrelated.txt").read_text(encoding="utf-8") == "preserve"
+
+
+def make_existing_bundle(tmp_path: Path) -> tuple[Path, Path, Path]:
+    catalog = tmp_path / "catalog.jsonl"
+    public_set = tmp_path / "public.jsonl"
+    output = tmp_path / "output"
+    write_jsonl(catalog, [
+        {"parent_asin": "A", "categories": ["Shoes"], "price": 1, "rating_number": 1},
+        {"parent_asin": "B", "categories": ["Shoes"], "price": 2, "rating_number": 2},
+        {"parent_asin": "C", "categories": ["Shoes"], "price": 3, "rating_number": 3},
+    ])
+    write_jsonl(public_set, [{"user_profile": {}}])
+    build_proxy_bundle(catalog, public_set, output, 2, 1, enforce_frozen=False)
+    return catalog, public_set, output
+
+
+@pytest.mark.parametrize("filename", ["representative.jsonl", "stress.jsonl", "manifest.json"])
+def test_bundle_overwrite_replaces_hardlinks_without_mutating_external_file(tmp_path: Path, filename: str) -> None:
+    catalog, public_set, output = make_existing_bundle(tmp_path)
+    destination = output / filename
+    external = tmp_path / f"external-{filename}"
+    external.write_text("external content", encoding="utf-8")
+    destination.unlink()
+    try:
+        os.link(external, destination)
+    except OSError as error:
+        pytest.skip(f"hard links unavailable on this platform: {error}")
+
+    build_proxy_bundle(catalog, public_set, output, 2, 1, enforce_frozen=False, overwrite=True)
+
+    assert external.read_text(encoding="utf-8") == "external content"
+    assert destination.read_text(encoding="utf-8") != "external content"
+
+
+@pytest.mark.parametrize("filename", ["representative.jsonl", "stress.jsonl", "manifest.json"])
+def test_bundle_overwrite_replaces_symlinks_without_mutating_external_file(tmp_path: Path, filename: str) -> None:
+    catalog, public_set, output = make_existing_bundle(tmp_path)
+    destination = output / filename
+    external = tmp_path / f"external-{filename}"
+    external.write_text("external content", encoding="utf-8")
+    destination.unlink()
+    try:
+        destination.symlink_to(external)
+    except OSError as error:
+        pytest.skip(f"symlinks unavailable on this platform: {error}")
+
+    build_proxy_bundle(catalog, public_set, output, 2, 1, enforce_frozen=False, overwrite=True)
+
+    assert external.read_text(encoding="utf-8") == "external content"
+    assert not destination.is_symlink()
+
+
+@pytest.mark.parametrize("filename", ["representative.jsonl", "stress.jsonl", "manifest.json"])
+def test_bundle_overwrite_replaces_broken_symlinks(tmp_path: Path, filename: str) -> None:
+    catalog, public_set, output = make_existing_bundle(tmp_path)
+    destination = output / filename
+    destination.unlink()
+    try:
+        destination.symlink_to(tmp_path / "missing-target")
+    except OSError as error:
+        pytest.skip(f"symlinks unavailable on this platform: {error}")
+
+    build_proxy_bundle(catalog, public_set, output, 2, 1, enforce_frozen=False, overwrite=True)
+
+    assert destination.is_file()
+    assert not destination.is_symlink()
+
+
+@pytest.mark.parametrize("filename", ["representative.jsonl", "stress.jsonl", "manifest.json"])
+def test_bundle_overwrite_rejects_directory_destinations_and_cleans_staging(tmp_path: Path, filename: str) -> None:
+    catalog, public_set, output = make_existing_bundle(tmp_path)
+    destination = output / filename
+    destination.unlink()
+    destination.mkdir()
+
+    with pytest.raises(ValueError, match="destination is a directory"):
+        build_proxy_bundle(catalog, public_set, output, 2, 1, enforce_frozen=False, overwrite=True)
+
+    assert list(output.glob(".*.tmp")) == []
 
 
 def make_products(count: int = 40) -> list[ProxyProduct]:

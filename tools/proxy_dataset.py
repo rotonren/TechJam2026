@@ -7,7 +7,9 @@ import hashlib
 import heapq
 import json
 import math
+import os
 import random
+import tempfile
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -254,9 +256,52 @@ def _canonical_hash(value: object) -> str:
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
 
 
+def _stage_payload(path: str | Path, write: object) -> Path:
+    destination = Path(path)
+    if destination.is_dir():
+        raise ValueError(f"proxy output destination is a directory: {destination}")
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+            writer = write
+            if not callable(writer):
+                raise TypeError("staged payload writer must be callable")
+            writer(handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+    return temporary
+
+
+def _stage_jsonl(path: str | Path, rows: list[dict]) -> Path:
+    return _stage_payload(
+        path,
+        lambda handle: handle.writelines(_canonical_json(row) + "\n" for row in rows),
+    )
+
+
+def _stage_text(path: str | Path, text: str) -> Path:
+    return _stage_payload(path, lambda handle: handle.write(text))
+
+
+def _replace_staged(staged: list[tuple[Path, Path]]) -> None:
+    try:
+        for destination, temporary in staged:
+            os.replace(temporary, destination)
+    finally:
+        for _destination, temporary in staged:
+            temporary.unlink(missing_ok=True)
+
+
 def _write_jsonl(path: str | Path, rows: list[dict]) -> None:
-    with Path(path).open("w", encoding="utf-8", newline="\n") as handle:
-        handle.writelines(_canonical_json(row) + "\n" for row in rows)
+    destination = Path(path)
+    temporary = _stage_jsonl(destination, rows)
+    _replace_staged([(destination, temporary)])
 
 
 def _finite_number(value: object) -> float | None:
@@ -479,7 +524,7 @@ def build_proxy_bundle(
         input_hashes = {"catalog": sha256_file(catalog), "public_set": sha256_file(public)}
 
     output_files = (output / "representative.jsonl", output / "stress.jsonl", output / "manifest.json")
-    if any(path.exists() for path in output_files) and not overwrite:
+    if any(path.exists() or path.is_symlink() for path in output_files) and not overwrite:
         raise ValueError("output directory already contains a proxy bundle")
     products_by_id = _read_catalog(catalog)
     excluded, profiles = _read_public_restrictions(public)
@@ -497,42 +542,51 @@ def build_proxy_bundle(
 
     output.mkdir(parents=True, exist_ok=True)
     representative_path, stress_path, manifest_path = output_files
-    _write_jsonl(representative_path, representative)
-    _write_jsonl(stress_path, stress)
-    generator_config = {
-        "scenario_weights": SCENARIO_WEIGHTS,
-        "dimensions": list(DIMENSION_NAMES),
-        "price_bins": ["missing", "q1", "q2", "q3", "q4"],
-        "popularity_bins": ["q1", "q2", "q3", "q4"],
-        "completeness_bins": ["0-2", "3-4", "5+"],
-        "representative_count": representative_count,
-        "stress_count": stress_count,
-        "profile_summary_version": 1,
-        "fold_count": 5,
-    }
-    manifest = {
-        "schema_version": 1,
-        "generator_version": GENERATOR_VERSION,
-        "generator_config": generator_config,
-        "generator_config_hash": _canonical_hash(generator_config),
-        "seeds": {
-            "representative": REPRESENTATIVE_SEED,
-            "stress": STRESS_SEED,
-            "profile": PROFILE_SEED,
-        },
-        "input_hashes": input_hashes,
-        "excluded_target_hash": _canonical_hash(sorted(excluded)),
-        "target_hashes": {
-            "representative": _canonical_hash(representative_targets),
-            "stress": _canonical_hash(stress_targets),
-        },
-        "output_hashes": {
-            "representative.jsonl": sha256_file(representative_path),
-            "stress.jsonl": sha256_file(stress_path),
-        },
-        "counts": {"representative": len(representative), "stress": len(stress)},
-    }
-    manifest_path.write_text(json.dumps(manifest, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    staged: list[tuple[Path, Path]] = []
+    try:
+        staged.append((representative_path, _stage_jsonl(representative_path, representative)))
+        staged.append((stress_path, _stage_jsonl(stress_path, stress)))
+        output_hashes = {
+            "representative.jsonl": sha256_file(staged[0][1]),
+            "stress.jsonl": sha256_file(staged[1][1]),
+        }
+        generator_config = {
+            "scenario_weights": SCENARIO_WEIGHTS,
+            "dimensions": list(DIMENSION_NAMES),
+            "price_bins": ["missing", "q1", "q2", "q3", "q4"],
+            "popularity_bins": ["q1", "q2", "q3", "q4"],
+            "completeness_bins": ["0-2", "3-4", "5+"],
+            "representative_count": representative_count,
+            "stress_count": stress_count,
+            "profile_summary_version": 1,
+            "fold_count": 5,
+        }
+        manifest = {
+            "schema_version": 1,
+            "generator_version": GENERATOR_VERSION,
+            "generator_config": generator_config,
+            "generator_config_hash": _canonical_hash(generator_config),
+            "seeds": {
+                "representative": REPRESENTATIVE_SEED,
+                "stress": STRESS_SEED,
+                "profile": PROFILE_SEED,
+            },
+            "input_hashes": input_hashes,
+            "excluded_target_hash": _canonical_hash(sorted(excluded)),
+            "target_hashes": {
+                "representative": _canonical_hash(representative_targets),
+                "stress": _canonical_hash(stress_targets),
+            },
+            "output_hashes": output_hashes,
+            "counts": {"representative": len(representative), "stress": len(stress)},
+        }
+        manifest_text = json.dumps(manifest, sort_keys=True, indent=2) + "\n"
+        staged.append((manifest_path, _stage_text(manifest_path, manifest_text)))
+        _replace_staged(staged)
+    except Exception:
+        for _destination, temporary in staged:
+            temporary.unlink(missing_ok=True)
+        raise
     return manifest
 
 
