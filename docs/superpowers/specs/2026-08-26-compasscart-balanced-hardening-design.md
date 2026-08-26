@@ -260,10 +260,10 @@ lexical 和 dense 不随之全局扩大。该阶段直接证据只覆盖 1 个�
 
 - 全部 pytest、Ruff、contract、fallback、离线安装和 extracted-package smoke 通过。
 - evaluator/data/catalog/dense 资产 hash 与当前冻结值一致。
-- 先新增统一 benchmark harness，再用未修改的 `b641ff9` 生成同口径 R0/P0 资源基线；报告中的 `483.890 ms`、`540.5 MiB` 和 `14.084 s` 只作历史参考，不直接与新 harness 混比。
+- 先新增统一 benchmark harness。未修改的 `b641ff9` 运行两类证据：仓库根 CWD 的 Dense 性能参考，以及仓库外 CWD 的预期失败证据（Dense 不可用），后者只证明 R0 缺陷，不能作为 P0 性能基线。R0 修复并通过任意 CWD 契约后，在仓库外 CWD 生成 Dense 可用的正式 P0 资源基线；P0 和后续阶段只与该 R0 基线同口径比较。报告中的 `483.890 ms`、`540.5 MiB` 和 `14.084 s` 只作历史参考，不直接与新 harness 混比。
 - 每次 trial 使用全新子进程、完整 50,000 catalog、Dense enabled、仓库外 CWD、相同冻结 800-response 消息流；父进程不得预先构造 Agent。消息流由代表性开发集中的 200 个固定代理 session 在 `b641ff9` 上各捕获 4 轮 profile/message，后续 benchmark 无视候选 Agent 的提问变化并原样回放，同时校验 transcript hash。运行三次，不清空 OS 文件缓存，分别报告三次值和中位数，并记录 CPU、RAM、OS、Python、ONNX Runtime、进程 peak working set/RSS 口径及 Dense 状态。
 - 初始化计时包含 Agent 构造、catalog 索引、manifest 校验和 Dense session 加载；响应计时不包含初始化。Windows 使用进程 `peak_wset` 与 `rss`，其他平台使用等价的最大 RSS 并在报告中标明单位转换。
-- 所有阶段的 P95、初始化中位数和 peak 中位数不得比同 harness 的 `b641ff9` 基线高出超过 5%，单响应 max 必须低于 `1.5 s`。
+- P0 及后续阶段的 P95、初始化中位数和 peak 中位数不得比同 harness 的 R0 正式基线高出超过 5%，单响应 max 必须低于 `1.5 s`。
 - P0 只有在输出完全等价且 P95 至少改善 10% 或 peak/初始化至少一项改善 5% 时接受；其他两项不得回退超过 5%。资源优化目标仍为 Windows peak 低于 `500 MiB`、初始化低于 `12 s`。
 - 正常代理/公开评分运行中的 fallback count、invalid response 和未捕获异常均为 0；故障注入测试必须继续证明 fallback 有效。
 - Windows 结果必须确定。Apple Silicon 不是当前环境可声称完成的测试；它是外部发布前置条件：最终包和固定命令交付给指定 Mac 或 macOS CI，完成 package smoke、Dense 可用性、200-session 评分和 session diff 后，才允许报告“跨平台已验证”。没有可用 runner 时明确标记 `macOS verification pending`，不阻塞 Windows 代码实现，但阻塞跨平台完成声明。
