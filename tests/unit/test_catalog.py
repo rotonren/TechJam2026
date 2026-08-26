@@ -1,7 +1,8 @@
 import pytest
 
 from compasscart.catalog import CatalogIndex
-from compasscart.models import RetrievalPlan
+from compasscart.models import Constraint, RetrievalPlan
+from compasscart.normalization import searchable_term_set
 
 
 def test_catalog_returns_valid_unique_matches(fixture_catalog_path):
@@ -27,6 +28,30 @@ def test_attribute_lookup_filters_material(fixture_catalog_path):
     index = CatalogIndex(fixture_catalog_path)
 
     assert index.attribute_ids("material", "leather") == {"BELT1"}
+
+
+@pytest.mark.parametrize("enable_fts", (True, False))
+def test_catalog_builds_shared_semantic_caches_independent_of_fts(
+    fixture_catalog_path, enable_fts
+):
+    index = CatalogIndex(fixture_catalog_path, enable_fts=enable_fts)
+    product = index.product("SHOE1")
+
+    assert index.category_terms["SHOE1"] == frozenset({"shoe", "athletic"})
+    assert index.searchable_terms["SHOE1"] == searchable_term_set(product)
+    assert index.category_term_inverted["shoe"] == {"SHOE1"}
+    assert index.category_ids("athletic shoes") == {"SHOE1"}
+
+
+def test_catalog_matches_and_violations_use_shared_semantics(fixture_catalog_path):
+    index = CatalogIndex(fixture_catalog_path)
+    matching = Constraint("category", "athletic shoes", 1.0, True, "message", 1, 1)
+    missing = Constraint("category", "formal shoes", 1.0, True, "message", 1, 1)
+
+    assert index.matches("SHOE1", matching)
+    assert index.violations("SHOE1", (matching, missing)) == (
+        "category=formal shoes",
+    )
 
 
 def test_python_fallback_preserves_best_match(fixture_catalog_path):

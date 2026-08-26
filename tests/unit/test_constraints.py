@@ -14,13 +14,15 @@ def _constraint(
     upper_value: str | None = None,
     alternatives: tuple[str, ...] = (),
     is_hard: bool = True,
+    confidence: float = 1.0,
+    source: str = "message",
 ) -> Constraint:
     return Constraint(
         attribute,
         value,
-        1.0,
+        confidence,
         is_hard,
-        "message",
+        source,
         1,
         1,
         operator=operator,
@@ -39,6 +41,49 @@ def test_category_matching_normalizes_singular_and_plural_forms():
     constraint = _constraint("category", "belt")
 
     assert matches_constraint({}, {"category": ("belts",)}, constraint)
+
+
+def test_category_matching_merges_available_terms_across_values():
+    constraint = _constraint("category", "athletic shoes")
+
+    assert matches_constraint(
+        {}, {"category": ("Shoes", "Athletic")}, constraint
+    )
+    assert not matches_constraint(
+        {}, {"category": ("Shoes", "Formal")}, constraint
+    )
+
+
+def test_category_not_in_negates_matches_but_empty_availability_never_matches():
+    excluded = _constraint("category", "athletic shoes", operator="not_in")
+
+    assert not matches_constraint(
+        {}, {"category": ("Shoes", "Athletic")}, excluded
+    )
+    assert matches_constraint({}, {"category": ("Shoes", "Formal")}, excluded)
+    assert not matches_constraint({}, {"category": ()}, excluded)
+
+
+def test_soft_clarification_matches_open_text_but_hard_message_stays_structured():
+    product = {
+        "features": ["Machine washable with reinforced seams"],
+        "description": ["A durable everyday layer"],
+    }
+    clarification = _constraint(
+        "feature",
+        "machine washable with reinforced seams",
+        is_hard=False,
+        confidence=0.6,
+        source="clarification",
+    )
+    message = _constraint(
+        "feature",
+        "machine washable with reinforced seams",
+        is_hard=True,
+    )
+
+    assert matches_constraint(product, {"feature": ()}, clarification)
+    assert not matches_constraint(product, {"feature": ()}, message)
 
 
 def test_in_and_not_in_match_normalized_alternatives():

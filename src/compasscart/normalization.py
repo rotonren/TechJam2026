@@ -79,6 +79,13 @@ GENERIC_CATEGORIES = {
     "shoes and jewelry",
     "women",
 }
+CATEGORY_LINK_TERMS = frozenset({"and", "for", "of"})
+CATEGORY_PLURAL_EXCEPTIONS = {
+    "booties": "bootie",
+    "hoodies": "hoodie",
+    "panties": "panty",
+    "ties": "tie",
+}
 
 
 def flatten_text(value: object) -> str:
@@ -101,7 +108,17 @@ def normalize_category_value(value: object) -> str:
     return " ".join(_singular_category_term(token) for token in terms(value))
 
 
+def category_term_set(value: object) -> frozenset[str]:
+    return frozenset(
+        _singular_category_term(token)
+        for token in terms(value)
+        if token not in CATEGORY_LINK_TERMS
+    )
+
+
 def _singular_category_term(token: str) -> str:
+    if token in CATEGORY_PLURAL_EXCEPTIONS:
+        return CATEGORY_PLURAL_EXCEPTIONS[token]
     if len(token) > 3 and token.endswith("ies"):
         return f"{token[:-3]}y"
     if len(token) > 3 and token.endswith("ses"):
@@ -197,3 +214,7 @@ def searchable_fields(product: dict[str, object]) -> tuple[str, ...]:
         flatten_text(product.get("store")),
         flatten_text(product.get("description")),
     )
+
+
+def searchable_term_set(product: dict[str, object]) -> frozenset[str]:
+    return frozenset(terms(searchable_fields(product)))

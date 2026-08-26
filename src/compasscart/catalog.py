@@ -4,17 +4,19 @@ import json
 import math
 import sqlite3
 from collections import defaultdict
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from types import MappingProxyType
 
-from .constraints import hard_constraint_violations
-from .models import Candidate, RetrievalPlan
+from .constraints import hard_constraint_violations, matches_constraint
+from .models import Candidate, Constraint, RetrievalPlan
 from .normalization import (
     GENERIC_CATEGORIES,
+    category_term_set,
     extract_attributes,
     normalize_value,
     searchable_fields,
+    searchable_term_set,
     terms,
 )
 
@@ -26,6 +28,9 @@ class CatalogIndex:
         self.products: dict[str, dict[str, object]] = {}
         self.valid_ids: set[str] = set()
         self.attributes: dict[str, dict[str, tuple[str, ...]]] = {}
+        self.category_terms: dict[str, frozenset[str]] = {}
+        self.searchable_terms: dict[str, frozenset[str]] = {}
+        self.category_term_inverted: dict[str, set[str]] = defaultdict(set)
         self.attribute_inverted: dict[str, dict[str, set[str]]] = defaultdict(
             lambda: defaultdict(set)
         )
@@ -56,10 +61,16 @@ class CatalogIndex:
                 parent_asin = str(product["parent_asin"])
                 fields = searchable_fields(product)
                 attributes = extract_attributes(product)
+                category_terms = category_term_set(attributes.get("category", ()))
+                searchable_terms = searchable_term_set(product)
 
                 self.products[parent_asin] = product
                 self.valid_ids.add(parent_asin)
                 self.attributes[parent_asin] = attributes
+                self.category_terms[parent_asin] = category_terms
+                self.searchable_terms[parent_asin] = searchable_terms
+                for term in category_terms:
+                    self.category_term_inverted[term].add(parent_asin)
                 if not self._fts_enabled:
                     self.field_terms[parent_asin] = tuple(
                         set(terms(field)) for field in fields
@@ -106,10 +117,44 @@ class CatalogIndex:
             return 0.0
 
     def attribute_ids(self, attribute: str, value: str) -> set[str]:
+        if attribute == "category":
+            return self.category_ids(value)
         return set(
             self.attribute_inverted.get(attribute, {}).get(
                 normalize_value(value), set()
             )
+        )
+
+    def category_ids(self, value: object) -> set[str]:
+        desired = category_term_set(value)
+        if not desired:
+            return set()
+        postings = iter(desired)
+        matches = set(self.category_term_inverted.get(next(postings), set()))
+        for term in postings:
+            matches.intersection_update(self.category_term_inverted.get(term, set()))
+            if not matches:
+                break
+        return matches
+
+    def matches(self, parent_asin: str, constraint: Constraint) -> bool:
+        return matches_constraint(
+            self.products[parent_asin],
+            self.attributes[parent_asin],
+            constraint,
+            category_terms=self.category_terms[parent_asin],
+            searchable_terms=self.searchable_terms[parent_asin],
+        )
+
+    def violations(
+        self, parent_asin: str, constraints: Iterable[Constraint]
+    ) -> tuple[str, ...]:
+        return hard_constraint_violations(
+            self.products[parent_asin],
+            self.attributes[parent_asin],
+            constraints,
+            category_terms=self.category_terms[parent_asin],
+            searchable_terms=self.searchable_terms[parent_asin],
         )
 
     def parser_vocabulary(self) -> Mapping[str, tuple[str, ...]]:
@@ -167,11 +212,7 @@ class CatalogIndex:
     def _matches_hard(self, parent_asin: str, plan: RetrievalPlan) -> bool:
         constraints = plan.effective_hard_constraints()
         if constraints:
-            return not hard_constraint_violations(
-                self.products[parent_asin],
-                self.attributes[parent_asin],
-                constraints,
-            )
+            return not self.violations(parent_asin, constraints)
         attributes = self.attributes[parent_asin]
         for attribute, values in plan.hard_filters.items():
             if attribute == "budget":

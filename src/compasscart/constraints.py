@@ -1,16 +1,24 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 
 from .models import Constraint
-from .normalization import normalize_category_value, normalize_value
+from .normalization import (
+    category_term_set,
+    normalize_value,
+    searchable_term_set,
+    terms,
+)
 
 
 def matches_constraint(
     product: dict[str, object],
     attributes: dict[str, tuple[str, ...]],
     constraint: Constraint,
+    *,
+    category_terms: Collection[str] | None = None,
+    searchable_terms: Collection[str] | None = None,
 ) -> bool:
     """Return whether a product satisfies one normalized constraint."""
     if constraint.operator in {"lte", "gte", "between"}:
@@ -20,16 +28,37 @@ def matches_constraint(
     if constraint.attribute == "budget":
         return _matches_budget_equality(product, constraint)
 
+    if constraint.attribute == "category":
+        available = frozenset(
+            category_terms
+            if category_terms is not None
+            else category_term_set(attributes.get("category", ()))
+        )
+        match = any(
+            wanted and wanted.issubset(available)
+            for value in constraint.values()
+            if (wanted := category_term_set(value))
+        )
+        return _apply_set_operator(match, bool(available), constraint)
+
+    if constraint.source == "clarification" and not constraint.is_hard:
+        available = frozenset(
+            searchable_terms
+            if searchable_terms is not None
+            else searchable_term_set(product)
+        )
+        match = any(
+            wanted and wanted.issubset(available)
+            for value in constraint.values()
+            if (wanted := frozenset(terms(value)))
+        )
+        return _apply_set_operator(match, bool(available), constraint)
+
     values = _product_values(attributes, constraint.attribute)
     if not values:
         return False
-    normalizer = (
-        normalize_category_value
-        if constraint.attribute == "category"
-        else normalize_value
-    )
-    wanted = {normalizer(value) for value in constraint.values()}
-    normalized_values = {normalizer(value) for value in values}
+    wanted = {normalize_value(value) for value in constraint.values()}
+    normalized_values = {normalize_value(value) for value in values}
     if constraint.operator in {"eq", "in"}:
         return bool(normalized_values & wanted)
     if constraint.operator == "not_in":
@@ -41,12 +70,34 @@ def hard_constraint_violations(
     product: dict[str, object],
     attributes: dict[str, tuple[str, ...]],
     constraints: Iterable[Constraint],
+    *,
+    category_terms: Collection[str] | None = None,
+    searchable_terms: Collection[str] | None = None,
 ) -> tuple[str, ...]:
     return tuple(
         display_constraint(constraint)
         for constraint in constraints
-        if constraint.is_hard and not matches_constraint(product, attributes, constraint)
+        if constraint.is_hard
+        and not matches_constraint(
+            product,
+            attributes,
+            constraint,
+            category_terms=category_terms,
+            searchable_terms=searchable_terms,
+        )
     )
+
+
+def _apply_set_operator(
+    match: bool, has_available: bool, constraint: Constraint
+) -> bool:
+    if not has_available:
+        return False
+    if constraint.operator in {"eq", "in"}:
+        return match
+    if constraint.operator == "not_in":
+        return not match
+    return False
 
 
 def display_constraint(constraint: Constraint) -> str:
