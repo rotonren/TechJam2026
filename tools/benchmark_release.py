@@ -564,7 +564,8 @@ def _validate_aggregate_report(report: object) -> dict[str, object]:
         "peak_metric_source", "response_count", "trials",
     }
     keys = set(report)
-    if keys != aggregate_keys and keys != aggregate_keys | {"cwd_mode", "platform"}:
+    parent_keys = aggregate_keys | {"cwd_mode", "platform"}
+    if keys != parent_keys and keys != parent_keys | {"comparison"}:
         raise ValueError("aggregate report schema is invalid")
     trials = report.get("trials")
     if not isinstance(trials, list) or not trials:
@@ -573,14 +574,32 @@ def _validate_aggregate_report(report: object) -> dict[str, object]:
     for key, value in expected.items():
         if report.get(key) != value:
             raise ValueError("aggregate report does not match raw trial aggregate")
-    if "platform" in report:
-        if report.get("cwd_mode") not in {"root", "outside"}:
-            raise ValueError("aggregate report cwd mode is invalid")
-        platform_data = report["platform"]
-        if not isinstance(platform_data, dict) or set(platform_data) != _PARENT_PLATFORM_KEYS or _contains_sensitive_key(platform_data):
+    if report.get("cwd_mode") not in {"root", "outside"}:
+        raise ValueError("aggregate report cwd mode is invalid")
+    platform_data = report["platform"]
+    if not isinstance(platform_data, dict) or set(platform_data) != _PARENT_PLATFORM_KEYS or _contains_sensitive_key(platform_data):
+        raise ValueError("aggregate report platform is invalid")
+    for name in ("os", "python", "processor", "psutil"):
+        if not isinstance(platform_data[name], str) or not platform_data[name].strip():
             raise ValueError("aggregate report platform is invalid")
-        if not isinstance(platform_data["os"], str) or not isinstance(platform_data["python"], str) or not isinstance(platform_data["processor"], str):
+    for name in ("cpu_logical", "cpu_physical"):
+        if isinstance(platform_data[name], bool) or not isinstance(platform_data[name], int) or platform_data[name] < 0:
             raise ValueError("aggregate report platform is invalid")
+    _finite(platform_data["ram_mib"])
+    onnxruntime_version = platform_data["onnxruntime"]
+    if onnxruntime_version is not None and (not isinstance(onnxruntime_version, str) or not onnxruntime_version.strip()):
+        raise ValueError("aggregate report platform is invalid")
+    if "comparison" in report:
+        comparison = report["comparison"]
+        if not isinstance(comparison, dict) or set(comparison) != {"accepted", "same_output", "no_regression", "material_gain", "safe", "deltas"}:
+            raise ValueError("aggregate report comparison is invalid")
+        if any(not isinstance(comparison[name], bool) for name in ("accepted", "same_output", "no_regression", "material_gain", "safe")):
+            raise ValueError("aggregate report comparison is invalid")
+        deltas = comparison["deltas"]
+        if not isinstance(deltas, dict) or set(deltas) != {"p95_pct", "init_pct", "peak_pct"}:
+            raise ValueError("aggregate report comparison is invalid")
+        for value in deltas.values():
+            _finite_signed(value)
     return report
 
 
@@ -624,7 +643,7 @@ def _platform_data() -> dict[str, object]:
         onnx_version: str | None = onnxruntime.__version__
     except ImportError:
         onnx_version = None
-    return {"os": platform.platform(), "python": platform.python_version(), "processor": platform.processor(),
+    return {"os": platform.platform(), "python": platform.python_version(), "processor": platform.processor() or "unknown",
             "cpu_logical": psutil.cpu_count(logical=True), "cpu_physical": psutil.cpu_count(logical=False),
             "ram_mib": round(memory.total / (1024 * 1024), 3), "onnxruntime": onnx_version, "psutil": psutil.__version__}
 

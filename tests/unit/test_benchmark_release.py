@@ -48,6 +48,19 @@ def _aggregate_full(**overrides: object) -> dict[str, object]:
     return report
 
 
+def _parent_report(**overrides: object) -> dict[str, object]:
+    report = _aggregate_full(**overrides)
+    report.update({
+        "cwd_mode": "root",
+        "platform": {
+            "os": "Windows", "python": "3.12", "processor": "x86_64",
+            "cpu_logical": 8, "cpu_physical": 4, "ram_mib": 16384.0,
+            "onnxruntime": "1.29.0", "psutil": "7.2.2",
+        },
+    })
+    return report
+
+
 def _capture_metadata() -> dict[str, object]:
     return {
         "catalog_hash": "c" * 64, "proxy_manifest_hash": "a" * 64,
@@ -118,7 +131,7 @@ def test_run_worker_rejects_profile_extras_before_constructing_agent(tmp_path: P
 
 
 def test_compare_reports_enforces_hash_output_performance_and_safety_gates() -> None:
-    baseline = bench.aggregate_trials([_trial(init_ms=100, peak_mib=100, latencies_ms=[100] * 800)])
+    baseline = _parent_report(init_ms=100, peak_mib=100, latencies_ms=[100] * 800)
     candidate = bench.aggregate_trials([_trial(init_ms=95, peak_mib=100, latencies_ms=[90] * 800)])
     result = bench.compare_reports(candidate, baseline)
     assert result["accepted"] is True
@@ -136,7 +149,7 @@ def test_compare_reports_enforces_hash_output_performance_and_safety_gates() -> 
 def test_main_allow_dense_unavailable_relaxes_only_dense_comparison_gate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    baseline = bench.aggregate_trials([_trial(init_ms=100, peak_mib=100, latencies_ms=[100] * 800)])
+    baseline = _parent_report(init_ms=100, peak_mib=100, latencies_ms=[100] * 800)
     baseline_path = tmp_path / "baseline.json"
     baseline_path.write_text(json.dumps(baseline), encoding="utf-8")
     accepted = bench.aggregate_trials([_trial(dense_available=False, init_ms=95, peak_mib=100, latencies_ms=[90] * 800)])
@@ -446,12 +459,48 @@ def test_parent_preflight_rejects_historical_or_forged_aggregate_before_workers(
         bench.main(["--transcript", "input.jsonl", "--output", str(output), "--compare", str(historical)])
     assert called is False
 
-    baseline = _aggregate_full()
+    baseline = _parent_report()
     baseline["init_ms"] = 999.0
     forged = tmp_path / "forged.json"
     forged.write_text(json.dumps(baseline), encoding="utf-8")
     with pytest.raises(ValueError, match="aggregate"):
         bench.main(["--transcript", "input.jsonl", "--output", str(tmp_path / "forged-output.json"), "--compare", str(forged)])
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("os", 3), ("python", 3), ("processor", 3), ("cpu_logical", "bad"),
+        ("cpu_physical", "bad"), ("ram_mib", "bad"), ("ram_mib", float("nan")),
+        ("onnxruntime", 123), ("psutil", 123),
+    ],
+)
+def test_parent_preflight_requires_complete_typed_parent_platform(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str, value: object
+) -> None:
+    report = _parent_report()
+    report["platform"][field] = value
+    path = tmp_path / f"bad-{field}.json"
+    path.write_text(json.dumps(report, allow_nan=True), encoding="utf-8")
+    monkeypatch.setattr(bench, "run_parent", lambda *_args, **_kwargs: pytest.fail("worker ran"))
+    with pytest.raises((TypeError, ValueError)):
+        bench.main(["--transcript", "input.jsonl", "--output", str(tmp_path / f"out-{field}.json"), "--compare", str(path)])
+
+
+def test_parent_preflight_rejects_missing_parent_schema_and_validates_comparison(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    aggregate_only = _aggregate_full()
+    aggregate_path = tmp_path / "aggregate.json"
+    aggregate_path.write_text(json.dumps(aggregate_only), encoding="utf-8")
+    monkeypatch.setattr(bench, "run_parent", lambda *_args, **_kwargs: pytest.fail("worker ran"))
+    with pytest.raises(ValueError, match="schema"):
+        bench.main(["--transcript", "input.jsonl", "--output", str(tmp_path / "out.json"), "--compare", str(aggregate_path)])
+
+    report = _parent_report()
+    report["comparison"] = {"accepted": True}
+    comparison_path = tmp_path / "comparison.json"
+    comparison_path.write_text(json.dumps(report), encoding="utf-8")
+    with pytest.raises(ValueError, match="comparison"):
+        bench.main(["--transcript", "input.jsonl", "--output", str(tmp_path / "comparison-out.json"), "--compare", str(comparison_path)])
 
 
 def test_run_parent_builds_isolated_child_command_and_parses_single_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
