@@ -15,7 +15,7 @@ class ProxyProduct:
     price_bin: str
     popularity_bin: str
     completeness_bin: str
-    difficulty: int
+    difficulty: str
 
     def dimensions(self) -> tuple[tuple[str, str], ...]:
         return (

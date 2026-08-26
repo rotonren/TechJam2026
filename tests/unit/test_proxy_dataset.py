@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import get_type_hints
+
 import pytest
 
 from tools.proxy_dataset import (
@@ -18,7 +20,7 @@ def make_products(count: int = 40) -> list[ProxyProduct]:
             price_bin=f"price-{index % 3}",
             popularity_bin=f"popularity-{index % 5}",
             completeness_bin=f"completeness-{index % 2}",
-            difficulty=index % 3,
+            difficulty=("easy", "medium", "hard")[index % 3],
         )
         for index in range(count)
     ]
@@ -29,6 +31,10 @@ def test_stable_int_is_deterministic_and_seeded() -> None:
     assert stable_int(20260826, "P001") != stable_int(20260827, "P001")
 
 
+def test_proxy_product_difficulty_is_a_string_bucket() -> None:
+    assert get_type_hints(ProxyProduct)["difficulty"] is str
+
+
 def test_proxy_product_dimensions_expose_sampling_marginals() -> None:
     product = ProxyProduct(
         parent_asin="P001",
@@ -36,7 +42,7 @@ def test_proxy_product_dimensions_expose_sampling_marginals() -> None:
         price_bin="mid",
         popularity_bin="high",
         completeness_bin="complete",
-        difficulty=2,
+        difficulty="hard",
     )
 
     assert product.dimensions() == (
@@ -76,7 +82,7 @@ def test_stress_ids_are_disjoint_unique_and_include_a_rare_category() -> None:
             price_bin="mid",
             popularity_bin="high",
             completeness_bin="complete",
-            difficulty=1,
+            difficulty="medium",
         )
         for index in range(40)
     ]
