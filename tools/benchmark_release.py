@@ -200,22 +200,34 @@ def _unlink_if_same_inode(path: Path, expected: os.stat_result) -> None:
         path.unlink(missing_ok=True)
 
 
+def _registered_tempfile(*, prefix: str, suffix: str, directory: Path) -> tuple[int, Path, os.stat_result]:
+    descriptor, temporary_name = tempfile.mkstemp(prefix=prefix, suffix=suffix, dir=directory)
+    temporary = Path(temporary_name)
+    try:
+        temporary_stat = os.fstat(descriptor)
+    except BaseException:
+        try:
+            os.close(descriptor)
+        finally:
+            temporary.unlink(missing_ok=True)
+        raise
+    return descriptor, temporary, temporary_stat
+
+
 def _publish_bundle(entries: list[tuple[Path, bytes]]) -> None:
-    """Publish a small related file set exclusively, rolling back partial links."""
+    """Publish a small related file set exclusively in caller-specified order."""
     if len({path for path, _ in entries}) != len(entries):
         raise ValueError("publication destinations must be unique")
     for destination, _ in entries:
         if os.path.lexists(destination):
             raise FileExistsError(f"output already exists: {destination}")
-    ordered = sorted(entries, key=lambda item: 0 if item[0].name.endswith(".manifest.json") else 1)
     staged: list[tuple[Path, Path, os.stat_result]] = []
-    published: list[tuple[Path, os.stat_result]] = []
     try:
-        for destination, payload in ordered:
+        for destination, payload in entries:
             destination.parent.mkdir(parents=True, exist_ok=True)
-            descriptor, temporary_name = tempfile.mkstemp(prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent)
-            temporary = Path(temporary_name)
-            temporary_stat = os.fstat(descriptor)
+            descriptor, temporary, temporary_stat = _registered_tempfile(
+                prefix=f".{destination.name}.", suffix=".tmp", directory=destination.parent,
+            )
             staged.append((destination, temporary, temporary_stat))
             try:
                 handle = os.fdopen(descriptor, "wb")
@@ -235,11 +247,6 @@ def _publish_bundle(entries: list[tuple[Path, bytes]]) -> None:
                 if isinstance(error, FileExistsError):
                     raise
                 raise RuntimeError("exclusive publication requires hardlink support") from error
-            published.append((destination, temporary_stat))
-    except Exception:
-        for destination, temporary_stat in published:
-            _unlink_if_same_inode(destination, temporary_stat)
-        raise
     finally:
         for _, temporary, temporary_stat in staged:
             _unlink_if_same_inode(temporary, temporary_stat)
@@ -252,14 +259,17 @@ def _serialize_jsonl(rows: list[dict[str, object]]) -> bytes:
 @contextmanager
 def _sealed_capture_environment() -> object:
     original_cwd = Path.cwd()
+    dense_was_set = "COMPASSCART_DISABLE_DENSE" in os.environ
     previous_dense = os.environ.pop("COMPASSCART_DISABLE_DENSE", None)
     os.chdir(_repo_root())
     try:
         yield
     finally:
         os.chdir(original_cwd)
-        if previous_dense is not None:
+        if dense_was_set and previous_dense is not None:
             os.environ["COMPASSCART_DISABLE_DENSE"] = previous_dense
+        else:
+            os.environ.pop("COMPASSCART_DISABLE_DENSE", None)
 
 
 def _capture_manifest(
@@ -372,37 +382,42 @@ def _capture_payload(
         if len(selected) != _SESSION_COUNT:
             raise ValueError("representative suite does not provide 200 eligible rows")
         catalog_hash_before = sha256_file(catalog)
-        if agent_class is None:
-            from agent import Agent as agent_class  # import only after sealed selection
-        agent = agent_class(str(catalog))
-        transcript: list[dict[str, object]] = []
-        for index, row in enumerate(selected, 1):
-            session_id = f"bench_{index:04d}"
-            profile = _safe_profile(row.get("user_profile"))
-            agent.reset(session_id, profile)
-            dialogue = ProxyDialogue(row, row.get("dialogue_variant"))
-            disclosed: set[str] = set()
-            boundary_used = False
-            override_applied = row.get("scenario_type") != "intent_override"
-            message = dialogue.initial_message(str(row["category_bucket"]), disclosed)
-            for turn in _TURNS:
-                transcript.append({"session_id": session_id, "turn": turn, "profile": profile, "message": message})
-                response = agent.respond(session_id, message, turn, 10)
-                if not isinstance(response, dict) or not isinstance(response.get("message"), str):
-                    raise TypeError("agent response is not a valid response object")
-                if turn == _TURNS[-1]:
-                    continue
-                override = row.get("behavior", {}).get("override", {})
-                if not override_applied and turn + 1 == int(override.get("turn", 3)):
-                    override_applied = True
-                    value = str(override.get("new_value", ""))
-                    if value:
-                        disclosed.add(value)
-                    message = str(override.get("message", "Actually, please ignore my earlier preference."))
-                else:
-                    message, boundary_used = dialogue.customer_reply(response.get("ask_attribute"), disclosed, boundary_used)
-        if sha256_file(catalog) != catalog_hash_before:
-            raise ValueError("catalog changed during transcript capture")
+        with tempfile.TemporaryDirectory(prefix="compasscart-capture-") as temporary:
+            snapshot = _copy_catalog_snapshot(catalog, Path(temporary), catalog_hash_before)
+            if agent_class is None:
+                from agent import Agent
+                agent_class = Agent
+            agent = agent_class(str(snapshot))
+            transcript: list[dict[str, object]] = []
+            for index, row in enumerate(selected, 1):
+                session_id = f"bench_{index:04d}"
+                profile = _safe_profile(row.get("user_profile"))
+                agent.reset(session_id, profile)
+                dialogue = ProxyDialogue(row, row.get("dialogue_variant"))
+                disclosed: set[str] = set()
+                boundary_used = False
+                override_applied = row.get("scenario_type") != "intent_override"
+                message = dialogue.initial_message(str(row["category_bucket"]), disclosed)
+                for turn in _TURNS:
+                    transcript.append({"session_id": session_id, "turn": turn, "profile": profile, "message": message})
+                    response = agent.respond(session_id, message, turn, 10)
+                    if not isinstance(response, dict) or not isinstance(response.get("message"), str):
+                        raise TypeError("agent response is not a valid response object")
+                    if turn == _TURNS[-1]:
+                        continue
+                    override = row.get("behavior", {}).get("override", {})
+                    if not override_applied and turn + 1 == int(override.get("turn", 3)):
+                        override_applied = True
+                        value = str(override.get("new_value", ""))
+                        if value:
+                            disclosed.add(value)
+                        message = str(override.get("message", "Actually, please ignore my earlier preference."))
+                    else:
+                        message, boundary_used = dialogue.customer_reply(response.get("ask_attribute"), disclosed, boundary_used)
+            if sha256_file(snapshot) != catalog_hash_before:
+                raise ValueError("catalog snapshot changed during transcript capture")
+            if sha256_file(catalog) != catalog_hash_before:
+                raise ValueError("catalog changed during transcript capture")
     validate_transcript(transcript)
     encoded = _serialize_jsonl(transcript)
     dense = getattr(agent, "dense", None)
@@ -414,6 +429,7 @@ def _capture_payload(
     if representative_dataset_hash is None:
         representative_dataset_hash = _canonical_hash(rows)
     metadata = {
+        # The capture checks above bind this hash to both the source and private replay snapshot.
         "catalog_hash": catalog_hash_before,
         "proxy_manifest_hash": proxy_manifest_hash,
         "representative_dataset_hash": representative_dataset_hash,
@@ -446,7 +462,7 @@ def capture_transcript(
             raise ValueError("replayed transcript does not match existing bytes")
         _publish_bundle([(manifest_path, manifest_payload)])
     else:
-        _publish_bundle([(destination, encoded), (manifest_path, manifest_payload)])
+        _publish_bundle([(manifest_path, manifest_payload), (destination, encoded)])
     return digest
 
 
@@ -937,18 +953,16 @@ def _preflight_destination(destination: str | Path) -> None:
     if os.path.lexists(path):
         raise FileExistsError(f"output already exists: {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".probe", dir=path.parent)
-    temporary = Path(temporary_name)
-    probe = temporary.with_suffix(".link")
-    temporary_stat = os.fstat(descriptor)
-    try:
-        os.close(descriptor)
-        os.link(temporary, probe)
-    except OSError as error:
-        raise RuntimeError("exclusive report publication requires hardlink support") from error
-    finally:
-        _unlink_if_same_inode(probe, temporary_stat)
-        _unlink_if_same_inode(temporary, temporary_stat)
+    with tempfile.TemporaryDirectory(prefix=f".{path.name}.", dir=path.parent) as private_directory:
+        descriptor, temporary, _ = _registered_tempfile(
+            prefix="source.", suffix=".probe", directory=Path(private_directory),
+        )
+        probe = Path(private_directory) / "probe.link"
+        try:
+            os.close(descriptor)
+            os.link(temporary, probe)
+        except OSError as error:
+            raise RuntimeError("exclusive report publication requires hardlink support") from error
 
 
 def load_report(path: str | Path) -> dict[str, object]:

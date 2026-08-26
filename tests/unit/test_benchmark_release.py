@@ -161,7 +161,9 @@ def test_publish_bundle_removes_registered_temp_when_flush_fails(tmp_path: Path,
     assert not list(tmp_path.glob("*.tmp"))
 
 
-def test_publish_bundle_commits_manifest_first_and_preserves_replaced_link(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_publish_bundle_preserves_explicit_manifest_first_and_competing_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     transcript = tmp_path / "transcript.jsonl"
     manifest = Path(f"{transcript}.manifest.json")
     real_link = os.link
@@ -178,27 +180,133 @@ def test_publish_bundle_commits_manifest_first_and_preserves_replaced_link(tmp_p
 
     monkeypatch.setattr(bench.os, "link", racing_link)
     with pytest.raises(RuntimeError, match="exclusive publication"):
-        bench._publish_bundle([(transcript, b"transcript"), (manifest, b"manifest")])
+        bench._publish_bundle([(manifest, b"manifest"), (transcript, b"transcript")])
 
     assert calls[0] == manifest
     assert manifest.read_bytes() == b"competitor"
     assert not transcript.exists()
 
 
-def test_preflight_destination_preserves_competing_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_publish_bundle_never_reorders_explicit_commit_sequence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sidecar = tmp_path / "sidecar.json"
+    commit_marker = tmp_path / "frozen.manifest.json"
+    real_link = os.link
+    destinations: list[Path] = []
+
+    def spy_link(source: str | Path, destination: str | Path, *args: object, **kwargs: object) -> None:
+        destinations.append(Path(destination))
+        real_link(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(bench.os, "link", spy_link)
+    bench._publish_bundle([(sidecar, b"sidecar"), (commit_marker, b"transcript")])
+
+    assert destinations == [sidecar, commit_marker]
+
+
+def test_publish_bundle_keeps_published_sidecar_when_commit_marker_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sidecar = tmp_path / "transcript.jsonl.manifest.json"
+    commit_marker = tmp_path / "transcript.jsonl"
+    real_link = os.link
+
+    def fail_commit_link(source: str | Path, destination: str | Path, *args: object, **kwargs: object) -> None:
+        if Path(destination) == commit_marker:
+            raise OSError("commit link failed")
+        real_link(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(bench.os, "link", fail_commit_link)
+    with pytest.raises(RuntimeError, match="exclusive publication"):
+        bench._publish_bundle([(sidecar, b"sidecar"), (commit_marker, b"transcript")])
+
+    assert sidecar.read_bytes() == b"sidecar"
+    assert not commit_marker.exists()
+
+
+def test_publish_bundle_fstat_failure_closes_descriptor_and_removes_temp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_fstat = os.fstat
+    real_close = os.close
+    descriptors: list[int] = []
+
+    def fail_fstat(descriptor: int) -> object:
+        descriptors.append(descriptor)
+        raise OSError("fstat failed")
+
+    monkeypatch.setattr(bench.os, "fstat", fail_fstat)
+    with pytest.raises(OSError, match="fstat failed"):
+        bench._publish_bundle([(tmp_path / "report.json", b"report")])
+
+    leaked_paths = list(tmp_path.iterdir())
+    leaked_descriptors: list[int] = []
+    for descriptor in descriptors:
+        try:
+            real_fstat(descriptor)
+        except OSError:
+            continue
+        leaked_descriptors.append(descriptor)
+        real_close(descriptor)
+    for path in leaked_paths:
+        path.unlink(missing_ok=True)
+    assert leaked_descriptors == []
+    assert leaked_paths == []
+
+
+def test_preflight_destination_uses_private_probe_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     destination = tmp_path / "report.json"
+    observed_parent: Path | None = None
 
-    def competing_link(_: str | Path, probe: str | Path, *__: object, **___: object) -> None:
-        Path(probe).write_bytes(b"competitor")
-        raise FileExistsError("probe occupied")
+    def reject_link(source: str | Path, probe: str | Path, *__: object, **___: object) -> None:
+        nonlocal observed_parent
+        source_path = Path(source)
+        probe_path = Path(probe)
+        assert source_path.parent == probe_path.parent
+        assert source_path.parent != tmp_path
+        observed_parent = source_path.parent
+        raise OSError("hardlink unavailable")
 
-    monkeypatch.setattr(bench.os, "link", competing_link)
+    monkeypatch.setattr(bench.os, "link", reject_link)
     with pytest.raises(RuntimeError, match="hardlink support"):
         bench._preflight_destination(destination)
 
-    probe = next(iter(tmp_path.glob("*.link")), None)
-    assert probe is not None
-    assert probe.read_bytes() == b"competitor"
+    assert observed_parent is not None
+    assert not observed_parent.exists()
+    assert not list(tmp_path.iterdir())
+
+
+def test_preflight_fstat_failure_closes_descriptor_and_removes_private_temp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_fstat = os.fstat
+    real_close = os.close
+    descriptors: list[int] = []
+
+    def fail_fstat(descriptor: int) -> object:
+        descriptors.append(descriptor)
+        raise OSError("fstat failed")
+
+    monkeypatch.setattr(bench.os, "fstat", fail_fstat)
+    with pytest.raises(OSError, match="fstat failed"):
+        bench._preflight_destination(tmp_path / "report.json")
+
+    leaked_paths = list(tmp_path.iterdir())
+    leaked_descriptors: list[int] = []
+    for descriptor in descriptors:
+        try:
+            real_fstat(descriptor)
+        except OSError:
+            continue
+        leaked_descriptors.append(descriptor)
+        real_close(descriptor)
+    for path in leaked_paths:
+        path.unlink(missing_ok=True)
+    assert leaked_descriptors == []
+    assert leaked_paths == []
 
 
 def test_run_worker_rejects_missing_capture_manifest_before_agent_construction(tmp_path: Path) -> None:
@@ -434,6 +542,92 @@ def test_capture_seals_environment_and_rolls_back_on_bundle_failure(tmp_path: Pa
     assert Path.cwd() == original_cwd
 
 
+def test_sealed_capture_environment_restores_dense_flag_exactly(monkeypatch: pytest.MonkeyPatch) -> None:
+    key = "COMPASSCART_DISABLE_DENSE"
+    monkeypatch.delenv(key, raising=False)
+    with bench._sealed_capture_environment():
+        os.environ[key] = "set-inside"
+    assert key not in os.environ
+
+    monkeypatch.setenv(key, "")
+    with bench._sealed_capture_environment():
+        os.environ[key] = "changed-inside"
+    assert os.environ[key] == ""
+
+
+def test_capture_agent_reads_private_catalog_snapshot_during_restored_source_swap(tmp_path: Path) -> None:
+    source_catalog = tmp_path / "catalog.jsonl"
+    source_catalog.write_bytes(b"catalog-a")
+    source_hash = hashlib.sha256(b"catalog-a").hexdigest()
+    agent_paths: list[Path] = []
+    observed_catalogs: list[bytes] = []
+
+    class SnapshotReadingAgent(_CaptureAgent):
+        def __init__(self, catalog_path: str) -> None:
+            super().__init__(catalog_path)
+            self.catalog_path = Path(catalog_path)
+            agent_paths.append(self.catalog_path)
+
+        def respond(self, session_id: str, message: str, turn: int, top_k: int) -> dict:
+            if not self.calls:
+                source_catalog.write_bytes(b"catalog-b")
+            observed_catalogs.append(self.catalog_path.read_bytes())
+            response = super().respond(session_id, message, turn, top_k)
+            if len(self.calls) == 800:
+                source_catalog.write_bytes(b"catalog-a")
+            return response
+
+    output = tmp_path / "transcript.jsonl"
+    bench.capture_transcript(
+        tmp_path, source_catalog, output, agent_class=SnapshotReadingAgent,
+        suite_loader=lambda *_: ({}, [_proxy_row(index) for index in range(250)]),
+    )
+
+    manifest = json.loads(Path(f"{output}.manifest.json").read_text(encoding="utf-8"))
+    assert agent_paths[0] != source_catalog.resolve()
+    assert agent_paths[0].name == "catalog.snapshot.jsonl"
+    assert not agent_paths[0].exists()
+    assert observed_catalogs == [b"catalog-a"] * 800
+    assert source_catalog.read_bytes() == b"catalog-a"
+    assert manifest["catalog_hash"] == source_hash
+
+
+def test_capture_rejects_source_catalog_left_changed(tmp_path: Path) -> None:
+    source_catalog = tmp_path / "catalog.jsonl"
+    source_catalog.write_bytes(b"catalog-a")
+
+    class SourceMutatingAgent(_CaptureAgent):
+        def respond(self, session_id: str, message: str, turn: int, top_k: int) -> dict:
+            if not self.calls:
+                source_catalog.write_bytes(b"catalog-b")
+            return super().respond(session_id, message, turn, top_k)
+
+    with pytest.raises(ValueError, match="catalog changed during transcript capture"):
+        bench._capture_payload(
+            tmp_path, source_catalog, agent_class=SourceMutatingAgent,
+            suite_loader=lambda *_: ({}, [_proxy_row(index) for index in range(250)]),
+        )
+
+
+def test_catalog_snapshot_rejects_source_change_during_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_catalog = tmp_path / "catalog.jsonl"
+    source_catalog.write_bytes(b"catalog-a")
+    snapshot_directory = tmp_path / "snapshot"
+    snapshot_directory.mkdir()
+    expected_hash = hashlib.sha256(b"catalog-a").hexdigest()
+    real_copy = bench.shutil.copyfileobj
+
+    def mutate_during_copy(source: object, target: object) -> None:
+        real_copy(source, target)
+        source_catalog.write_bytes(b"catalog-b")
+
+    monkeypatch.setattr(bench.shutil, "copyfileobj", mutate_during_copy)
+    with pytest.raises(ValueError, match="catalog changed while creating snapshot"):
+        bench._copy_catalog_snapshot(source_catalog, snapshot_directory, expected_hash)
+
+
 def test_capture_existing_transcript_only_publishes_sidecar_on_exact_match(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     transcript = tmp_path / "existing.jsonl"
     transcript.write_bytes(b"same")
@@ -445,6 +639,25 @@ def test_capture_existing_transcript_only_publishes_sidecar_on_exact_match(tmp_p
     monkeypatch.setattr(bench, "_capture_payload", lambda *_args, **_kwargs: (b"same", _capture_metadata()))
     assert bench.capture_transcript(tmp_path, tmp_path / "catalog.jsonl", transcript) == hashlib.sha256(b"same").hexdigest()
     assert json.loads(Path(str(transcript) + ".manifest.json").read_text(encoding="utf-8"))["transcript_hash"] == hashlib.sha256(b"same").hexdigest()
+
+
+def test_capture_publishes_sidecar_before_special_named_transcript(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    transcript = tmp_path / "frozen.manifest.json"
+    sidecar = Path(f"{transcript}.manifest.json")
+    real_link = os.link
+    destinations: list[Path] = []
+
+    def spy_link(source: str | Path, destination: str | Path, *args: object, **kwargs: object) -> None:
+        destinations.append(Path(destination))
+        real_link(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(bench, "_capture_payload", lambda *_args, **_kwargs: (b"transcript", _capture_metadata()))
+    monkeypatch.setattr(bench.os, "link", spy_link)
+    bench.capture_transcript(tmp_path, tmp_path / "catalog.jsonl", transcript)
+
+    assert destinations == [sidecar, transcript]
 
 
 class _TraceSink:
@@ -575,8 +788,10 @@ def test_aggregate_trials_rejects_inexact_schema_and_catalog_disagreement() -> N
         bench.aggregate_trials([{**valid, "fallback_count": True}])
     with pytest.raises(ValueError):
         bench.aggregate_trials([{**valid, "platform": {"recommendation": "leak"}}])
-    with pytest.raises(ValueError, match="platform"):
-        bench.aggregate_trials([valid, {**valid, "platform": {"python": "other", "platform": "test"}}])
+    different_platform = {**valid, "platform": {**valid["platform"], "python": "3.13"}}
+    assert bench._validate_trial(different_platform) == different_platform
+    with pytest.raises(ValueError, match="trials disagree"):
+        bench.aggregate_trials([valid, different_platform])
     with pytest.raises(ValueError, match="instrumentation"):
         bench.aggregate_trials([{**valid, "instrumentation_delta_ms": {"count": 800, "p50": 0, "p95": 0, "max": 0}}])
 
