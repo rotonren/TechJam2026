@@ -366,7 +366,9 @@ def _cleanup_staged(
 
 def _retained_backup_details(entries: list[_StagedEntry]) -> list[str]:
     return [
-        f"destination {entry.destination.resolve()} retained original at {entry.backup.resolve()}"
+        "destination "
+        f"{os.path.abspath(os.fspath(entry.destination))} retained original at "
+        f"{os.path.abspath(os.fspath(entry.backup))}"
         for entry in entries
         if entry.backup_holds_original and entry.backup is not None and _entry_exists(entry.backup)
     ]

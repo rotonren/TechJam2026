@@ -653,6 +653,67 @@ def test_replace_staged_mixed_existing_and_absent_destinations_preserves_recover
     assert list(output.glob(".*.tmp")) == []
 
 
+def test_retained_backup_details_use_no_follow_absolute_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    destination = tmp_path / "destination.jsonl"
+    backup = tmp_path / ".destination.jsonl.recovery.bak"
+    backup.write_text("original", encoding="utf-8")
+    entry = proxy_dataset._StagedEntry(
+        destination=destination,
+        temporary=tmp_path / ".destination.jsonl.staged.tmp",
+        backup=backup,
+        backup_holds_original=True,
+    )
+    expected = (
+        f"destination {os.path.abspath(os.fspath(destination))} "
+        f"retained original at {os.path.abspath(os.fspath(backup))}"
+    )
+
+    def resolve_must_not_run(self: Path, *args: object, **kwargs: object) -> Path:
+        raise AssertionError(f"resolve unexpectedly called for {self}")
+
+    monkeypatch.setattr(Path, "resolve", resolve_must_not_run)
+
+    assert proxy_dataset._retained_backup_details([entry]) == [expected]
+
+
+def test_restore_failure_retains_symlink_backup_entry_and_reports_its_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "output"
+    output.mkdir()
+    external = tmp_path / "external.txt"
+    external.write_text("original", encoding="utf-8")
+    representative = output / "representative.jsonl"
+    try:
+        representative.symlink_to(external)
+    except OSError as error:
+        pytest.skip(f"symlinks unavailable on this platform: {error}")
+    (output / "stress.jsonl").write_text("old-stress", encoding="utf-8")
+    (output / "manifest.json").write_text("old-manifest", encoding="utf-8")
+    staged = staged_bundle(output, "new")
+    actual_replace = proxy_dataset.os.replace
+    calls = 0
+
+    def fail_publication_and_first_restore(source: object, destination: object) -> None:
+        nonlocal calls
+        calls += 1
+        if calls in {4, 5}:
+            raise OSError(f"fault at replacement {calls}")
+        actual_replace(source, destination)
+
+    monkeypatch.setattr(proxy_dataset.os, "replace", fail_publication_and_first_restore)
+
+    with pytest.raises(RuntimeError) as error:
+        proxy_dataset._replace_staged(staged)
+
+    retained = list(output.glob(".*.bak"))
+    assert len(retained) == 1
+    assert retained[0].is_symlink()
+    assert os.readlink(retained[0]) == os.fspath(external)
+    assert os.path.abspath(os.fspath(retained[0])) in str(error.value)
+    assert external.read_text(encoding="utf-8") == "original"
+
+
 def test_cli_help_exposes_force_and_keeps_frozen_bypass_hidden(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setattr(sys, "argv", ["proxy_dataset", "--help"])
 
