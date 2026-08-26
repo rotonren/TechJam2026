@@ -495,11 +495,12 @@ def _validate_audit_aggregate(aggregate: dict[str, object], metadata: dict[str, 
     if count == 0:
         expected_efficiency = expected_score = 0.0
     else:
-        expected_efficiency = round(max(0.0, min(1.0, (11.0 - float(mttc)) / 10.0)), 6)
+        raw_efficiency = max(0.0, min(1.0, (11.0 - float(mttc)) / 10.0))
+        expected_efficiency = round(raw_efficiency, 6)
         expected_score = round(
             0.50 * float(aggregate["hit_rate_at_10"])
             + 0.30 * float(aggregate["mrr"])
-            + 0.20 * expected_efficiency,
+            + 0.20 * raw_efficiency,
             6,
         )
     if (

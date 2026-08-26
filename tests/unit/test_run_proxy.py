@@ -1033,6 +1033,27 @@ def test_audit_report_accepts_weighted_metric_summary_at_write_boundary(tmp_path
     assert payload["aggregate"]["recommended_technical_score"] == 0.4525
 
 
+def test_audit_report_technical_score_uses_raw_efficiency_before_rounding(tmp_path: Path):
+    from tools.run_proxy import write_audit_report
+
+    result = _weighted_audit_result()
+    result.update(
+        {
+            "hit_rate_at_10": 0.5,
+            "mrr": 0.3376451,
+            "mttc": 7.796954,
+            "efficiency": 0.320305,
+            "recommended_technical_score": 0.415354,
+        }
+    )
+
+    write_audit_report(tmp_path / "valid.json", result, _legal_audit_metadata())
+
+    result["recommended_technical_score"] = 0.415355
+    with pytest.raises(ValueError, match="metrics"):
+        write_audit_report(tmp_path / "inconsistent.json", result, _legal_audit_metadata())
+
+
 def test_audit_report_accepts_official_metrics_with_subgroup_rounding_drift(tmp_path: Path):
     from evaluator.local_evaluator import metric_summary
     from tools.run_proxy import write_audit_report
