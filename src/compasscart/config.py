@@ -29,5 +29,5 @@ class RuntimeConfig:
         ("dense", 0.35),
         ("attribute", 0.30),
     )
-    rank_fusion_weight: float = 0.10
+    rank_fusion_weight: float = 0.20
     mmr_lambda: float = 0.85
