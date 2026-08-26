@@ -592,17 +592,114 @@ def test_compare_reports_requires_catalog_provenance_and_exact_boundaries() -> N
         bench.compare_reports({**candidate, "fallback_count": True}, baseline)
 
 
-def test_compare_reports_rejects_cwd_and_runtime_platform_mismatches() -> None:
+def test_compare_reports_returns_structured_compatibility_mismatches() -> None:
     baseline = _parent_report(init_ms=100, peak_mib=100, latency_ms=100)
+    compatibility_flags = {
+        "same_cwd_mode", "same_runtime_platform", "same_parent_platform",
+        "same_peak_metric_source", "same_capture_provenance", "same_catalog",
+        "same_catalog_snapshot", "same_transcript", "same_output", "same_trial_count",
+    }
+
+    mismatches: list[tuple[dict[str, object], set[str], list[str]]] = []
+    cwd_candidate = _parent_report(init_ms=95, peak_mib=100, latency_ms=90)
+    cwd_candidate["cwd_mode"] = "outside"
+    mismatches.append((cwd_candidate, {"same_cwd_mode"}, ["cwd_mode_mismatch"]))
+
+    runtime_platform = {
+        "os": "Linux", "python": "3.12", "processor": "x86_64",
+        "onnxruntime": "1.29.0", "psutil": "7.2.2",
+    }
+    runtime_candidate = _parent_report(
+        init_ms=95, peak_mib=100, latency_ms=90, platform=runtime_platform,
+    )
+    runtime_candidate["platform"] = {**runtime_candidate["platform"], **runtime_platform}
+    mismatches.append((runtime_candidate, {"same_runtime_platform"}, ["runtime_platform_mismatch"]))
+
+    parent_candidate = _parent_report(init_ms=95, peak_mib=100, latency_ms=90)
+    parent_candidate["platform"] = {**parent_candidate["platform"], "cpu_logical": 16}
+    mismatches.append((parent_candidate, {"same_parent_platform"}, ["parent_platform_mismatch"]))
+    mismatches.extend([
+        (
+            _parent_report(
+                init_ms=95, peak_mib=100, latency_ms=90,
+                peak_metric_source="posix_ru_maxrss_kib",
+            ),
+            {"same_peak_metric_source"},
+            ["peak_metric_source_mismatch"],
+        ),
+        (
+            _parent_report(
+                init_ms=95, peak_mib=100, latency_ms=90,
+                capture_provenance={
+                    **_trial()["capture_provenance"], "config_hash": "f" * 64,
+                },
+            ),
+            {"same_capture_provenance"},
+            ["capture_provenance_mismatch"],
+        ),
+        (
+            _parent_report(
+                init_ms=95, peak_mib=100, latency_ms=90,
+                catalog_hash="d" * 64, catalog_snapshot_hash="d" * 64,
+            ),
+            {"same_catalog", "same_catalog_snapshot"},
+            ["catalog_hash_mismatch", "catalog_snapshot_hash_mismatch"],
+        ),
+        (
+            _parent_report(init_ms=95, peak_mib=100, latency_ms=90, transcript_hash="d" * 64),
+            {"same_transcript"},
+            ["transcript_hash_mismatch"],
+        ),
+        (
+            _parent_report(init_ms=95, peak_mib=100, latency_ms=90, response_hash="d" * 64),
+            {"same_output"},
+            ["response_hash_mismatch"],
+        ),
+    ])
+    trial_count_candidate = _parent_report(init_ms=95, peak_mib=100, latency_ms=90)
+    trial_count_candidate["trials"] = trial_count_candidate["trials"] * 2
+    trial_count_candidate.update(bench.aggregate_trials(trial_count_candidate["trials"]))
+    mismatches.append((trial_count_candidate, {"same_trial_count"}, ["trial_count_mismatch"]))
+
+    for candidate, false_flags, reasons in mismatches:
+        result = bench.compare_reports(candidate, baseline)
+        assert result["accepted"] is False
+        assert result["compatible"] is False
+        assert all(result[flag] is False for flag in false_flags)
+        assert result["reasons"] == reasons
+        assert all(result[flag] is True for flag in compatibility_flags - false_flags)
+
+
+def test_main_writes_rejected_comparison_before_exiting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    baseline = _parent_report(init_ms=100, peak_mib=100, latency_ms=100)
+    baseline_path = tmp_path / "baseline.json"
+    baseline_path.write_text(json.dumps(baseline), encoding="utf-8")
     candidate = _parent_report(init_ms=95, peak_mib=100, latency_ms=90)
     candidate["cwd_mode"] = "outside"
-    with pytest.raises(ValueError, match="cwd"):
-        bench.compare_reports(candidate, baseline)
+    worker_called = False
 
-    candidate = _parent_report(init_ms=95, peak_mib=100, latency_ms=90)
-    candidate["platform"] = {**candidate["platform"], "os": "Linux"}
-    with pytest.raises(ValueError, match="platform"):
-        bench.compare_reports(candidate, baseline)
+    def run_parent(*_args: object, **_kwargs: object) -> dict[str, object]:
+        nonlocal worker_called
+        worker_called = True
+        return candidate
+
+    monkeypatch.setattr(bench, "run_parent", run_parent)
+    output = tmp_path / "rejected.json"
+
+    with pytest.raises(SystemExit, match="benchmark gate failed"):
+        bench.main([
+            "--transcript", "input.jsonl", "--output", str(output),
+            "--compare", str(baseline_path),
+        ])
+
+    assert worker_called is True
+    written = json.loads(output.read_text(encoding="utf-8"))
+    assert written["comparison"]["accepted"] is False
+    assert written["comparison"]["same_cwd_mode"] is False
+    assert written["comparison"]["reasons"] == ["cwd_mode_mismatch"]
+    assert bench._validate_aggregate_report(written) == written
 
 
 def test_diagnostic_excerpt_escapes_all_control_sequences_and_is_bounded() -> None:

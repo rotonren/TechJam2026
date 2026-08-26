@@ -57,6 +57,24 @@ _CAPTURE_PROVENANCE_KEYS = frozenset({
 })
 _TRIAL_PLATFORM_KEYS = frozenset({"os", "python", "processor", "onnxruntime", "psutil"})
 _PARENT_PLATFORM_KEYS = frozenset({"os", "python", "processor", "cpu_logical", "cpu_physical", "ram_mib", "onnxruntime", "psutil"})
+_PARENT_RESOURCE_KEYS = ("cpu_logical", "cpu_physical", "ram_mib")
+_COMPARISON_COMPATIBILITY_REASONS = (
+    ("same_cwd_mode", "cwd_mode_mismatch"),
+    ("same_runtime_platform", "runtime_platform_mismatch"),
+    ("same_parent_platform", "parent_platform_mismatch"),
+    ("same_peak_metric_source", "peak_metric_source_mismatch"),
+    ("same_capture_provenance", "capture_provenance_mismatch"),
+    ("same_catalog", "catalog_hash_mismatch"),
+    ("same_catalog_snapshot", "catalog_snapshot_hash_mismatch"),
+    ("same_transcript", "transcript_hash_mismatch"),
+    ("same_output", "response_hash_mismatch"),
+    ("same_trial_count", "trial_count_mismatch"),
+)
+_COMPARISON_COMPATIBILITY_KEYS = frozenset(name for name, _ in _COMPARISON_COMPATIBILITY_REASONS)
+_COMPARISON_BOOLEAN_KEYS = _COMPARISON_COMPATIBILITY_KEYS | frozenset({
+    "accepted", "compatible", "no_regression", "material_gain", "safe",
+})
+_COMPARISON_KEYS = _COMPARISON_BOOLEAN_KEYS | frozenset({"reasons", "deltas"})
 
 
 def _repo_root() -> Path:
@@ -704,9 +722,20 @@ def _validate_aggregate_report(report: object) -> dict[str, object]:
         raise ValueError("aggregate report runtime platform does not match parent platform")
     if "comparison" in report:
         comparison = report["comparison"]
-        if not isinstance(comparison, dict) or set(comparison) != {"accepted", "same_output", "no_regression", "material_gain", "safe", "deltas"}:
+        if not isinstance(comparison, dict) or set(comparison) != _COMPARISON_KEYS:
             raise ValueError("aggregate report comparison is invalid")
-        if any(not isinstance(comparison[name], bool) for name in ("accepted", "same_output", "no_regression", "material_gain", "safe")):
+        if any(not isinstance(comparison[name], bool) for name in _COMPARISON_BOOLEAN_KEYS):
+            raise ValueError("aggregate report comparison is invalid")
+        expected_reasons = [
+            reason for name, reason in _COMPARISON_COMPATIBILITY_REASONS if not comparison[name]
+        ]
+        if comparison["reasons"] != expected_reasons:
+            raise ValueError("aggregate report comparison is invalid")
+        compatible = all(comparison[name] for name in _COMPARISON_COMPATIBILITY_KEYS)
+        if comparison["compatible"] is not compatible:
+            raise ValueError("aggregate report comparison is invalid")
+        accepted = compatible and comparison["no_regression"] and comparison["material_gain"] and comparison["safe"]
+        if comparison["accepted"] is not accepted:
             raise ValueError("aggregate report comparison is invalid")
         deltas = comparison["deltas"]
         if not isinstance(deltas, dict) or set(deltas) != {"p95_pct", "init_pct", "peak_pct"}:
@@ -732,22 +761,31 @@ def compare_reports(
     for report in (candidate, baseline):
         for name in ("response_hash", "transcript_hash", "catalog_hash"):
             _validate_hash(report.get(name), name)
-    same_output = all(candidate[name] == baseline[name] for name in ("response_hash", "transcript_hash", "catalog_hash"))
-    if candidate["cwd_mode"] != baseline["cwd_mode"]:
-        raise ValueError("comparison cwd mode differs")
-    if candidate["runtime_platform"] != baseline["runtime_platform"]:
-        raise ValueError("comparison runtime platform differs")
-    if candidate["peak_metric_source"] != baseline["peak_metric_source"]:
-        raise ValueError("comparison peak metric source differs")
-    if candidate["capture_provenance"] != baseline["capture_provenance"]:
-        raise ValueError("comparison capture provenance differs")
+    compatibility = {
+        "same_cwd_mode": candidate["cwd_mode"] == baseline["cwd_mode"],
+        "same_runtime_platform": candidate["runtime_platform"] == baseline["runtime_platform"],
+        "same_parent_platform": all(
+            candidate["platform"][name] == baseline["platform"][name] for name in _PARENT_RESOURCE_KEYS
+        ),
+        "same_peak_metric_source": candidate["peak_metric_source"] == baseline["peak_metric_source"],
+        "same_capture_provenance": candidate["capture_provenance"] == baseline["capture_provenance"],
+        "same_catalog": candidate["catalog_hash"] == baseline["catalog_hash"],
+        "same_catalog_snapshot": candidate["catalog_snapshot_hash"] == baseline["catalog_snapshot_hash"],
+        "same_transcript": candidate["transcript_hash"] == baseline["transcript_hash"],
+        "same_output": candidate["response_hash"] == baseline["response_hash"],
+        "same_trial_count": candidate["trial_count"] == baseline["trial_count"],
+    }
+    compatible = all(compatibility.values())
+    reasons = [
+        reason for name, reason in _COMPARISON_COMPATIBILITY_REASONS if not compatibility[name]
+    ]
     no_regression = cand_p95 <= base_p95 * 1.05 and cand_init <= base_init * 1.05 and cand_peak <= base_peak * 1.05
     material_gain = cand_p95 <= base_p95 * 0.90 or cand_init <= base_init * 0.95 or cand_peak <= base_peak * 0.95
     safe = cand_max < 1500 and candidate.get("fallback_count") == 0 and (
         not require_dense or candidate.get("dense_available") is True
     )
-    return {"accepted": bool(same_output and no_regression and material_gain and safe), "same_output": same_output,
-            "no_regression": no_regression, "material_gain": material_gain, "safe": safe,
+    return {"accepted": bool(compatible and no_regression and material_gain and safe), "compatible": compatible,
+            **compatibility, "reasons": reasons, "no_regression": no_regression, "material_gain": material_gain, "safe": safe,
             "deltas": {"p95_pct": (cand_p95 / base_p95 - 1) * 100, "init_pct": (cand_init / base_init - 1) * 100, "peak_pct": (cand_peak / base_peak - 1) * 100}}
 
 
