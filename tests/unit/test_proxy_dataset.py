@@ -121,6 +121,12 @@ def test_verify_frozen_inputs_reports_mismatches(tmp_path: Path, monkeypatch: py
         verify_frozen_inputs(tmp_path)
 
 
+def test_frozen_hash_constants_match_checked_out_project_files() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+
+    assert verify_frozen_inputs(project_root) == proxy_dataset.FROZEN_SHA256
+
+
 def test_enforced_frozen_paths_reject_unapproved_inputs_before_reading(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="data/catalog.jsonl"):
         build_proxy_bundle(tmp_path / "missing-catalog", tmp_path / "missing-public", tmp_path / "output")

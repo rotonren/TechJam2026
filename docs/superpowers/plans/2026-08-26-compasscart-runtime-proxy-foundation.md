@@ -389,7 +389,7 @@ FROZEN_SHA256 = {
     "assets/SHA256SUMS": "2857869c2a872ccea9d93bb043b8cb45eee07cb1efc1f943b401c1919982d86e",
     "assets/model/model.int8.onnx": "3013f5cdb68ea6b6a271ab8fef96c5e6721669c2c2be3f83ec1be07486133892",
     "assets/model/tokenizer.json": "da0e79933b9ed51798a3ae27893d3c5fa4a201126cef75586296df9b4d2c62a0",
-    "assets/product_vectors/product_ids.npy": "e5ab6608c15dd0b51dd2f63db088705613efdfae85859462c2d514752fe8d7c9",
+    "assets/product_vectors/product_ids.npy": "e5ab6608c15dd0b51dd2f63db088705613efdfea85859462c2d514752fe8d7c9",
     "assets/product_vectors/scales.npy": "3eb26371cb15a3e2af5d287a290cd338c12c3a3f9e606bdd911c53e6d4064d53",
     "assets/product_vectors/vectors.int8.npy": "ccaf43034103312788ddde27890861c6f5d93052dbc930b0b1bff56acf0c4d63",
 }
