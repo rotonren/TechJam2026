@@ -38,6 +38,7 @@ def test_parser_detects_no_preference_and_browsing_route():
     browsing = parser.parse("I'm looking for shoes, but I'm still exploring.", turn=1)
 
     assert no_preference.no_preference_attribute == "color"
+    assert no_preference.route_hint is None
     assert browsing.route_hint == "browsing"
 
 
@@ -336,3 +337,99 @@ def test_catalog_description_aliases_do_not_create_adjustable_hard_constraints()
     assert "adjustable" not in {
         item.value for item in result.constraints if item.is_hard
     }
+
+
+def test_catalog_category_spans_protect_nested_style_and_brand_aliases():
+    parser = MessageParser(
+        {
+            "category": ("Fashion Sneakers", "Boy Shorts"),
+            "style": ("Sneaker",),
+            "brand": ("Boy",),
+        }
+    )
+
+    fashion = parser.parse("I want Fashion Sneakers", turn=1)
+    boy = parser.parse("I want Boy Shorts", turn=1)
+
+    assert ("category", "fashion sneakers") in {
+        (item.attribute, item.value) for item in fashion.constraints
+    }
+    assert not any(
+        item.attribute == "style" and item.value == "sneaker" and item.is_hard
+        for item in fashion.constraints
+    )
+    assert ("category", "boy shorts") in {
+        (item.attribute, item.value) for item in boy.constraints
+    }
+    assert not any(
+        item.attribute == "brand" and item.value == "boy" and item.is_hard
+        for item in boy.constraints
+    )
+
+
+def test_explicit_style_and_brand_cues_survive_category_span_protection():
+    parser = MessageParser(
+        {
+            "category": ("Fashion Sneakers", "Boy Shorts"),
+            "style": ("Sneaker",),
+            "brand": ("Boy",),
+        }
+    )
+
+    fashion = parser.parse("I want sneaker style Fashion Sneakers", turn=1)
+    boy = parser.parse("I want Boy brand shorts", turn=1)
+
+    assert ("style", "sneaker") in {
+        (item.attribute, item.value) for item in fashion.constraints
+    }
+    assert ("brand", "boy") in {
+        (item.attribute, item.value) for item in boy.constraints
+    }
+
+
+def test_pending_attribute_is_an_explicit_cue_for_dynamic_catalog_aliases():
+    parser = MessageParser(
+        {"brand": ("Acme Fashion",), "style": ("Sneaker",)}
+    )
+
+    brand = parser.parse("Acme Fashion", turn=2, expected_attribute="brand")
+    style = parser.parse("Sneaker", turn=2, expected_attribute="style")
+
+    assert [
+        (item.attribute, item.value, item.confidence, item.is_hard, item.source)
+        for item in (*brand.constraints, *style.constraints)
+    ] == [
+        ("brand", "acme fashion", 1.0, True, "clarification"),
+        ("style", "sneaker", 1.0, True, "clarification"),
+    ]
+
+
+def test_dynamic_catalog_aliases_accept_explicit_label_punctuation():
+    parser = MessageParser(
+        {"brand": ("Acme Fashion",), "style": ("Sneaker",)}
+    )
+
+    brand = parser.parse("brand: Acme Fashion", turn=1)
+    style = parser.parse("style: Sneaker", turn=1)
+
+    assert ("brand", "acme fashion") in {
+        (item.attribute, item.value) for item in brand.constraints
+    }
+    assert ("style", "sneaker") in {
+        (item.attribute, item.value) for item in style.constraints
+    }
+
+
+def test_amazon_root_taxonomy_phrase_is_not_a_hard_category():
+    parser = MessageParser(
+        {"category": ("Shoes", "Jewelry", "Fashion Sneakers")}
+    )
+
+    result = parser.parse(
+        "I'm looking for Shoes & Jewelry Men, but I'm still exploring.", turn=1
+    )
+
+    assert not any(
+        item.attribute == "category" and item.is_hard
+        for item in result.constraints
+    )

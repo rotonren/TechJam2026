@@ -71,6 +71,11 @@ _CATEGORY_RE = re.compile(
     r"(?P<category>[a-z][a-z\s-]{0,48}?)(?=\s*(?:[,.!;]|\b(?:but|with|that)\b|$))",
     re.IGNORECASE,
 )
+_AMAZON_ROOT_TAXONOMY_RE = re.compile(
+    r"\b(?:clothing\s*,?\s+)?shoes\s+(?:&|and)\s+jewelry"
+    r"(?:\s+(?:men|women))?\b",
+    re.IGNORECASE,
+)
 _KNOWN_CATEGORIES = {
     "belt",
     "belts",
@@ -271,7 +276,6 @@ class MessageParser:
         if _NO_PREFERENCE_RE.search(text):
             attribute = expected_attribute or self._mentioned_attribute(text)
             return ParseResult(
-                route_hint="browsing",
                 no_preference_attribute=attribute,
                 is_override=is_override,
                 is_continuation=is_continuation,
@@ -292,13 +296,25 @@ class MessageParser:
         source: ConstraintSource = "clarification" if expected_attribute else "message"
         extracted: list[ParsedConstraint] = []
 
-        known = self._extract_known_values(text, source)
-        categories = self._extract_category(text, source)
+        known = self._extract_known_values(text, source, expected_attribute)
+        categories = (
+            []
+            if any(item.attribute == "category" for item in known)
+            else self._extract_category(text, source)
+        )
         extracted.extend(known)
         extracted.extend(categories)
-        if expected_attribute and not any(
-            item.attribute == normalize_value(expected_attribute) for item in extracted
-        ) and not any(item.operator == "not_in" for item in extracted) and self._has_unrecognized_expected_text(text, extracted):
+        if (
+            expected_attribute
+            and not any(
+                item.attribute == normalize_value(expected_attribute)
+                for item in extracted
+            )
+            and not any(item.operator == "not_in" for item in extracted)
+            and self._has_unrecognized_expected_text(
+                text, extracted, expected_attribute
+            )
+        ):
             extracted.extend(self._extract_expected(text, expected_attribute, source))
 
         route_hint: RouteHint = None
@@ -316,7 +332,10 @@ class MessageParser:
         )
 
     def _has_unrecognized_expected_text(
-        self, text: str, extracted: list[ParsedConstraint]
+        self,
+        text: str,
+        extracted: list[ParsedConstraint],
+        expected_attribute: str | None,
     ) -> bool:
         """Avoid assigning a known answer to an unrelated pending slot.
 
@@ -327,7 +346,10 @@ class MessageParser:
         phrases are removed without changing the original query evidence.
         """
         covered: list[tuple[int, int]] = [
-            (start, end) for start, end, _, _ in self._vocabulary_matches(text)
+            (start, end)
+            for start, end, _, _ in self._vocabulary_matches(
+                text, expected_attribute
+            )
         ]
         for pattern in (_BUDGET_BETWEEN_RE, _BUDGET_DIRECTION_RE, _BUDGET_DEFAULT_RE):
             covered.extend(match.span() for match in pattern.finditer(text))
@@ -368,13 +390,16 @@ class MessageParser:
             "style",
             "use_case",
         }:
-            return [ParsedConstraint(attribute, cleaned, 1.0, True, source)]
+            return [ParsedConstraint(attribute, cleaned, 0.6, False, source)]
         return []
 
     def _extract_known_values(
-        self, text: str, source: ConstraintSource
+        self,
+        text: str,
+        source: ConstraintSource,
+        expected_attribute: str | None = None,
     ) -> list[ParsedConstraint]:
-        matches = self._vocabulary_matches(text)
+        matches = self._vocabulary_matches(text, expected_attribute)
         result: list[ParsedConstraint] = []
         index = 0
         while index < len(matches):
@@ -416,13 +441,15 @@ class MessageParser:
 
         return [*result, *self._extract_budget(text, source)]
 
-    def _vocabulary_matches(self, text: str) -> list[tuple[int, int, str, str]]:
+    def _vocabulary_matches(
+        self, text: str, expected_attribute: str | None = None
+    ) -> list[tuple[int, int, str, str]]:
         match_text = re.sub(r"['’]s\b", "  ", text)
         token_spans = [
             (match.group(0).lower(), match.start(), match.end())
             for match in _TOKEN_SPAN_RE.finditer(match_text)
         ]
-        candidates: list[tuple[int, int, str, str]] = []
+        raw_candidates: list[tuple[int, int, str, str]] = []
         for start_index, (_, start, _) in enumerate(token_spans):
             max_length = min(self._max_phrase_words, len(token_spans) - start_index)
             for length in range(max_length, 0, -1):
@@ -435,11 +462,44 @@ class MessageParser:
                     value = lookup.get(key)
                     if value is None:
                         continue
-                    if not self._alias_allowed(attribute, value, text, start):
-                        continue
-                    if attribute == "category" and self._is_negative_value(text, start):
-                        continue
-                    candidates.append((start, end, attribute, value))
+                    raw_candidates.append((start, end, attribute, value))
+
+        root_taxonomy_spans = tuple(
+            match.span() for match in _AMAZON_ROOT_TAXONOMY_RE.finditer(text)
+        )
+        category_spans = tuple(
+            (start, end)
+            for start, end, attribute, value in raw_candidates
+            if attribute == "category"
+            and self._alias_allowed(
+                attribute,
+                value,
+                text,
+                start,
+                end,
+                (),
+                root_taxonomy_spans,
+                expected_attribute,
+            )
+            and not self._is_negative_value(text, start)
+        )
+        candidates = [
+            (start, end, attribute, value)
+            for start, end, attribute, value in raw_candidates
+            if self._alias_allowed(
+                attribute,
+                value,
+                text,
+                start,
+                end,
+                category_spans,
+                root_taxonomy_spans,
+                expected_attribute,
+            )
+            and not (
+                attribute == "category" and self._is_negative_value(text, start)
+            )
+        ]
 
         # Prefer the longest phrase at a start position and prevent overlapping
         # aliases for the same attribute while allowing the same text to map to
@@ -462,7 +522,15 @@ class MessageParser:
         return sorted(result, key=lambda item: (item[0], item[1], item[2], item[3]))
 
     def _alias_allowed(
-        self, attribute: str, value: str, text: str, start: int
+        self,
+        attribute: str,
+        value: str,
+        text: str,
+        start: int,
+        end: int,
+        category_spans: tuple[tuple[int, int], ...],
+        root_taxonomy_spans: tuple[tuple[int, int], ...],
+        expected_attribute: str | None,
     ) -> bool:
         normalized = normalize_value(value)
         value_terms = terms(normalized)
@@ -472,11 +540,29 @@ class MessageParser:
             return False
         if normalized in self._fixed_values.get(attribute, set()):
             return True
+        if attribute == "category" and self._overlaps_any(
+            start, end, root_taxonomy_spans
+        ):
+            return False
+        explicit_cue = attribute == normalize_value(
+            expected_attribute or ""
+        ) or self._has_explicit_alias_cue(
+            attribute,
+            normalized,
+            text,
+            start,
+            end,
+        )
+        if attribute in {"brand", "style"}:
+            if self._overlaps_any(start, end, category_spans) and not explicit_cue:
+                return False
+            if not explicit_cue:
+                return False
         if attribute == "brand" and (
             normalized in _NON_BRAND_TERMS
             or (
                 normalized in self._semantic_fixed_values
-                and not re.search(r"\bbrand\b", text[:start].lower())
+                and not explicit_cue
             )
             or normalized in {
                 normalize_value(item) for item in self._vocabulary.get("category", ())
@@ -513,13 +599,11 @@ class MessageParser:
                 )
             )
         if attribute == "brand":
-            return bool(
-                re.search(r"\b(?:brand|by|from|looking\s+for|need|want)\b", clause)
-            )
+            return True
         if attribute == "size":
             return bool(re.search(r"\b(?:size|sized|wear|in)\b", clause))
         if attribute == "style":
-            return bool(re.search(r"\b(?:style|prefer|looking\s+for|want)\b", clause))
+            return True
         if attribute == "feature":
             return bool(
                 re.search(
@@ -528,6 +612,41 @@ class MessageParser:
                 )
             )
         return True
+
+    @staticmethod
+    def _overlaps_any(
+        start: int, end: int, spans: tuple[tuple[int, int], ...]
+    ) -> bool:
+        return any(
+            start < other_end and other_start < end
+            for other_start, other_end in spans
+        )
+
+    @staticmethod
+    def _has_explicit_alias_cue(
+        attribute: str, value: str, text: str, start: int, end: int
+    ) -> bool:
+        if attribute == "brand":
+            if "brand" in terms(value) or re.search(r"['’]s\b", text[start:end]):
+                return True
+            left = text[max(0, start - 24) : start]
+            right = text[end : min(len(text), end + 16)]
+            return bool(
+                re.search(
+                    r"\b(?:brand|by|from)(?:\s+is)?\s*[:=-]?\s*$", left
+                )
+                or re.match(r"\s*(?:brand)\b", right)
+            )
+        if attribute == "style":
+            left = text[max(0, start - 24) : start]
+            right = text[end : min(len(text), end + 16)]
+            return bool(
+                re.search(
+                    r"\b(?:style|styled)(?:\s+is)?\s*[:=-]?\s*$", left
+                )
+                or re.match(r"\s*(?:style|styled)\b", right)
+            )
+        return False
 
     @staticmethod
     def _phrase_aliases(
@@ -654,6 +773,11 @@ class MessageParser:
     ) -> list[ParsedConstraint]:
         match = _CATEGORY_RE.search(text)
         if not match:
+            return []
+        if self._overlaps_any(
+            *match.span("category"),
+            tuple(item.span() for item in _AMAZON_ROOT_TAXONOMY_RE.finditer(text)),
+        ):
             return []
         category_tokens = terms(match.group("category"))
         known = [token for token in category_tokens if token in _KNOWN_CATEGORIES]

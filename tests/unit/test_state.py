@@ -62,6 +62,19 @@ def test_no_preference_is_recorded_and_not_added_as_constraint():
     assert all(item.attribute != "size" for item in state.active_constraints())
 
 
+def test_no_preference_keeps_existing_buying_route():
+    store = SessionStore(MessageParser())
+    store.reset("s1", {"preference_tags": []})
+    store.update("s1", "I need blue shoes", 1)
+
+    state = store.update(
+        "s1", "No preference.", 2, expected_attribute="size"
+    )
+
+    assert state.route == "buying"
+    assert state.route_hint == "buying"
+
+
 def test_query_history_keeps_evidence_but_resets_on_override():
     store = SessionStore(MessageParser())
     store.reset("s1", {"preference_tags": []})
@@ -105,6 +118,51 @@ def test_update_keeps_unknown_second_message_as_bounded_query_evidence():
     assert Agent._query_text("with a magnetic clasp", state).count(
         "with a magnetic clasp"
     ) == 1
+
+
+def test_unrecognized_clarification_stays_query_evidence_without_hard_constraint():
+    store = SessionStore(MessageParser({"feature": ("Waterproof",)}))
+    store.reset("s1", {})
+
+    state = store.update(
+        "s1", "with a magnetic clasp", 2, expected_attribute="feature"
+    )
+
+    assert state.query_history == ["with a magnetic clasp"]
+    assert Agent._query_text("with a magnetic clasp", state).count(
+        "with a magnetic clasp"
+    ) == 1
+    clarification_constraints = [
+        item for item in state.constraints if item.source == "clarification"
+    ]
+    assert [
+        (item.attribute, item.value, item.is_hard, item.confidence)
+        for item in clarification_constraints
+    ] == [("feature", "with a magnetic clasp", False, 0.6)]
+
+
+def test_catalog_category_remains_specific_in_session_state():
+    store = SessionStore(
+        MessageParser(
+            {
+                "category": ("Fashion Sneakers", "Boy Shorts"),
+                "style": ("Sneaker",),
+                "brand": ("Boy",),
+            }
+        )
+    )
+
+    for session_id, message, expected in (
+        ("fashion", "I want Fashion Sneakers", "fashion sneakers"),
+        ("boy", "I want Boy Shorts", "boy shorts"),
+    ):
+        store.reset(session_id, {})
+        state = store.update(session_id, message, 1)
+        assert [
+            item.value
+            for item in state.active_constraints()
+            if item.attribute == "category"
+        ] == [expected]
 
 
 def test_update_marks_and_clears_continuation_requests_and_keeps_last_four_messages():
