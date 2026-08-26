@@ -8,6 +8,7 @@ import math
 import os
 import platform
 import re
+import shutil
 import statistics
 import subprocess
 import sys
@@ -41,13 +42,20 @@ _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 _TRIAL_KEYS = frozenset({
     "init_ms", "peak_mib", "rss_mib", "peak_metric_source", "latencies_ms",
     "trace_latencies_ms", "instrumentation_delta_ms", "dense_available", "dense_status",
-    "fallback_count", "response_hash", "transcript_hash", "catalog_hash", "response_count", "platform",
+    "fallback_count", "response_hash", "transcript_hash", "catalog_hash", "catalog_snapshot_hash",
+    "capture_provenance", "response_count", "platform",
 })
 _CAPTURE_METADATA_KEYS = frozenset({
     "catalog_hash", "proxy_manifest_hash", "representative_dataset_hash", "agent_class", "config_hash",
     "dense_available", "dense_status", "capture_seed", "session_count", "response_count", "cwd_mode", "platform",
 })
-_TRIAL_PLATFORM_KEYS = frozenset({"python", "platform"})
+_CAPTURE_MANIFEST_KEYS = _CAPTURE_METADATA_KEYS | frozenset({"schema_version", "transcript_hash", "created_at"})
+_CAPTURE_PLATFORM_KEYS = frozenset({"python", "platform"})
+_CAPTURE_PROVENANCE_KEYS = frozenset({
+    "manifest_hash", "proxy_manifest_hash", "representative_dataset_hash", "agent_class", "config_hash",
+    "capture_seed", "session_count", "response_count", "cwd_mode", "dense_available", "dense_status", "platform",
+})
+_TRIAL_PLATFORM_KEYS = frozenset({"os", "python", "processor", "onnxruntime", "psutil"})
 _PARENT_PLATFORM_KEYS = frozenset({"os", "python", "processor", "cpu_logical", "cpu_physical", "ram_mib", "onnxruntime", "psutil"})
 
 
@@ -161,6 +169,19 @@ def _write_exclusive(destination: Path, payload: bytes) -> None:
     _publish_bundle([(destination, payload)])
 
 
+def _same_inode(path: Path, expected: os.stat_result) -> bool:
+    try:
+        current = os.stat(path, follow_symlinks=False)
+    except OSError:
+        return False
+    return (current.st_dev, current.st_ino) == (expected.st_dev, expected.st_ino)
+
+
+def _unlink_if_same_inode(path: Path, expected: os.stat_result) -> None:
+    if _same_inode(path, expected):
+        path.unlink(missing_ok=True)
+
+
 def _publish_bundle(entries: list[tuple[Path, bytes]]) -> None:
     """Publish a small related file set exclusively, rolling back partial links."""
     if len({path for path, _ in entries}) != len(entries):
@@ -168,19 +189,26 @@ def _publish_bundle(entries: list[tuple[Path, bytes]]) -> None:
     for destination, _ in entries:
         if os.path.lexists(destination):
             raise FileExistsError(f"output already exists: {destination}")
-    staged: list[tuple[Path, Path]] = []
-    published: list[Path] = []
+    ordered = sorted(entries, key=lambda item: 0 if item[0].name.endswith(".manifest.json") else 1)
+    staged: list[tuple[Path, Path, os.stat_result]] = []
+    published: list[tuple[Path, os.stat_result]] = []
     try:
-        for destination, payload in entries:
+        for destination, payload in ordered:
             destination.parent.mkdir(parents=True, exist_ok=True)
             descriptor, temporary_name = tempfile.mkstemp(prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent)
             temporary = Path(temporary_name)
-            with os.fdopen(descriptor, "wb") as handle:
+            temporary_stat = os.fstat(descriptor)
+            staged.append((destination, temporary, temporary_stat))
+            try:
+                handle = os.fdopen(descriptor, "wb")
+            except Exception:
+                os.close(descriptor)
+                raise
+            with handle:
                 handle.write(payload)
                 handle.flush()
                 os.fsync(handle.fileno())
-            staged.append((destination, temporary))
-        for destination, temporary in staged:
+        for destination, temporary, temporary_stat in staged:
             if os.path.lexists(destination):
                 raise FileExistsError(f"output already exists: {destination}")
             try:
@@ -189,14 +217,14 @@ def _publish_bundle(entries: list[tuple[Path, bytes]]) -> None:
                 if isinstance(error, FileExistsError):
                     raise
                 raise RuntimeError("exclusive publication requires hardlink support") from error
-            published.append(destination)
+            published.append((destination, temporary_stat))
     except Exception:
-        for destination in published:
-            destination.unlink(missing_ok=True)
+        for destination, temporary_stat in published:
+            _unlink_if_same_inode(destination, temporary_stat)
         raise
     finally:
-        for _, temporary in staged:
-            temporary.unlink(missing_ok=True)
+        for _, temporary, temporary_stat in staged:
+            _unlink_if_same_inode(temporary, temporary_stat)
 
 
 def _serialize_jsonl(rows: list[dict[str, object]]) -> bytes:
@@ -229,7 +257,9 @@ def _capture_manifest(
         raise ValueError("capture dense metadata is invalid")
     if metadata["capture_seed"] != 20260829 or metadata["session_count"] != _SESSION_COUNT or metadata["response_count"] != _RESPONSE_COUNT or metadata["cwd_mode"] != "root":
         raise ValueError("capture metadata is invalid")
-    if not isinstance(metadata["platform"], dict) or _contains_sensitive_key(metadata["platform"]):
+    if not isinstance(metadata["platform"], dict) or set(metadata["platform"]) != _CAPTURE_PLATFORM_KEYS or _contains_sensitive_key(metadata["platform"]):
+        raise ValueError("capture platform is invalid")
+    if any(not isinstance(metadata["platform"][name], str) or not metadata["platform"][name].strip() for name in _CAPTURE_PLATFORM_KEYS):
         raise ValueError("capture platform is invalid")
     manifest = {
         "schema_version": 1, "transcript_hash": transcript_hash, **metadata,
@@ -239,6 +269,68 @@ def _capture_manifest(
     if _contains_sensitive_key(manifest) or any(key in manifest for key in forbidden):
         raise ValueError("capture manifest contains sensitive fields")
     return manifest
+
+
+def _capture_provenance(manifest: dict[str, object], manifest_hash: str) -> dict[str, object]:
+    return {
+        "manifest_hash": manifest_hash,
+        "proxy_manifest_hash": manifest["proxy_manifest_hash"],
+        "representative_dataset_hash": manifest["representative_dataset_hash"],
+        "agent_class": manifest["agent_class"], "config_hash": manifest["config_hash"],
+        "capture_seed": manifest["capture_seed"], "session_count": manifest["session_count"],
+        "response_count": manifest["response_count"], "cwd_mode": manifest["cwd_mode"],
+        "dense_available": manifest["dense_available"], "dense_status": manifest["dense_status"],
+        "platform": manifest["platform"],
+    }
+
+
+def _validate_capture_provenance(value: object) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != _CAPTURE_PROVENANCE_KEYS or _contains_sensitive_key(value):
+        raise ValueError("capture provenance is invalid")
+    for name in ("manifest_hash", "proxy_manifest_hash", "representative_dataset_hash", "config_hash"):
+        _validate_hash(value[name], name)
+    if not isinstance(value["agent_class"], str) or not value["agent_class"].strip():
+        raise ValueError("capture provenance is invalid")
+    if value["capture_seed"] != 20260829 or value["session_count"] != _SESSION_COUNT or value["response_count"] != _RESPONSE_COUNT:
+        raise ValueError("capture provenance is invalid")
+    if value["cwd_mode"] != "root" or not isinstance(value["dense_available"], bool) or not isinstance(value["dense_status"], str) or not value["dense_status"].strip():
+        raise ValueError("capture provenance is invalid")
+    capture_platform = value["platform"]
+    if not isinstance(capture_platform, dict) or set(capture_platform) != _CAPTURE_PLATFORM_KEYS:
+        raise ValueError("capture provenance is invalid")
+    if any(not isinstance(capture_platform[name], str) or not capture_platform[name].strip() for name in _CAPTURE_PLATFORM_KEYS):
+        raise ValueError("capture provenance is invalid")
+    return value
+
+
+def _load_capture_manifest(
+    transcript: Path, *, transcript_hash: str, catalog_hash: str,
+) -> tuple[dict[str, object], str]:
+    manifest_path = Path(f"{transcript}.manifest.json")
+    try:
+        raw = manifest_path.read_bytes()
+        manifest = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("capture manifest is invalid or missing") from error
+    if not isinstance(manifest, dict) or set(manifest) != _CAPTURE_MANIFEST_KEYS:
+        raise ValueError("capture manifest schema is invalid")
+    if manifest.get("schema_version") != 1:
+        raise ValueError("capture manifest version is invalid")
+    if manifest.get("transcript_hash") != transcript_hash or manifest.get("catalog_hash") != catalog_hash:
+        raise ValueError("capture manifest provenance is invalid")
+    metadata = {name: manifest[name] for name in _CAPTURE_METADATA_KEYS}
+    expected = _capture_manifest(metadata, transcript_hash=transcript_hash)
+    for name in _CAPTURE_METADATA_KEYS:
+        if manifest[name] != expected[name]:
+            raise ValueError("capture manifest metadata is invalid")
+    created_at = manifest.get("created_at")
+    if not isinstance(created_at, str) or not created_at.strip():
+        raise ValueError("capture manifest timestamp is invalid")
+    try:
+        datetime.fromisoformat(created_at)
+    except ValueError as error:
+        raise ValueError("capture manifest timestamp is invalid") from error
+    return manifest, hashlib.sha256(raw).hexdigest()
 
 
 def _capture_payload(
@@ -414,6 +506,11 @@ def _validate_trial(trial: object) -> dict[str, object]:
     _validate_latency_values(trial["latencies_ms"], "latencies_ms")
     _validate_latency_values(trial["trace_latencies_ms"], "trace_latencies_ms")
     _validate_latency_diagnostic(trial["instrumentation_delta_ms"])
+    expected_instrumentation = _latency_summary([
+        wall - trace for wall, trace in zip(trial["latencies_ms"], trial["trace_latencies_ms"], strict=True)
+    ])
+    if trial["instrumentation_delta_ms"] != expected_instrumentation:
+        raise ValueError("instrumentation delta summary does not match latency arrays")
     if not isinstance(trial["dense_available"], bool):
         raise TypeError("trial dense availability is invalid")
     if not isinstance(trial["dense_status"], str) or not trial["dense_status"].strip():
@@ -424,14 +521,11 @@ def _validate_trial(trial: object) -> dict[str, object]:
         raise ValueError("trial response count is invalid")
     for name in ("response_hash", "transcript_hash", "catalog_hash"):
         _validate_hash(trial[name], name)
-    if not isinstance(trial["platform"], dict) or set(trial["platform"]) != _TRIAL_PLATFORM_KEYS or _contains_sensitive_key(trial["platform"]):
-        raise ValueError("trial platform is invalid")
-    if any(not isinstance(value, str) or not value.strip() for value in trial["platform"].values()):
-        raise ValueError("trial platform is invalid")
-    try:
-        json.dumps(trial["platform"], allow_nan=False)
-    except (TypeError, ValueError) as error:
-        raise ValueError("trial platform is invalid") from error
+    if trial["catalog_snapshot_hash"] != trial["catalog_hash"]:
+        raise ValueError("trial catalog snapshot provenance is invalid")
+    _validate_hash(trial["catalog_snapshot_hash"], "catalog_snapshot_hash")
+    _validate_capture_provenance(trial["capture_provenance"])
+    _validate_runtime_platform(trial["platform"])
     return trial
 
 
@@ -446,14 +540,21 @@ def run_worker(
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError("transcript is invalid JSONL") from error
     validate_transcript(rows)
-    if agent_class is None:
-        from agent import Agent as agent_class
     catalog_hash = catalog_hasher(catalog_path)
     _validate_hash(catalog_hash, "catalog_hash")
+    manifest, manifest_hash = _load_capture_manifest(
+        Path(transcript_path), transcript_hash=transcript_hash, catalog_hash=catalog_hash,
+    )
+    if agent_class is None:
+        from agent import Agent as agent_class
     started = clock()
     agent = agent_class(str(Path(catalog_path).resolve()))
     init_ms = (clock() - started) * 1000
     _finite(init_ms)
+    actual_agent_class = f"{agent.__class__.__module__}:{agent.__class__.__qualname__}"
+    actual_config_hash = hashlib.sha256(repr(getattr(agent, "config", None)).encode("utf-8")).hexdigest()
+    if manifest["agent_class"] != actual_agent_class or manifest["config_hash"] != actual_config_hash:
+        raise ValueError("capture manifest agent provenance is invalid")
     catalog = getattr(agent, "catalog", None)
     catalog_ids = getattr(catalog, "valid_ids", None)
     if not isinstance(catalog_ids, set) or len(catalog_ids) != 50_000:
@@ -509,8 +610,9 @@ def run_worker(
         "instrumentation_delta_ms": _latency_summary([wall - trace for wall, trace in zip(latency_values, trace_latency_values, strict=True)]),
         "dense_available": dense_available, "dense_status": dense_status,
         "fallback_count": fallback_count, "response_hash": _canonical_hash(normalized_responses),
-        "transcript_hash": transcript_hash, "catalog_hash": catalog_hash, "response_count": _RESPONSE_COUNT,
-        "platform": {"python": platform.python_version(), "platform": platform.platform()},
+        "transcript_hash": transcript_hash, "catalog_hash": catalog_hash, "catalog_snapshot_hash": catalog_hash,
+        "capture_provenance": _capture_provenance(manifest, manifest_hash), "response_count": _RESPONSE_COUNT,
+        "platform": _runtime_platform_data(),
     }
     _validate_trial(result)
     return result
@@ -524,6 +626,9 @@ def aggregate_trials(trials: list[dict[str, object]]) -> dict[str, object]:
     response_hashes: set[str] = set()
     transcript_hashes: set[str] = set()
     catalog_hashes: set[str] = set()
+    snapshot_hashes: set[str] = set()
+    capture_provenances: dict[str, dict[str, object]] = {}
+    runtime_platforms: dict[str, dict[str, object]] = {}
     peak_sources: set[str] = set()
     dense_values: list[bool] = []
     statuses: set[str] = set()
@@ -542,8 +647,11 @@ def aggregate_trials(trials: list[dict[str, object]]) -> dict[str, object]:
         statuses.add(trial["dense_status"])
         fallback_count += trial["fallback_count"]
         catalog_hashes.add(trial["catalog_hash"])
+        snapshot_hashes.add(trial["catalog_snapshot_hash"])
+        capture_provenances[_canonical_hash(trial["capture_provenance"])] = trial["capture_provenance"]
+        runtime_platforms[_canonical_hash(trial["platform"])] = trial["platform"]
         peak_sources.add(trial["peak_metric_source"])
-    if len(response_hashes) != 1 or len(transcript_hashes) != 1 or len(catalog_hashes) != 1 or len(peak_sources) != 1:
+    if len(response_hashes) != 1 or len(transcript_hashes) != 1 or len(catalog_hashes) != 1 or len(snapshot_hashes) != 1 or len(capture_provenances) != 1 or len(runtime_platforms) != 1 or len(peak_sources) != 1:
         raise ValueError("trials disagree on input or output hash")
     return {
         "trial_count": len(trials), "init_ms": statistics.median(values["init_ms"]),
@@ -551,7 +659,9 @@ def aggregate_trials(trials: list[dict[str, object]]) -> dict[str, object]:
         "latency_ms": _latency_summary(combined_latencies), "dense_available": all(dense_values),
         "dense_statuses": sorted(statuses), "fallback_count": fallback_count,
         "response_hash": response_hashes.pop(), "transcript_hash": transcript_hashes.pop(), "catalog_hash": catalog_hashes.pop(),
-        "peak_metric_source": peak_sources.pop(), "response_count": _RESPONSE_COUNT, "trials": trials,
+        "catalog_snapshot_hash": snapshot_hashes.pop(), "capture_provenance": next(iter(capture_provenances.values())),
+        "runtime_platform": next(iter(runtime_platforms.values())), "peak_metric_source": peak_sources.pop(),
+        "response_count": _RESPONSE_COUNT, "trials": trials,
     }
 
 
@@ -561,7 +671,7 @@ def _validate_aggregate_report(report: object) -> dict[str, object]:
     aggregate_keys = {
         "trial_count", "init_ms", "peak_mib", "rss_mib", "latency_ms", "dense_available",
         "dense_statuses", "fallback_count", "response_hash", "transcript_hash", "catalog_hash",
-        "peak_metric_source", "response_count", "trials",
+        "catalog_snapshot_hash", "capture_provenance", "runtime_platform", "peak_metric_source", "response_count", "trials",
     }
     keys = set(report)
     parent_keys = aggregate_keys | {"cwd_mode", "platform"}
@@ -589,6 +699,9 @@ def _validate_aggregate_report(report: object) -> dict[str, object]:
     onnxruntime_version = platform_data["onnxruntime"]
     if onnxruntime_version is not None and (not isinstance(onnxruntime_version, str) or not onnxruntime_version.strip()):
         raise ValueError("aggregate report platform is invalid")
+    runtime_platform = _validate_runtime_platform(report["runtime_platform"])
+    if any(runtime_platform[name] != platform_data[name] for name in _TRIAL_PLATFORM_KEYS):
+        raise ValueError("aggregate report runtime platform does not match parent platform")
     if "comparison" in report:
         comparison = report["comparison"]
         if not isinstance(comparison, dict) or set(comparison) != {"accepted", "same_output", "no_regression", "material_gain", "safe", "deltas"}:
@@ -612,20 +725,22 @@ def compare_reports(
             raise TypeError("report latency is invalid")
         return (_finite(latency.get("p95"), positive=baseline_mode), _finite(latency.get("max")),
                 _finite(report.get("init_ms"), positive=baseline_mode), _finite(report.get("peak_mib"), positive=baseline_mode))
-    for report in (candidate, baseline):
-        if not isinstance(report, dict) or report.get("response_count") != _RESPONSE_COUNT:
-            raise ValueError("comparison report response count is invalid")
-        if not isinstance(report.get("dense_available"), bool):
-            raise TypeError("comparison report dense availability is invalid")
-        fallback_count = report.get("fallback_count")
-        if isinstance(fallback_count, bool) or not isinstance(fallback_count, int) or fallback_count < 0:
-            raise ValueError("comparison report fallback count is invalid")
+    candidate = _validate_aggregate_report(candidate)
+    baseline = _validate_aggregate_report(baseline)
     base_p95, _, base_init, base_peak = metrics(baseline, baseline_mode=True)
     cand_p95, cand_max, cand_init, cand_peak = metrics(candidate, baseline_mode=False)
     for report in (candidate, baseline):
         for name in ("response_hash", "transcript_hash", "catalog_hash"):
             _validate_hash(report.get(name), name)
     same_output = all(candidate[name] == baseline[name] for name in ("response_hash", "transcript_hash", "catalog_hash"))
+    if candidate["cwd_mode"] != baseline["cwd_mode"]:
+        raise ValueError("comparison cwd mode differs")
+    if candidate["runtime_platform"] != baseline["runtime_platform"]:
+        raise ValueError("comparison runtime platform differs")
+    if candidate["peak_metric_source"] != baseline["peak_metric_source"]:
+        raise ValueError("comparison peak metric source differs")
+    if candidate["capture_provenance"] != baseline["capture_provenance"]:
+        raise ValueError("comparison capture provenance differs")
     no_regression = cand_p95 <= base_p95 * 1.05 and cand_init <= base_init * 1.05 and cand_peak <= base_peak * 1.05
     material_gain = cand_p95 <= base_p95 * 0.90 or cand_init <= base_init * 0.95 or cand_peak <= base_peak * 0.95
     safe = cand_max < 1500 and candidate.get("fallback_count") == 0 and (
@@ -636,22 +751,45 @@ def compare_reports(
             "deltas": {"p95_pct": (cand_p95 / base_p95 - 1) * 100, "init_pct": (cand_init / base_init - 1) * 100, "peak_pct": (cand_peak / base_peak - 1) * 100}}
 
 
-def _platform_data() -> dict[str, object]:
-    memory = psutil.virtual_memory()
+def _onnxruntime_version() -> str | None:
     try:
         import onnxruntime
-        onnx_version: str | None = onnxruntime.__version__
+        return onnxruntime.__version__
     except ImportError:
-        onnx_version = None
-    return {"os": platform.platform(), "python": platform.python_version(), "processor": platform.processor() or "unknown",
-            "cpu_logical": psutil.cpu_count(logical=True), "cpu_physical": psutil.cpu_count(logical=False),
-            "ram_mib": round(memory.total / (1024 * 1024), 3), "onnxruntime": onnx_version, "psutil": psutil.__version__}
+        return None
+
+
+def _runtime_platform_data() -> dict[str, object]:
+    return {"os": platform.platform(), "python": platform.python_version(),
+            "processor": platform.processor() or "unknown", "onnxruntime": _onnxruntime_version(),
+            "psutil": psutil.__version__}
+
+
+def _validate_runtime_platform(value: object) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != _TRIAL_PLATFORM_KEYS or _contains_sensitive_key(value):
+        raise ValueError("trial platform is invalid")
+    for name in ("os", "python", "processor", "psutil"):
+        if not isinstance(value[name], str) or not value[name].strip():
+            raise ValueError("trial platform is invalid")
+    if value["onnxruntime"] is not None and (not isinstance(value["onnxruntime"], str) or not value["onnxruntime"].strip()):
+        raise ValueError("trial platform is invalid")
+    return value
+
+
+def _platform_data() -> dict[str, object]:
+    memory = psutil.virtual_memory()
+    return {**_runtime_platform_data(), "cpu_logical": psutil.cpu_count(logical=True) or 0,
+            "cpu_physical": psutil.cpu_count(logical=False) or 0,
+            "ram_mib": round(memory.total / (1024 * 1024), 3)}
 
 
 def _diagnostic_excerpt(value: object) -> str:
     if isinstance(value, bytes):
         value = value.decode("utf-8", errors="replace")
-    text = str(value or "").replace("\x00", "?")
+    text = "".join(
+        "?" if ord(character) < 32 or 127 <= ord(character) <= 159 else character
+        for character in str(value or "")
+    )
     return text[-2_000:]
 
 
@@ -666,6 +804,21 @@ def _parse_worker_stdout(stdout: object) -> dict[str, object]:
         raise ValueError(f"worker stdout contains extra output: {_diagnostic_excerpt(text)}")
     _validate_trial(parsed)
     return parsed
+
+
+def _copy_catalog_snapshot(catalog: Path, destination: Path, expected_hash: str) -> Path:
+    if sha256_file(catalog) != expected_hash:
+        raise ValueError("catalog changed before snapshot")
+    snapshot = destination / "catalog.snapshot.jsonl"
+    with catalog.open("rb") as source, snapshot.open("xb") as target:
+        shutil.copyfileobj(source, target)
+        target.flush()
+        os.fsync(target.fileno())
+    source_hash_after = sha256_file(catalog)
+    snapshot_hash = sha256_file(snapshot)
+    if source_hash_after != expected_hash or snapshot_hash != expected_hash:
+        raise ValueError("catalog changed while creating snapshot")
+    return snapshot
 
 
 def run_parent(
@@ -683,18 +836,25 @@ def run_parent(
     transcript = Path(transcript_path).resolve()
     catalog_hash_before = sha256_file(catalog)
     transcript_hash_before = sha256_file(transcript)
+    manifest, manifest_hash = _load_capture_manifest(
+        transcript, transcript_hash=transcript_hash_before, catalog_hash=catalog_hash_before,
+    )
+    expected_provenance = _capture_provenance(manifest, manifest_hash)
     environment = os.environ.copy()
     environment.pop("COMPASSCART_DISABLE_DENSE", None)
     environment["PYTHONPATH"] = os.pathsep.join([str(root / "src"), str(root)])
     result_trials: list[dict[str, object]] = []
     with tempfile.TemporaryDirectory(prefix="compasscart-benchmark-") as temporary:
+        snapshot = _copy_catalog_snapshot(catalog, Path(temporary), catalog_hash_before)
         cwd = root if cwd_mode == "root" else Path(temporary)
         for _ in range(trials):
             if sha256_file(catalog) != catalog_hash_before:
                 raise ValueError("catalog changed during benchmark")
             if sha256_file(transcript) != transcript_hash_before:
                 raise ValueError("transcript changed during benchmark")
-            command = [sys.executable, "-m", "tools.benchmark_release", "--worker", "--catalog", str(catalog), "--transcript", str(transcript)]
+            if sha256_file(snapshot) != catalog_hash_before:
+                raise ValueError("catalog snapshot changed during benchmark")
+            command = [sys.executable, "-m", "tools.benchmark_release", "--worker", "--catalog", str(snapshot), "--transcript", str(transcript)]
             try:
                 completed = subprocess.run(command, cwd=cwd, env=environment, capture_output=True, text=True, check=False, timeout=worker_timeout_seconds)
             except subprocess.TimeoutExpired as error:
@@ -710,6 +870,10 @@ def run_parent(
                 raise ValueError("worker transcript provenance mismatch")
             if parsed["catalog_hash"] != catalog_hash_before:
                 raise ValueError("worker catalog provenance mismatch")
+            if parsed["catalog_snapshot_hash"] != catalog_hash_before:
+                raise ValueError("worker catalog snapshot provenance mismatch")
+            if parsed["capture_provenance"] != expected_provenance:
+                raise ValueError("worker capture provenance mismatch")
             result_trials.append(parsed)
     catalog_hash_after = sha256_file(catalog)
     transcript_hash_after = sha256_file(transcript)
@@ -719,7 +883,7 @@ def run_parent(
         raise ValueError("transcript changed during benchmark")
     report = aggregate_trials(result_trials)
     report.update({"cwd_mode": cwd_mode, "platform": _platform_data()})
-    return report
+    return _validate_aggregate_report(report)
 
 
 def write_report(destination: str | Path, report: dict[str, object]) -> None:
@@ -738,14 +902,15 @@ def _preflight_destination(destination: str | Path) -> None:
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".probe", dir=path.parent)
     temporary = Path(temporary_name)
     probe = temporary.with_suffix(".link")
+    temporary_stat = os.fstat(descriptor)
     try:
         os.close(descriptor)
         os.link(temporary, probe)
     except OSError as error:
         raise RuntimeError("exclusive report publication requires hardlink support") from error
     finally:
-        probe.unlink(missing_ok=True)
-        temporary.unlink(missing_ok=True)
+        _unlink_if_same_inode(probe, temporary_stat)
+        _unlink_if_same_inode(temporary, temporary_stat)
 
 
 def load_report(path: str | Path) -> dict[str, object]:
