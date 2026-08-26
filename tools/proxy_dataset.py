@@ -289,13 +289,113 @@ def _stage_text(path: str | Path, text: str) -> Path:
     return _stage_payload(path, lambda handle: handle.write(text))
 
 
+@dataclass
+class _StagedEntry:
+    destination: Path
+    temporary: Path
+    existed: bool = False
+    backup: Path | None = None
+    moved: bool = False
+    published: bool = False
+
+
+def _entry_exists(path: Path) -> bool:
+    return os.path.lexists(path)
+
+
+def _remove_entry(path: Path) -> None:
+    if not _entry_exists(path):
+        return
+    if path.is_dir():
+        raise IsADirectoryError(f"proxy output entry is a directory: {path}")
+    path.unlink()
+
+
+def _backup_path(destination: Path) -> Path:
+    descriptor, backup_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.", suffix=".bak", dir=destination.parent
+    )
+    os.close(descriptor)
+    return Path(backup_name)
+
+
+def _rollback_staged(entries: list[_StagedEntry]) -> list[Exception]:
+    errors: list[Exception] = []
+    for entry in entries:
+        if entry.published:
+            try:
+                _remove_entry(entry.destination)
+            except OSError as error:
+                errors.append(error)
+    for entry in entries:
+        if entry.moved and entry.backup is not None:
+            try:
+                _remove_entry(entry.destination)
+                os.replace(entry.backup, entry.destination)
+                entry.moved = False
+            except OSError as error:
+                errors.append(error)
+    for entry in entries:
+        if not entry.existed:
+            try:
+                _remove_entry(entry.destination)
+            except OSError as error:
+                errors.append(error)
+    return errors
+
+
+def _cleanup_staged(entries: list[_StagedEntry]) -> list[Exception]:
+    errors: list[Exception] = []
+    for entry in entries:
+        for path in (entry.temporary, entry.backup):
+            if path is None:
+                continue
+            try:
+                _remove_entry(path)
+            except OSError as error:
+                errors.append(error)
+    return errors
+
+
 def _replace_staged(staged: list[tuple[Path, Path]]) -> None:
+    entries = [_StagedEntry(destination, temporary) for destination, temporary in staged]
+    if len({entry.destination for entry in entries}) != len(entries):
+        raise ValueError("proxy output destinations must be unique")
     try:
-        for destination, temporary in staged:
-            os.replace(temporary, destination)
-    finally:
-        for _destination, temporary in staged:
-            temporary.unlink(missing_ok=True)
+        for entry in entries:
+            if entry.destination.is_dir() or entry.temporary.is_dir():
+                raise ValueError(f"proxy output destination is a directory: {entry.destination}")
+            entry.existed = _entry_exists(entry.destination)
+        for entry in entries:
+            if not entry.existed:
+                continue
+            entry.backup = _backup_path(entry.destination)
+            try:
+                os.replace(entry.destination, entry.backup)
+            except Exception:
+                entry.moved = not _entry_exists(entry.destination) and _entry_exists(entry.backup)
+                raise
+            entry.moved = True
+        for entry in entries:
+            try:
+                os.replace(entry.temporary, entry.destination)
+            except Exception:
+                entry.published = not _entry_exists(entry.temporary) and _entry_exists(entry.destination)
+                raise
+            entry.published = True
+    except Exception as original_error:
+        rollback_errors = _rollback_staged(entries)
+        cleanup_errors = _cleanup_staged(entries)
+        if rollback_errors or cleanup_errors:
+            details = "; ".join(str(error) for error in [*rollback_errors, *cleanup_errors])
+            raise RuntimeError(
+                f"proxy output replacement failed: {original_error}; rollback failed: {details}"
+            ) from original_error
+        raise
+    cleanup_errors = _cleanup_staged(entries)
+    if cleanup_errors:
+        details = "; ".join(str(error) for error in cleanup_errors)
+        raise RuntimeError(f"proxy output replacement succeeded but cleanup failed: {details}")
 
 
 def _write_jsonl(path: str | Path, rows: list[dict]) -> None:
@@ -525,7 +625,7 @@ def build_proxy_bundle(
 
     output_files = (output / "representative.jsonl", output / "stress.jsonl", output / "manifest.json")
     if any(path.exists() or path.is_symlink() for path in output_files) and not overwrite:
-        raise ValueError("output directory already contains a proxy bundle")
+        raise ValueError("output directory already contains a proxy bundle; rerun with --force to replace it")
     products_by_id = _read_catalog(catalog)
     excluded, profiles = _read_public_restrictions(public)
     records = _build_records(products_by_id, excluded)
@@ -598,7 +698,12 @@ def main() -> None:
     parser.add_argument("--representative-count", type=int, default=2000)
     parser.add_argument("--stress-count", type=int, default=800)
     parser.add_argument("--no-enforce-frozen", action="store_false", dest="enforce_frozen", help=argparse.SUPPRESS)
-    parser.add_argument("--force", action="store_true", dest="overwrite", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        dest="overwrite",
+        help="replace an existing proxy bundle after staging and rollback protection",
+    )
     args = parser.parse_args()
     manifest = build_proxy_bundle(
         args.catalog, args.public_set, args.output_dir,
