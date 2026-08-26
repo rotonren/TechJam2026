@@ -129,8 +129,8 @@ def _singular_category_term(token: str) -> str:
         return CATEGORY_PLURAL_EXCEPTIONS[token]
     if len(token) > 3 and token.endswith("ies"):
         singular = f"{token[:-3]}y"
-    elif (len(token) > 3 and token.endswith("ses")) or (
-        len(token) > 4 and token.endswith(("ches", "shes", "xes", "zes"))
+    elif len(token) > 4 and token.endswith(
+        ("sses", "ches", "shes", "xes", "zes")
     ):
         singular = token[:-2]
     elif len(token) > 2 and token.endswith("s") and not token.endswith("ss"):

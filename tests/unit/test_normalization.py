@@ -80,6 +80,25 @@ def test_watch_and_watches_share_a_category_term():
     assert category_term_set(("Watch", "Watches")) == frozenset({"watch"})
 
 
+@pytest.mark.parametrize(
+    ("singular", "plural", "expected"),
+    (
+        ("watch", "watches", "watch"),
+        ("blouse", "blouses", "blouse"),
+        ("case", "cases", "case"),
+        ("purse", "purses", "purse"),
+        ("bootie", "booties", "bootie"),
+        ("hoodie", "hoodies", "hoodie"),
+        ("tie", "ties", "tie"),
+    ),
+)
+def test_category_singular_and_plural_forms_share_a_term(
+    singular, plural, expected
+):
+    assert normalize_category_value(singular) == expected
+    assert normalize_category_value(plural) == expected
+
+
 def test_searchable_term_set_uses_all_searchable_fields():
     product = {
         "title": "Everyday Hoodie",

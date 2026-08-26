@@ -1,8 +1,9 @@
 import pytest
 
+import compasscart.catalog as catalog_module
 from compasscart.catalog import CatalogIndex
 from compasscart.models import Constraint, RetrievalPlan
-from compasscart.normalization import searchable_term_set
+from compasscart.normalization import searchable_fields, searchable_term_set, terms
 
 
 def test_catalog_returns_valid_unique_matches(fixture_catalog_path):
@@ -74,6 +75,44 @@ def test_python_fallback_preserves_best_match(fixture_catalog_path):
     matches = index.search_lexical(plan, limit=10)
 
     assert matches[0].parent_asin == "JACKET1"
+
+
+def test_python_fallback_uses_compact_masks_without_retokenizing_products(
+    fixture_catalog_path, monkeypatch
+):
+    index = CatalogIndex(fixture_catalog_path, enable_fts=False)
+    plan = RetrievalPlan(
+        route="buying",
+        query_text="blue running shoes",
+        hard_filters={"color": ("blue",)},
+    )
+    query = set(terms(plan.query_text))
+    weights = (6.0, 4.0, 2.5, 2.5, 1.5, 1.0)
+    reference: list[tuple[float, float, str]] = []
+    for parent_asin, product in index.products.items():
+        if not index._matches_hard(parent_asin, plan):
+            continue
+        score = sum(
+            weight * len(query.intersection(terms(field)))
+            for weight, field in zip(weights, searchable_fields(product), strict=True)
+        )
+        if score:
+            reference.append((score, index.quality[parent_asin], parent_asin))
+    reference.sort(key=lambda item: (-item[0], -item[1], item[2]))
+
+    assert isinstance(index.field_masks["SHOE1"], bytes)
+    assert len(index.field_masks["SHOE1"]) == len(index.searchable_terms["SHOE1"])
+    monkeypatch.setattr(
+        catalog_module,
+        "searchable_fields",
+        lambda product: pytest.fail("fallback retokenized product fields"),
+    )
+
+    matches = index.search_lexical(plan, limit=10)
+
+    assert [item.parent_asin for item in matches] == [
+        parent_asin for _, _, parent_asin in reference[:10]
+    ]
 
 
 def test_parser_vocabulary_is_normalized_read_only_and_filters_generic_categories(

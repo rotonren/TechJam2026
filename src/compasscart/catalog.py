@@ -20,6 +20,12 @@ from .normalization import (
     terms,
 )
 
+FIELD_WEIGHTS = (6.0, 4.0, 2.5, 2.5, 1.5, 1.0)
+FIELD_MASK_SCORES = tuple(
+    sum(weight for index, weight in enumerate(FIELD_WEIGHTS) if mask & (1 << index))
+    for mask in range(1 << len(FIELD_WEIGHTS))
+)
+
 
 class CatalogIndex:
     def __init__(self, catalog_path: str | Path, *, enable_fts: bool = True) -> None:
@@ -36,6 +42,7 @@ class CatalogIndex:
             lambda: defaultdict(set)
         )
         self.field_terms: dict[str, tuple[set[str], ...]] = {}
+        self.field_masks: dict[str, bytes] = {}
         self.quality: dict[str, float] = {}
         self._fts_enabled = False
         self._load(enable_fts=enable_fts)
@@ -64,12 +71,14 @@ class CatalogIndex:
                 attributes = extract_attributes(product)
                 category_terms = category_term_set(attributes.get("category", ()))
                 searchable_terms = searchable_term_set(product)
+                field_masks = _field_masks(fields, searchable_terms)
 
                 self.products[parent_asin] = product
                 self.valid_ids.add(parent_asin)
                 self.attributes[parent_asin] = attributes
                 self.category_terms[parent_asin] = category_terms
                 self.searchable_terms[parent_asin] = searchable_terms
+                self.field_masks[parent_asin] = field_masks
                 for term in category_terms:
                     self.category_term_inverted[term].add(parent_asin)
                 for attribute, values in attributes.items():
@@ -217,18 +226,18 @@ class CatalogIndex:
         self, plan: RetrievalPlan, query_terms: list[str], limit: int
     ) -> list[Candidate]:
         query = frozenset(query_terms)
-        field_weights = (6.0, 4.0, 2.5, 2.5, 1.5, 1.0)
         scored: list[tuple[float, float, str]] = []
-        for parent_asin, product in self.products.items():
+        for parent_asin, searchable_terms in self.searchable_terms.items():
             if not self._matches_hard(parent_asin, plan):
                 continue
-            if not query.intersection(self.searchable_terms[parent_asin]):
+            if query.isdisjoint(searchable_terms):
                 continue
             score = sum(
-                weight * len(query.intersection(terms(field)))
-                for weight, field in zip(
-                    field_weights, searchable_fields(product), strict=True
+                FIELD_MASK_SCORES[mask]
+                for term, mask in zip(
+                    searchable_terms, self.field_masks[parent_asin], strict=True
                 )
+                if term in query
             )
             if score > 0:
                 scored.append((score, self.quality[parent_asin], parent_asin))
@@ -249,3 +258,14 @@ class CatalogIndex:
             )
             for rank, parent_asin in enumerate(dict.fromkeys(parent_asins), start=1)
         ]
+
+
+def _field_masks(
+    fields: tuple[str, ...], searchable_terms: frozenset[str]
+) -> bytes:
+    masks: dict[str, int] = {}
+    for index, field in enumerate(fields):
+        bit = 1 << index
+        for term in terms(field):
+            masks[term] = masks.get(term, 0) | bit
+    return bytes(masks[term] for term in searchable_terms)
