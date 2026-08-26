@@ -1,16 +1,164 @@
 from __future__ import annotations
 
+import json
 import time
+from pathlib import Path
 from typing import get_type_hints
 
 import pytest
 
+from tools import proxy_dataset
 from tools.proxy_dataset import (
     ProxyProduct,
+    _build_records,
+    build_proxy_bundle,
     representative_ids,
+    scenario_schedule,
     stable_int,
     stress_ids,
+    verify_frozen_inputs,
 )
+
+
+def write_jsonl(path: Path, rows: list[dict]) -> None:
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+
+def test_build_proxy_bundle_is_deterministic_and_excludes_public_targets(tmp_path: Path) -> None:
+    catalog = tmp_path / "catalog.jsonl"
+    public_set = tmp_path / "public.jsonl"
+    products = [
+        {
+            "parent_asin": f"P{index:03d}",
+            "title": f"Product {index}",
+            "features": ["comfortable fit", f"feature {index % 3}"],
+            "details": {"material": "cotton"},
+            "categories": ["Clothing", "Shoes", "Running" if index % 2 else "Walking"],
+            "price": float(index + 1),
+            "average_rating": 4.0,
+            "rating_number": index * 10,
+        }
+        for index in range(50)
+    ]
+    write_jsonl(catalog, products)
+    write_jsonl(
+        public_set,
+        [{
+            "ground_truth": {"parent_asin": "P000"},
+            "user_profile": {
+                "average_prior_rating": 5,
+                "preference_tags": ["fit", "comfort"],
+                "purchase_frequency": "monthly",
+                "rating_style": "generous",
+                "summary": "source text must not be copied",
+            },
+        }],
+    )
+
+    first = build_proxy_bundle(
+        catalog, public_set, tmp_path / "one", representative_count=20, stress_count=8,
+        enforce_frozen=False,
+    )
+    second = build_proxy_bundle(
+        catalog, public_set, tmp_path / "two", representative_count=20, stress_count=8,
+        enforce_frozen=False,
+    )
+    representative = [json.loads(line) for line in (tmp_path / "one" / "representative.jsonl").read_text(encoding="utf-8").splitlines()]
+    stress = [json.loads(line) for line in (tmp_path / "one" / "stress.jsonl").read_text(encoding="utf-8").splitlines()]
+
+    assert first["output_hashes"] == second["output_hashes"]
+    assert "P000" not in {row["ground_truth"]["parent_asin"] for row in representative}
+    assert {row["scenario_type"] for row in representative} == {
+        "buying", "browsing", "intent_override", "boundary",
+    }
+    assert all(row["user_profile"]["summary"] != "source text must not be copied" for row in representative)
+    assert {row["fold"] for row in representative} == {1, 2, 3, 4, 5}
+    assert {row["ground_truth"]["parent_asin"] for row in representative}.isdisjoint(
+        {row["ground_truth"]["parent_asin"] for row in stress}
+    )
+    assert first["generator_config_hash"]
+    assert first["target_hashes"] == second["target_hashes"]
+
+
+def test_scenario_schedule_uses_largest_remainder_and_is_deterministic() -> None:
+    schedule = scenario_schedule(20, 20260826)
+
+    assert schedule == scenario_schedule(20, 20260826)
+    assert {name: schedule.count(name) for name in set(schedule)} == {
+        "buying": 8,
+        "browsing": 8,
+        "intent_override": 3,
+        "boundary": 1,
+    }
+    assert scenario_schedule(0, 20260826) == []
+
+
+def test_build_records_uses_global_quartiles_and_missing_data_difficulty() -> None:
+    products = {
+        "A": {"parent_asin": "A", "categories": ["Clothing", "Shoes"], "price": 10, "rating_number": 1},
+        "B": {"parent_asin": "B", "title": "B", "features": ["f"], "details": {"d": "x"}, "description": "d", "categories": ["Clothing", "Shoes"], "store": "s", "price": 20, "rating_number": 2},
+        "C": {"parent_asin": "C", "title": "C", "features": ["f"], "details": {"d": "x"}, "description": "d", "categories": ["Clothing", "Shoes"], "store": "s", "price": 30, "rating_number": 3},
+        "D": {"parent_asin": "D", "title": "D", "features": ["f"], "details": {"d": "x"}, "description": "d", "categories": ["Clothing", "Shoes"], "store": "s", "price": 40, "rating_number": 4},
+        "E": {"parent_asin": "E", "title": "E", "categories": ["Clothing", "Shoes"], "rating_number": "bad"},
+    }
+    records = {record.parent_asin: record for record in _build_records(products, set())}
+
+    assert records["A"].price_bin == "q1"
+    assert records["D"].popularity_bin == "q4"
+    assert records["D"].completeness_bin == "5+"
+    assert records["D"].difficulty == "easy"
+    assert records["A"].difficulty == "hard"
+    assert records["E"].price_bin == "missing"
+    assert records["E"].popularity_bin == "q1"
+    assert records["E"].difficulty == "hard"
+
+
+def test_verify_frozen_inputs_reports_mismatches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(proxy_dataset, "FROZEN_SHA256", {"one.txt": "0" * 64})
+    (tmp_path / "one.txt").write_text("changed", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="one.txt"):
+        verify_frozen_inputs(tmp_path)
+
+
+def test_enforced_frozen_paths_reject_unapproved_inputs_before_reading(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="data/catalog.jsonl"):
+        build_proxy_bundle(tmp_path / "missing-catalog", tmp_path / "missing-public", tmp_path / "output")
+
+
+def test_bundle_rejects_empty_profiles_duplicate_ids_and_insufficient_population(tmp_path: Path) -> None:
+    catalog = tmp_path / "catalog.jsonl"
+    public_set = tmp_path / "public.jsonl"
+    write_jsonl(catalog, [{"parent_asin": "A", "categories": ["Shoes"], "price": 1, "rating_number": 1}])
+    write_jsonl(public_set, [{"ground_truth": {"parent_asin": "A"}}])
+    with pytest.raises(ValueError, match="user profile"):
+        build_proxy_bundle(catalog, public_set, tmp_path / "empty", representative_count=0, stress_count=0, enforce_frozen=False)
+
+    write_jsonl(catalog, [{"parent_asin": "A"}, {"parent_asin": "A"}])
+    write_jsonl(public_set, [{"user_profile": {}}])
+    with pytest.raises(ValueError, match="duplicate parent_asin"):
+        build_proxy_bundle(catalog, public_set, tmp_path / "duplicates", representative_count=0, stress_count=0, enforce_frozen=False)
+
+    write_jsonl(catalog, [{"parent_asin": "A", "categories": ["Shoes"], "price": 1, "rating_number": 1}])
+    with pytest.raises(ValueError, match="insufficient post-exclusion"):
+        build_proxy_bundle(catalog, public_set, tmp_path / "insufficient", representative_count=1, stress_count=1, enforce_frozen=False)
+
+
+def test_bundle_is_independent_of_catalog_line_order(tmp_path: Path) -> None:
+    products = [
+        {"parent_asin": f"P{index:03d}", "title": "t", "features": ["f"], "details": {"x": "y"}, "categories": ["Shoes", str(index % 3)], "price": index + 1, "rating_number": index}
+        for index in range(30)
+    ]
+    forward, reverse, public_set = tmp_path / "forward.jsonl", tmp_path / "reverse.jsonl", tmp_path / "public.jsonl"
+    write_jsonl(forward, products)
+    write_jsonl(reverse, list(reversed(products)))
+    write_jsonl(public_set, [{"user_profile": {"preference_tags": ["fit"], "rating_style": "brief"}}])
+
+    first = build_proxy_bundle(forward, public_set, tmp_path / "forward", 15, 5, enforce_frozen=False)
+    second = build_proxy_bundle(reverse, public_set, tmp_path / "reverse", 15, 5, enforce_frozen=False)
+
+    assert first["target_hashes"] == second["target_hashes"]
+    assert first["output_hashes"] == second["output_hashes"]
 
 
 def make_products(count: int = 40) -> list[ProxyProduct]:
