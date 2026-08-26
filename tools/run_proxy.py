@@ -7,9 +7,12 @@ import gc
 import hashlib
 import importlib
 import json
+import os
 import statistics
 import subprocess
+import tempfile
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -25,7 +28,6 @@ from evaluator.local_evaluator import (
     metric_summary,
     normalize_recommendations,
 )
-from tools.proxy_dataset import sha256_file
 from tools.run_cv import _latency_summary, selection_score
 
 INITIAL_BUYING = (
@@ -70,6 +72,33 @@ NO_ADDITIONAL = (
     "I'm flexible on {attribute} beyond that.",
     "No other requirement for {attribute} right now.",
 )
+
+AUDIT_METADATA_KEYS = frozenset({
+    "created_at", "commit", "config_hash", "manifest_hash", "dataset_hash", "suite",
+    "fallback_count", "invalid_response_count", "audit_label",
+})
+AUDIT_AGGREGATE_KEYS = frozenset({
+    "sample_count", "hit_rate_at_10", "mrr", "mttc", "efficiency",
+    "recommended_technical_score", "reported_token_usage", "scenario_metrics",
+    "invalid_response_count",
+})
+SENSITIVE_AUDIT_KEYS = frozenset({
+    "sessions", "sample_id", "session_id", "target", "targets", "parent_asin",
+    "ground_truth", "misses", "miss", "recommendations", "intent_card", "behavior",
+})
+
+
+@dataclass(frozen=True)
+class _VerifiedProxySuite:
+    manifest: dict[str, object]
+    rows: list[dict]
+    manifest_hash: str
+    dataset_hash: str
+
+
+def opaque_session_id(sample_id: str) -> str:
+    """Build the deterministic opaque ID used for proxy agent sessions."""
+    return "proxy_eval_" + hashlib.sha256(sample_id.encode("utf-8")).hexdigest()[:20]
 
 
 class ProxyDialogue:
@@ -130,8 +159,7 @@ def evaluate_proxy(
     invalid_response_count = 0
     for sample in samples:
         sample_id = str(sample["sample_id"])
-        digest = hashlib.sha256(sample_id.encode("utf-8")).hexdigest()[:20]
-        session_id = f"proxy_eval_{digest}"
+        session_id = opaque_session_id(sample_id)
         agent.reset(session_id, sample["user_profile"])
         target = str(sample["ground_truth"]["parent_asin"])
         effective_intent_card, effective_behavior = materialize_hidden_fields(sample, products)
@@ -222,14 +250,16 @@ def evaluate_proxy(
     }
 
 
-def load_proxy_suite(proxy_root: str | Path, suite: str) -> tuple[dict, list[dict]]:
+def _load_verified_proxy_suite(proxy_root: str | Path, suite: str) -> _VerifiedProxySuite:
+    """Read, hash, and parse the sealed manifest and suite from the same bytes."""
     if suite not in {"representative", "stress"}:
         raise ValueError("suite must be representative or stress")
     root = Path(proxy_root)
     manifest_path = root / "manifest.json"
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
+        manifest_bytes = manifest_path.read_bytes()
+        manifest = json.loads(manifest_bytes.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError(f"invalid proxy manifest: {error}") from error
     if not isinstance(manifest, dict):
         raise TypeError("proxy manifest must be an object")
@@ -238,21 +268,47 @@ def load_proxy_suite(proxy_root: str | Path, suite: str) -> tuple[dict, list[dic
     counts = manifest.get("counts")
     expected_hash = output_hashes.get(filename) if isinstance(output_hashes, dict) else None
     expected_count = counts.get(suite) if isinstance(counts, dict) else None
-    if not isinstance(expected_hash, str) or not isinstance(expected_count, int):
-        raise TypeError("proxy manifest does not define suite hash and count")
+    if not isinstance(expected_hash, str):
+        raise TypeError("proxy manifest does not define suite hash")
+    if isinstance(expected_count, bool) or not isinstance(expected_count, int) or expected_count < 0:
+        raise ValueError("proxy manifest count must be a nonnegative integer")
     dataset_path = root / filename
     try:
-        actual_hash = sha256_file(dataset_path)
-        rows = [json.loads(line) for line in dataset_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    except (OSError, json.JSONDecodeError) as error:
+        dataset_bytes = dataset_path.read_bytes()
+        rows = [
+            json.loads(line)
+            for line in dataset_bytes.decode("utf-8").splitlines()
+            if line.strip()
+        ]
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError(f"invalid proxy suite: {error}") from error
+    manifest_hash = hashlib.sha256(manifest_bytes).hexdigest()
+    actual_hash = hashlib.sha256(dataset_bytes).hexdigest()
     if actual_hash != expected_hash:
         raise ValueError("proxy suite hash does not match manifest")
     if len(rows) != expected_count:
         raise ValueError("proxy suite count does not match manifest")
-    if not all(isinstance(row, dict) for row in rows):
-        raise ValueError("proxy suite rows must be objects")
-    return manifest, rows
+    identifiers: set[str] = set()
+    session_ids: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError("proxy suite rows must be objects")  # noqa: TRY004
+        sample_id = row.get("sample_id")
+        if not isinstance(sample_id, str) or not sample_id.strip():
+            raise ValueError("proxy suite rows require a nonempty sample_id")
+        if sample_id in identifiers:
+            raise ValueError("proxy suite has duplicate sample_id")
+        identifiers.add(sample_id)
+        session_id = opaque_session_id(sample_id)
+        if session_id in session_ids:
+            raise ValueError("proxy suite opaque session ID collision")
+        session_ids.add(session_id)
+    return _VerifiedProxySuite(manifest, rows, manifest_hash, actual_hash)
+
+
+def load_proxy_suite(proxy_root: str | Path, suite: str) -> tuple[dict, list[dict]]:
+    verified = _load_verified_proxy_suite(proxy_root, suite)
+    return verified.manifest, verified.rows
 
 
 def select_proxy_rows(
@@ -287,24 +343,74 @@ def select_proxy_rows(
     return selected
 
 
-def _contains_sessions(value: object) -> bool:
+def _contains_audit_key(value: object, keys: frozenset[str]) -> bool:
     if isinstance(value, dict):
-        return "sessions" in value or any(_contains_sessions(item) for item in value.values())
+        return any(
+            str(key).lower() in keys
+            or _contains_audit_key(item, keys)
+            for key, item in value.items()
+        )
     if isinstance(value, (list, tuple)):
-        return any(_contains_sessions(item) for item in value)
+        return any(_contains_audit_key(item, keys) for item in value)
     return False
+
+
+def _audit_payload(result: dict[str, object], metadata: dict[str, object]) -> dict[str, object]:
+    aggregate = {key: result[key] for key in result if key != "sessions"}
+    if _contains_audit_key(metadata, frozenset({"sessions"})) or _contains_audit_key(
+        aggregate, frozenset({"sessions"})
+    ):
+        raise ValueError("sessions are forbidden in audit reports")
+    unknown_metadata = set(metadata) - AUDIT_METADATA_KEYS
+    if unknown_metadata:
+        raise ValueError("unknown audit metadata field")
+    unknown_result = set(result) - AUDIT_AGGREGATE_KEYS - {"sessions"}
+    if unknown_result:
+        raise ValueError("unknown audit aggregate field")
+    aggregate = {key: result[key] for key in AUDIT_AGGREGATE_KEYS if key in result}
+    if _contains_audit_key(metadata, SENSITIVE_AUDIT_KEYS) or _contains_audit_key(
+        aggregate, SENSITIVE_AUDIT_KEYS
+    ):
+        raise ValueError("sensitive audit evidence is forbidden")
+    return {**metadata, "aggregate": aggregate}
+
+
+def _serialize_json(payload: dict[str, object]) -> bytes:
+    return (json.dumps(payload, sort_keys=True, indent=2) + "\n").encode("utf-8")
+
+
+def _reject_existing_destination(destination: Path) -> None:
+    if os.path.lexists(destination):
+        raise FileExistsError(f"proxy output already exists: {destination}")
+
+
+def _publish_exclusive(destination: Path, payload: dict[str, object]) -> None:
+    """Atomically create a report, failing closed on collisions and link failures."""
+    encoded = _serialize_json(payload)
+    _reject_existing_destination(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, destination)
+        except FileExistsError:
+            raise
+        except OSError as error:
+            raise RuntimeError("exclusive report publication requires hardlink support") from error
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def write_audit_report(destination: Path, result: dict[str, object], metadata: dict[str, object]) -> None:
     """Write a one-shot audit report that can never include session-level evidence."""
-    aggregate = {key: value for key, value in result.items() if key != "sessions"}
-    if _contains_sessions(metadata) or _contains_sessions(aggregate):
-        raise ValueError("audit report must not contain sessions")
-    payload = {**metadata, "aggregate": aggregate}
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    with destination.open("x", encoding="utf-8", newline="\n") as handle:
-        json.dump(payload, handle, sort_keys=True, indent=2)
-        handle.write("\n")
+    _publish_exclusive(destination, _audit_payload(result, metadata))
 
 
 def _load_agent(specification: str) -> type:
@@ -325,107 +431,177 @@ def _config_hash(agent: object) -> str:
     return hashlib.sha256(repr(getattr(agent, "config", None)).encode("utf-8")).hexdigest()
 
 
-def _trace_details(agent: object) -> tuple[dict[str, object], int, dict[str, int]]:
+def _trace_details(
+    agent: object, sessions: list[dict[str, object]]
+) -> tuple[dict[str, object], int, dict[str, int]]:
     sink = getattr(agent, "traces", None)
     records = getattr(sink, "records", [])
-    records = records if isinstance(records, list) else []
+    if not isinstance(records, list):
+        raise ValueError("trace records must be a list")  # noqa: TRY004
+    expected: list[tuple[str, int]] = []
+    for session in sessions:
+        sample_id = session.get("sample_id")
+        if not isinstance(sample_id, str):
+            raise ValueError("trace session is missing sample_id")  # noqa: TRY004
+        hit_turn = session.get("first_hit_turn")
+        if session.get("hit") and isinstance(hit_turn, int) and not isinstance(hit_turn, bool):
+            turn_count = hit_turn
+        elif session.get("hit"):
+            raise ValueError("trace hit session has invalid first_hit_turn")
+        else:
+            turn_count = MAX_TURNS
+        if not 1 <= turn_count <= MAX_TURNS:
+            raise ValueError("trace turn count is invalid")
+        expected.extend((opaque_session_id(sample_id), turn) for turn in range(1, turn_count + 1))
+    if len(records) != len(expected):
+        raise ValueError("trace record count does not match evaluation")
     latency_values = [
         float(record["elapsed_ms"])
-        for record in records
-        if isinstance(record, dict) and isinstance(record.get("elapsed_ms"), (int, float))
+        for record, (session_id, turn) in zip(records, expected, strict=True)
+        if isinstance(record, dict)
+        and record.get("session_id") == session_id
+        and record.get("turn") == turn
+        and isinstance(record.get("elapsed_ms"), (int, float))
+        and not isinstance(record.get("elapsed_ms"), bool)
+        and isinstance(record.get("fallbacks"), (list, tuple, set))
     ]
+    if len(latency_values) != len(expected):
+        raise ValueError("trace records are stale, malformed, or out of order")
     fallback_count = sum(
-        bool(record.get("fallbacks")) for record in records if isinstance(record, dict)
+        bool(record["fallbacks"]) for record in records
     )
     routes = Counter(
-        str(record.get("route", "unknown")) for record in records if isinstance(record, dict)
+        str(record.get("route", "unknown")) for record in records
     )
     return _latency_summary(latency_values), fallback_count, dict(sorted(routes.items()))
 
 
 def _write_normal_report(destination: Path, report: dict[str, object]) -> None:
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(
-        json.dumps(report, sort_keys=True, indent=2) + "\n", encoding="utf-8"
-    )
+    _publish_exclusive(destination, report)
+
+
+def _is_within(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+    except ValueError:
+        return False
+    return True
+
+
+def _audit_paths(proxy_root: Path, audit_label: str) -> tuple[Path, Path]:
+    audit_dir = (proxy_root.resolve() / "audit").resolve()
+    return audit_dir / f"{audit_label}.json", audit_dir / f"{audit_label}.lock"
+
+
+def _reserve_audit_output(proxy_root: Path, audit_label: str, output: Path) -> Path:
+    expected, lock = _audit_paths(proxy_root, audit_label)
+    if output.resolve() != expected:
+        raise ValueError("audit output must use the canonical sealed audit path")
+    _reject_existing_destination(expected)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with lock.open("x", encoding="utf-8") as handle:
+            handle.write("reserved\n")
+    except FileExistsError as error:
+        raise FileExistsError("sealed audit reservation already exists") from error
+    return lock
 
 
 def run_proxy(args: argparse.Namespace) -> None:
-    _manifest, rows = load_proxy_suite(args.proxy_root, args.suite)
-    selections = select_proxy_rows(rows, args.suite, args.folds, args.audit_label)
-    catalog_ids, categories, products = catalog_index(args.catalog)
-    agent_class = _load_agent(args.agent)
-    manifest_hash = sha256_file(args.proxy_root / "manifest.json")
-    dataset_hash = sha256_file(args.proxy_root / f"{args.suite}.jsonl")
-    fold_reports: list[dict[str, object]] = []
-    config_hash = ""
-    total_fallback_count = 0
-    total_invalid_count = 0
-    audit_result: dict[str, object] | None = None
-    for fold, selected_rows in selections:
-        agent = agent_class(args.catalog)
-        config_hash = config_hash or _config_hash(agent)
-        result = evaluate_proxy(agent, selected_rows, catalog_ids, categories, products)
-        latency, fallback_count, routes = _trace_details(agent)
-        invalid_count = int(result["invalid_response_count"])
-        total_fallback_count += fallback_count
-        total_invalid_count += invalid_count
-        aggregate = {key: value for key, value in result.items() if key != "sessions"}
-        fold_report: dict[str, object] = {
-            "fold": fold,
-            "sample_count": len(selected_rows),
-            "aggregate": aggregate,
-            "latency_ms": latency,
-            "fallback_count": fallback_count,
-            "route_distribution": routes,
-        }
-        if args.audit_label is None:
-            fold_report["sessions"] = result["sessions"]
-        else:
-            audit_result = result
-        fold_reports.append(fold_report)
-        # A real agent owns native dense-runtime buffers.  Each fold must use a
-        # fresh instance, so release the completed fold before constructing the next.
-        del agent
-        gc.collect()
-
-    metadata = {
-        "created_at": datetime.now(UTC).isoformat(),
-        "commit": _git_commit(),
-        "config_hash": config_hash,
-        "manifest_hash": manifest_hash,
-        "dataset_hash": dataset_hash,
-        "suite": args.suite,
-        "fallback_count": total_fallback_count,
-        "invalid_response_count": total_invalid_count,
-    }
+    proxy_root = Path(args.proxy_root)
+    output = Path(args.output)
+    audit_lock: Path | None = None
     if args.audit_label is not None:
-        if audit_result is None:
-            raise RuntimeError("audit selection did not produce a result")
+        audit_lock = _reserve_audit_output(proxy_root, args.audit_label, output)
+    else:
+        if _is_within(output.resolve(), (proxy_root.resolve() / "audit").resolve()):
+            raise ValueError("non-audit reports cannot target the sealed audit directory")
+        _reject_existing_destination(output)
+    try:
+        verified = _load_verified_proxy_suite(proxy_root, args.suite)
+        rows = verified.rows
+        selections = select_proxy_rows(rows, args.suite, args.folds, args.audit_label)
+        catalog_ids, categories, products = catalog_index(args.catalog)
+        agent_class = _load_agent(args.agent)
+        manifest_hash = verified.manifest_hash
+        dataset_hash = verified.dataset_hash
+        fold_reports: list[dict[str, object]] = []
+        config_hash = ""
+        total_fallback_count = 0
+        total_invalid_count = 0
+        audit_result: dict[str, object] | None = None
+        for fold, selected_rows in selections:
+            agent: object | None = None
+            try:
+                agent = agent_class(args.catalog)
+                config_hash = config_hash or _config_hash(agent)
+                result = evaluate_proxy(agent, selected_rows, catalog_ids, categories, products)
+                sessions = result["sessions"]
+                if not isinstance(sessions, list):
+                    raise ValueError("proxy evaluator did not return sessions")  # noqa: TRY004
+                latency, fallback_count, routes = _trace_details(agent, sessions)
+                invalid_count = int(result["invalid_response_count"])
+                total_fallback_count += fallback_count
+                total_invalid_count += invalid_count
+                aggregate = {key: value for key, value in result.items() if key != "sessions"}
+                fold_report: dict[str, object] = {
+                    "fold": fold,
+                    "sample_count": len(selected_rows),
+                    "aggregate": aggregate,
+                    "latency_ms": latency,
+                    "fallback_count": fallback_count,
+                    "route_distribution": routes,
+                }
+                if args.audit_label is None:
+                    fold_report["sessions"] = sessions
+                else:
+                    audit_result = result
+                fold_reports.append(fold_report)
+            finally:
+                if agent is not None:
+                    del agent
+                gc.collect()
+        metadata = {
+            "created_at": datetime.now(UTC).isoformat(),
+            "commit": _git_commit(),
+            "config_hash": config_hash,
+            "manifest_hash": manifest_hash,
+            "dataset_hash": dataset_hash,
+            "suite": args.suite,
+            "fallback_count": total_fallback_count,
+            "invalid_response_count": total_invalid_count,
+        }
+        if args.audit_label is not None:
+            if audit_result is None:
+                raise RuntimeError("audit selection did not produce a result")
+            if total_fallback_count or total_invalid_count:
+                raise SystemExit(1)
+            audit_metadata = {**metadata, "audit_label": args.audit_label}
+            write_audit_report(output, audit_result, audit_metadata)
+            print(json.dumps(_audit_payload(audit_result, audit_metadata), sort_keys=True))
+            return
+
+        scores = [float(item["aggregate"]["recommended_technical_score"]) for item in fold_reports]
+        selected_sample_count = sum(len(selected_rows) for _, selected_rows in selections)
+        invalid_rate = total_invalid_count / max(selected_sample_count, 1)
+        report = {
+            **metadata,
+            "folds": fold_reports,
+            "mean_technical_score": round(statistics.fmean(scores), 6) if scores else 0.0,
+            "std_technical_score": round(statistics.pstdev(scores), 6) if scores else 0.0,
+            "selection_score": selection_score(scores, 0.0, invalid_rate),
+            "api_cost_usd": 0.0,
+        }
+        _write_normal_report(output, report)
+        print(json.dumps({key: value for key, value in report.items() if key != "folds"}, sort_keys=True))
         if total_fallback_count or total_invalid_count:
             raise SystemExit(1)
-        write_audit_report(args.output, audit_result, {**metadata, "audit_label": args.audit_label})
-        print(json.dumps({**metadata, "audit_label": args.audit_label, "aggregate": {key: value for key, value in audit_result.items() if key != "sessions"}}, sort_keys=True))
-        return
-
-    scores = [float(item["aggregate"]["recommended_technical_score"]) for item in fold_reports]
-    selected_sample_count = sum(len(selected_rows) for _, selected_rows in selections)
-    invalid_rate = total_invalid_count / max(selected_sample_count, 1)
-    report = {
-        **metadata,
-        "folds": fold_reports,
-        "mean_technical_score": round(statistics.fmean(scores), 6) if scores else 0.0,
-        "std_technical_score": round(statistics.pstdev(scores), 6) if scores else 0.0,
-        "selection_score": selection_score(scores, 0.0, invalid_rate),
-        "api_cost_usd": 0.0,
-    }
-    _write_normal_report(args.output, report)
-    print(json.dumps({key: value for key, value in report.items() if key != "folds"}, sort_keys=True))
-    if total_fallback_count or total_invalid_count:
-        raise SystemExit(1)
+    finally:
+        if audit_lock is not None:
+            audit_lock.unlink(missing_ok=True)
 
 
-def main() -> None:
+def parse_proxy_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run sealed CompassCart proxy suites")
     parser.add_argument("--catalog", type=Path, default=Path("data/catalog.jsonl"))
     parser.add_argument("--proxy-root", type=Path, required=True)
@@ -434,7 +610,11 @@ def main() -> None:
     parser.add_argument("--audit-label", choices=("baseline", "final"))
     parser.add_argument("--agent", default="agent:Agent")
     parser.add_argument("--output", type=Path, required=True)
-    run_proxy(parser.parse_args())
+    return parser.parse_args(argv)
+
+
+def main() -> None:
+    run_proxy(parse_proxy_args())
 
 
 if __name__ == "__main__":

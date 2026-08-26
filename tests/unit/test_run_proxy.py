@@ -302,14 +302,15 @@ def test_evaluate_proxy_does_not_count_target_before_override_and_stops_after():
 
 
 def _run_args(tmp_path: Path, *, audit_label: str | None) -> SimpleNamespace:
+    proxy_root = tmp_path / "proxy"
     return SimpleNamespace(
         catalog=tmp_path / "catalog.jsonl",
-        proxy_root=tmp_path / "proxy",
+        proxy_root=proxy_root,
         suite="representative",
         folds=None,
         audit_label=audit_label,
         agent="test:Agent",
-        output=tmp_path / ("audit.json" if audit_label else "report.json"),
+        output=(proxy_root / "audit" / f"{audit_label}.json") if audit_label else tmp_path / "report.json",
     )
 
 
@@ -323,15 +324,17 @@ def _patch_small_proxy_run(
         "invalid_response_count": invalid_count,
         "sessions": [{"sample_id": "one", "scenario_type": "buying"}],
     }
-    monkeypatch.setattr(run_proxy, "load_proxy_suite", lambda root, suite: ({}, [{"sample_id": "one"}]))
+    verified = run_proxy._VerifiedProxySuite(
+        {}, [{"sample_id": "one"}], "manifest_hash", "dataset_hash"
+    )
+    monkeypatch.setattr(run_proxy, "_load_verified_proxy_suite", lambda root, suite: verified)
     monkeypatch.setattr(run_proxy, "select_proxy_rows", lambda rows, suite, folds, audit: [(1, rows)])
     monkeypatch.setattr(run_proxy, "catalog_index", lambda path: (set(), {}, {}))
     monkeypatch.setattr(run_proxy, "_load_agent", lambda spec: lambda catalog: object())
     monkeypatch.setattr(run_proxy, "evaluate_proxy", lambda *args: result)
     monkeypatch.setattr(
-        run_proxy, "_trace_details", lambda agent: ({"count": 0}, fallback_count, {})
+        run_proxy, "_trace_details", lambda agent, sessions: ({"count": 0}, fallback_count, {})
     )
-    monkeypatch.setattr(run_proxy, "sha256_file", lambda path: "hash")
     monkeypatch.setattr(run_proxy, "_git_commit", lambda: "commit")
     monkeypatch.setattr(run_proxy, "_config_hash", lambda agent: "config")
 
@@ -372,3 +375,264 @@ def test_run_proxy_non_audit_failure_writes_diagnostic_and_uses_sample_invalid_r
 
 def test_frozen_evaluator_hash_is_unchanged():
     assert sha256_file(Path("evaluator/local_evaluator.py")) == "84ea899707452de249ca62abee77c4b40ab7a3139b5cc798ac30c9f521f91b30"
+
+
+def _write_suite(root: Path, rows: list[dict], *, count: object | None = None) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    dataset = root / "representative.jsonl"
+    dataset.write_bytes(b"".join(json.dumps(row).encode() + b"\n" for row in rows))
+    (root / "manifest.json").write_text(
+        json.dumps(
+            {
+                "counts": {"representative": len(rows) if count is None else count},
+                "output_hashes": {"representative.jsonl": sha256_file(dataset)},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.parametrize(
+    ("rows", "count", "message"),
+    [
+        ([{"sample_id": "one"}], True, "count"),
+        ([{"sample_id": "one"}], -1, "count"),
+        ([{"sample_id": ""}], 1, "sample_id"),
+        ([{"sample_id": "one"}, {"sample_id": "one"}], 2, "duplicate"),
+    ],
+)
+def test_verified_proxy_suite_rejects_invalid_counts_and_sample_ids(
+    tmp_path: Path, rows: list[dict], count: object, message: str
+):
+    from tools.run_proxy import _load_verified_proxy_suite
+
+    _write_suite(tmp_path, rows, count=count)
+
+    with pytest.raises(ValueError, match=message):
+        _load_verified_proxy_suite(tmp_path, "representative")
+
+
+def test_verified_proxy_suite_hashes_the_same_bytes_it_parses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from tools.run_proxy import _load_verified_proxy_suite
+
+    _write_suite(tmp_path, [{"sample_id": "one"}])
+    dataset = tmp_path / "representative.jsonl"
+    original_read_bytes = Path.read_bytes
+    calls = 0
+
+    def read_once_then_swap(path: Path) -> bytes:
+        nonlocal calls
+        value = original_read_bytes(path)
+        if path == dataset:
+            calls += 1
+            dataset.write_bytes(b'{"sample_id":"swapped"}\n')
+        return value
+
+    monkeypatch.setattr(Path, "read_bytes", read_once_then_swap)
+    verified = _load_verified_proxy_suite(tmp_path, "representative")
+
+    assert calls == 1
+    assert verified.rows == [{"sample_id": "one"}]
+    assert verified.dataset_hash == hashlib.sha256(b'{"sample_id": "one"}\n').hexdigest()
+
+
+def test_verified_proxy_suite_rejects_opaque_session_id_collisions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from tools import run_proxy
+
+    _write_suite(tmp_path, [{"sample_id": "one"}, {"sample_id": "two"}])
+    monkeypatch.setattr(run_proxy, "opaque_session_id", lambda sample_id: "collision")
+
+    with pytest.raises(ValueError, match="collision"):
+        run_proxy._load_verified_proxy_suite(tmp_path, "representative")
+
+
+@pytest.mark.parametrize(
+    ("result", "metadata", "message"),
+    [
+        ({"sessions": [], "targets": []}, {"suite": "representative"}, "unknown"),
+        ({"sessions": [], "scenario_metrics": {"x": {"misses": 1}}}, {"suite": "representative"}, "sensitive"),
+        ({"sessions": []}, {"suite": "representative", "extra": 1}, "unknown"),
+        ({"sessions": []}, {"suite": "representative", "nested": {"TARGET": "x"}}, "unknown"),
+    ],
+)
+def test_audit_report_allowlist_rejects_unknown_and_sensitive_fields(
+    tmp_path: Path, result: dict, metadata: dict, message: str
+):
+    from tools.run_proxy import write_audit_report
+
+    with pytest.raises(ValueError, match=message):
+        write_audit_report(tmp_path / "audit.json", result, metadata)
+
+
+def test_audit_report_allowlist_keeps_only_approved_aggregate(tmp_path: Path):
+    from tools.run_proxy import write_audit_report
+
+    destination = tmp_path / "audit.json"
+    write_audit_report(
+        destination,
+        {"sessions": [], "sample_count": 1, "mrr": 1.0, "scenario_metrics": {}},
+        {"suite": "representative", "audit_label": "baseline", "fallback_count": 0},
+    )
+
+    assert json.loads(destination.read_text(encoding="utf-8")) == {
+        "aggregate": {"mrr": 1.0, "sample_count": 1, "scenario_metrics": {}},
+        "audit_label": "baseline",
+        "fallback_count": 0,
+        "suite": "representative",
+    }
+
+
+def test_atomic_report_rejects_serialization_and_link_failures_without_partial_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from tools import run_proxy
+
+    destination = tmp_path / "report.json"
+    monkeypatch.setattr(run_proxy.json, "dumps", lambda value, **kwargs: (_ for _ in ()).throw(TypeError("bad")))
+    with pytest.raises(TypeError, match="bad"):
+        run_proxy._write_normal_report(destination, {"not": {"json": object()}})
+    assert not destination.exists()
+
+    monkeypatch.undo()
+    monkeypatch.setattr(run_proxy.os, "link", lambda source, target: (_ for _ in ()).throw(OSError("no link")))
+    with pytest.raises(RuntimeError, match="hardlink"):
+        run_proxy._write_normal_report(destination, {"ok": True})
+    assert not destination.exists()
+    assert not list(tmp_path.glob(".report.json.*.tmp"))
+
+
+def test_trace_details_requires_exact_session_turn_alignment():
+    from tools.run_proxy import _trace_details, opaque_session_id
+
+    session = {"sample_id": "one", "hit": True, "first_hit_turn": 2}
+    expected = [
+        {"session_id": opaque_session_id("one"), "turn": 1, "elapsed_ms": 1.0, "fallbacks": [], "route": "buying"},
+        {"session_id": opaque_session_id("one"), "turn": 2, "elapsed_ms": 2.0, "fallbacks": [], "route": "buying"},
+    ]
+    agent = SimpleNamespace(traces=SimpleNamespace(records=expected))
+
+    assert _trace_details(agent, [session])[0] == {"count": 2, "p50": 1.5, "p95": 2.0, "max": 2.0}
+    for broken in (expected[:-1], list(reversed(expected)), [{**expected[0], "session_id": "stale"}, expected[1]]):
+        agent.traces.records = broken
+        with pytest.raises(ValueError, match="trace"):
+            _trace_details(agent, [session])
+
+
+def test_trace_details_rejects_truncated_large_trace_list():
+    from tools.run_proxy import _trace_details, opaque_session_id
+
+    sessions = [{"sample_id": str(index), "hit": False, "first_hit_turn": None} for index in range(501)]
+    records = [
+        {"session_id": opaque_session_id(str(index)), "turn": turn, "elapsed_ms": 1.0, "fallbacks": []}
+        for index in range(501)
+        for turn in range(1, 11)
+    ][-5000:]
+    agent = SimpleNamespace(traces=SimpleNamespace(records=records))
+
+    with pytest.raises(ValueError, match="trace"):
+        _trace_details(agent, sessions)
+
+
+def test_parse_proxy_args_accepts_the_sealed_cli_contract(tmp_path: Path):
+    from tools.run_proxy import parse_proxy_args
+
+    args = parse_proxy_args(
+        [
+            "--proxy-root", str(tmp_path / "proxy"), "--suite", "representative",
+            "--folds", "1", "2", "--output", str(tmp_path / "report.json"),
+        ]
+    )
+
+    assert args.suite == "representative"
+    assert args.folds == [1, 2]
+    assert args.output == tmp_path / "report.json"
+
+
+def test_run_proxy_successful_normal_report_is_exclusive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from tools.run_proxy import run_proxy
+
+    _patch_small_proxy_run(monkeypatch, invalid_count=0)
+    args = _run_args(tmp_path, audit_label=None)
+
+    run_proxy(args)
+
+    assert args.output.exists()
+    with pytest.raises(FileExistsError):
+        run_proxy(args)
+
+
+def test_run_proxy_successful_audit_uses_reservation_and_releases_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from tools.run_proxy import run_proxy
+
+    _patch_small_proxy_run(monkeypatch, invalid_count=0)
+    args = _run_args(tmp_path, audit_label="baseline")
+
+    run_proxy(args)
+
+    assert args.output.exists()
+    assert not args.output.with_suffix(".lock").exists()
+
+
+@pytest.mark.parametrize("reason", ("wrong-path", "existing-output", "existing-lock"))
+def test_audit_reservation_rejects_before_evaluation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reason: str
+):
+    from tools import run_proxy
+
+    _patch_small_proxy_run(monkeypatch, invalid_count=0)
+    args = _run_args(tmp_path, audit_label="baseline")
+    calls = 0
+
+    def forbidden_evaluate(*args: object) -> dict:
+        nonlocal calls
+        calls += 1
+        raise AssertionError("must not evaluate")
+
+    monkeypatch.setattr(run_proxy, "evaluate_proxy", forbidden_evaluate)
+    if reason == "wrong-path":
+        args.output = tmp_path / "wrong.json"
+    elif reason == "existing-output":
+        args.output.parent.mkdir(parents=True)
+        args.output.write_text("already", encoding="utf-8")
+    else:
+        args.output.parent.mkdir(parents=True)
+        args.output.with_suffix(".lock").write_text("reserved", encoding="utf-8")
+
+    with pytest.raises((ValueError, FileExistsError)):
+        run_proxy.run_proxy(args)
+
+    assert calls == 0
+
+
+def test_non_audit_cannot_target_audit_directory_and_normal_collision_is_pre_eval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from tools import run_proxy
+
+    _patch_small_proxy_run(monkeypatch, invalid_count=0)
+    args = _run_args(tmp_path, audit_label=None)
+    args.output = args.proxy_root / "audit" / "not-audit.json"
+    with pytest.raises(ValueError, match="audit"):
+        run_proxy.run_proxy(args)
+
+    args.output = tmp_path / "collision.json"
+    args.output.write_text("already", encoding="utf-8")
+    with pytest.raises(FileExistsError):
+        run_proxy.run_proxy(args)
+
+
+def test_audit_failure_releases_owned_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from tools.run_proxy import run_proxy
+
+    _patch_small_proxy_run(monkeypatch, invalid_count=1)
+    args = _run_args(tmp_path, audit_label="baseline")
+
+    with pytest.raises(SystemExit, match="1"):
+        run_proxy(args)
+
+    assert not args.output.exists()
+    assert not args.output.with_suffix(".lock").exists()
