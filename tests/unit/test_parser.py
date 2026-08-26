@@ -1,3 +1,5 @@
+import pytest
+
 from compasscart.parser import MessageParser
 
 
@@ -420,13 +422,52 @@ def test_dynamic_catalog_aliases_accept_explicit_label_punctuation():
     }
 
 
-def test_amazon_root_taxonomy_phrase_is_not_a_hard_category():
+@pytest.mark.parametrize(
+    "message",
+    (
+        "LOOK: Sneaker",
+        "design - Sneaker",
+        "Sneaker, LOOK",
+        "Sneaker; DESIGN",
+    ),
+)
+def test_dynamic_style_aliases_accept_nearby_look_and_design_cues(message):
+    result = MessageParser({"style": ("Sneaker",)}).parse(message, turn=1)
+
+    assert ("style", "sneaker") in {
+        (item.attribute, item.value) for item in result.constraints
+    }
+
+
+def test_uncued_dynamic_style_alias_remains_suppressed():
+    result = MessageParser({"style": ("Sneaker",)}).parse(
+        "I want Sneaker shoes", turn=1
+    )
+
+    assert not any(
+        item.attribute == "style" and item.is_hard
+        for item in result.constraints
+    )
+
+
+@pytest.mark.parametrize(
+    "taxonomy",
+    (
+        "Shoe & Jewelry",
+        "Shoes and Jewelry",
+        "shoe AND jewelry Men",
+        "SHOES & JEWELRY WOMEN",
+        "Clothing Shoe & Jewelry Men",
+        "CLOTHING, SHOES and JEWELRY Women",
+    ),
+)
+def test_amazon_root_taxonomy_variants_are_not_hard_categories(taxonomy):
     parser = MessageParser(
         {"category": ("Shoes", "Jewelry", "Fashion Sneakers")}
     )
 
     result = parser.parse(
-        "I'm looking for Shoes & Jewelry Men, but I'm still exploring.", turn=1
+        f"I'm looking for {taxonomy}, but I'm still exploring.", turn=1
     )
 
     assert not any(

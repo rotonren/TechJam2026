@@ -72,7 +72,7 @@ _CATEGORY_RE = re.compile(
     re.IGNORECASE,
 )
 _AMAZON_ROOT_TAXONOMY_RE = re.compile(
-    r"\b(?:clothing\s*,?\s+)?shoes\s+(?:&|and)\s+jewelry"
+    r"\b(?:clothing\s*,?\s+)?shoes?\s+(?:&|and)\s+jewelry"
     r"(?:\s+(?:men|women))?\b",
     re.IGNORECASE,
 )
@@ -642,9 +642,12 @@ class MessageParser:
             right = text[end : min(len(text), end + 16)]
             return bool(
                 re.search(
-                    r"\b(?:style|styled)(?:\s+is)?\s*[:=-]?\s*$", left
+                    r"\b(?:style|styled|look|design)(?:\s+is)?\s*[:=-]?\s*$",
+                    left,
                 )
-                or re.match(r"\s*(?:style|styled)\b", right)
+                or re.match(
+                    r"\s*[,;:=-]?\s*(?:style|styled|look|design)\b", right
+                )
             )
         return False
 
