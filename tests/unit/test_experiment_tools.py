@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from tools.analyze_failures import summarize_failures
+from tools.compare_results import compare_results
 from tools.run_cv import _latency_summary, assign_folds, select_samples, selection_score
 
 
@@ -101,3 +102,73 @@ def test_failure_summary_groups_misses_without_exposing_hits():
     assert summary["by_override_state"] == {"applied": 1, "none": 1}
     assert summary["by_fallback"] == {"category": 1, "none": 1}
     assert set(summary["sample_ids"]) == {"a", "b"}
+
+
+def test_compare_results_reports_recoveries_regressions_and_metric_deltas():
+    baseline = {
+        "recommended_technical_score": 0.5,
+        "hit_rate_at_10": 0.5,
+        "mrr": 0.2,
+        "mttc": 6.0,
+        "sessions": [
+            {
+                "sample_id": "a",
+                "scenario_type": "buying",
+                "hit": False,
+                "first_hit_turn": None,
+                "best_rank": None,
+            },
+            {
+                "sample_id": "b",
+                "scenario_type": "browsing",
+                "hit": True,
+                "first_hit_turn": 1,
+                "best_rank": 1,
+            },
+            {
+                "sample_id": "c",
+                "scenario_type": "buying",
+                "hit": True,
+                "first_hit_turn": 3,
+                "best_rank": 5,
+            },
+        ],
+    }
+    candidate = {
+        "recommended_technical_score": 0.6,
+        "hit_rate_at_10": 2 / 3,
+        "mrr": 0.3,
+        "mttc": 5.0,
+        "sessions": [
+            {
+                "sample_id": "a",
+                "scenario_type": "buying",
+                "hit": True,
+                "first_hit_turn": 2,
+                "best_rank": 3,
+            },
+            {
+                "sample_id": "b",
+                "scenario_type": "browsing",
+                "hit": False,
+                "first_hit_turn": None,
+                "best_rank": None,
+            },
+            {
+                "sample_id": "c",
+                "scenario_type": "buying",
+                "hit": True,
+                "first_hit_turn": 2,
+                "best_rank": 2,
+            },
+        ],
+    }
+
+    report = compare_results(baseline, candidate)
+
+    assert report["metric_delta"]["recommended_technical_score"] == 0.1
+    assert report["recovered"] == ["a"]
+    assert report["regressed"] == ["b"]
+    assert report["rank_or_turn_improved"] == ["c"]
+    assert report["by_scenario"]["buying"]["recovered"] == 1
+    assert report["by_scenario"]["browsing"]["regressed"] == 1
