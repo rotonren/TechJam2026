@@ -7,6 +7,7 @@ import gc
 import hashlib
 import importlib
 import json
+import math
 import os
 import statistics
 import subprocess
@@ -86,6 +87,9 @@ SENSITIVE_AUDIT_KEYS = frozenset({
     "sessions", "sample_id", "session_id", "target", "targets", "parent_asin",
     "ground_truth", "misses", "miss", "recommendations", "intent_card", "behavior",
 })
+AUDIT_SCENARIOS = frozenset({"boundary", "browsing", "buying", "intent_override"})
+METRIC_SUMMARY_KEYS = frozenset({"sample_count", "hit_rate_at_10", "mrr", "mttc"})
+TOKEN_USAGE_KEYS = frozenset({"prompt_tokens", "completion_tokens", "total_tokens"})
 
 
 @dataclass(frozen=True)
@@ -94,6 +98,13 @@ class _VerifiedProxySuite:
     rows: list[dict]
     manifest_hash: str
     dataset_hash: str
+
+
+@dataclass(frozen=True)
+class _CallEvidence:
+    session_id: str
+    turn: int
+    trace_required: bool
 
 
 def opaque_session_id(sample_id: str) -> str:
@@ -151,6 +162,8 @@ def evaluate_proxy(
     catalog_ids: set[str],
     categories: dict[str, list[str]],
     products: dict[str, dict],
+    *,
+    call_evidence: list[_CallEvidence] | None = None,
 ) -> dict[str, object]:
     """Evaluate an agent with the frozen evaluator's control flow and metrics."""
     sessions: list[dict[str, object]] = []
@@ -181,8 +194,13 @@ def evaluate_proxy(
             try:
                 response = agent.respond(session_id, user_message, turn, TOP_K)
             except Exception:  # noqa: BLE001 - evaluator always turns errors into legal blanks.
+                if call_evidence is not None:
+                    call_evidence.append(_CallEvidence(session_id, turn, False))
                 response = {"message": "", "ask_attribute": None, "recommendations": []}
                 invalid_response_count += 1
+            else:
+                if call_evidence is not None:
+                    call_evidence.append(_CallEvidence(session_id, turn, True))
             if not isinstance(response, dict) or not isinstance(response.get("message"), str):
                 response = {"message": "", "ask_attribute": None, "recommendations": []}
                 invalid_response_count += 1
@@ -355,15 +373,86 @@ def _contains_audit_key(value: object, keys: frozenset[str]) -> bool:
     return False
 
 
+def _is_nonnegative_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _is_finite_number(value: object, *, minimum: float | None = None, maximum: float | None = None) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return False
+    return (minimum is None or value >= minimum) and (maximum is None or value <= maximum)
+
+
+def _validate_metric_summary(value: object) -> int:
+    if not isinstance(value, dict) or set(value) != METRIC_SUMMARY_KEYS:
+        raise ValueError("audit scenario metric schema is invalid")
+    count = value["sample_count"]
+    mttc = value["mttc"]
+    if not _is_nonnegative_int(count):
+        raise ValueError("audit scenario sample_count is invalid")
+    if not _is_finite_number(value["hit_rate_at_10"], minimum=0.0, maximum=1.0):
+        raise ValueError("audit scenario hit rate is invalid")
+    if not _is_finite_number(value["mrr"], minimum=0.0, maximum=1.0):
+        raise ValueError("audit scenario mrr is invalid")
+    if mttc is None:
+        if count != 0:
+            raise ValueError("audit scenario mttc is invalid")
+    elif not _is_finite_number(mttc, minimum=1.0, maximum=float(MAX_TURNS + 1)):
+        raise ValueError("audit scenario mttc is invalid")
+    return count
+
+
+def _validate_audit_metadata(metadata: dict[str, object]) -> None:
+    if set(metadata) != AUDIT_METADATA_KEYS:
+        raise ValueError("unknown or missing audit metadata field")
+    for key in ("created_at", "commit", "config_hash", "manifest_hash", "dataset_hash"):
+        if not isinstance(metadata[key], str) or not metadata[key]:
+            raise ValueError("audit metadata scalar is invalid")
+    if metadata["suite"] not in {"representative", "stress"}:
+        raise ValueError("audit metadata suite is invalid")
+    if metadata["audit_label"] not in {"baseline", "final"}:
+        raise ValueError("audit metadata label is invalid")
+    if not _is_nonnegative_int(metadata["fallback_count"]) or not _is_nonnegative_int(metadata["invalid_response_count"]):
+        raise ValueError("audit metadata count is invalid")
+
+
+def _validate_audit_aggregate(aggregate: dict[str, object], metadata: dict[str, object]) -> None:
+    if set(aggregate) != AUDIT_AGGREGATE_KEYS:
+        raise ValueError("unknown or missing audit aggregate field")
+    count = aggregate["sample_count"]
+    if not _is_nonnegative_int(count):
+        raise ValueError("audit sample_count is invalid")
+    for key in ("hit_rate_at_10", "mrr", "efficiency", "recommended_technical_score"):
+        if not _is_finite_number(aggregate[key], minimum=0.0, maximum=1.0):
+            raise ValueError("audit aggregate scalar is invalid")
+    mttc = aggregate["mttc"]
+    if mttc is None:
+        if count != 0:
+            raise ValueError("audit mttc is invalid")
+    elif not _is_finite_number(mttc, minimum=1.0, maximum=float(MAX_TURNS + 1)):
+        raise ValueError("audit mttc is invalid")
+    usage = aggregate["reported_token_usage"]
+    if not isinstance(usage, dict) or set(usage) != TOKEN_USAGE_KEYS or not all(
+        _is_nonnegative_int(usage[key]) for key in TOKEN_USAGE_KEYS
+    ) or usage["total_tokens"] != usage["prompt_tokens"] + usage["completion_tokens"]:
+        raise ValueError("audit token usage is invalid")
+    scenarios = aggregate["scenario_metrics"]
+    if not isinstance(scenarios, dict) or set(scenarios) != AUDIT_SCENARIOS:
+        raise ValueError("audit scenario_metrics schema is invalid")
+    if sum(_validate_metric_summary(scenarios[name]) for name in AUDIT_SCENARIOS) != count:
+        raise ValueError("audit scenario sample counts are inconsistent")
+    if not _is_nonnegative_int(aggregate["invalid_response_count"]) or (
+        aggregate["invalid_response_count"] != metadata["invalid_response_count"]
+    ):
+        raise ValueError("audit invalid response count is invalid")
+
+
 def _audit_payload(result: dict[str, object], metadata: dict[str, object]) -> dict[str, object]:
     aggregate = {key: result[key] for key in result if key != "sessions"}
     if _contains_audit_key(metadata, frozenset({"sessions"})) or _contains_audit_key(
         aggregate, frozenset({"sessions"})
     ):
         raise ValueError("sessions are forbidden in audit reports")
-    unknown_metadata = set(metadata) - AUDIT_METADATA_KEYS
-    if unknown_metadata:
-        raise ValueError("unknown audit metadata field")
     unknown_result = set(result) - AUDIT_AGGREGATE_KEYS - {"sessions"}
     if unknown_result:
         raise ValueError("unknown audit aggregate field")
@@ -372,6 +461,8 @@ def _audit_payload(result: dict[str, object], metadata: dict[str, object]) -> di
         aggregate, SENSITIVE_AUDIT_KEYS
     ):
         raise ValueError("sensitive audit evidence is forbidden")
+    _validate_audit_metadata(metadata)
+    _validate_audit_aggregate(aggregate, metadata)
     return {**metadata, "aggregate": aggregate}
 
 
@@ -432,47 +523,36 @@ def _config_hash(agent: object) -> str:
 
 
 def _trace_details(
-    agent: object, sessions: list[dict[str, object]]
+    agent: object, call_evidence: list[_CallEvidence]
 ) -> tuple[dict[str, object], int, dict[str, int]]:
     sink = getattr(agent, "traces", None)
     records = getattr(sink, "records", [])
     if not isinstance(records, list):
         raise ValueError("trace records must be a list")  # noqa: TRY004
-    expected: list[tuple[str, int]] = []
-    for session in sessions:
-        sample_id = session.get("sample_id")
-        if not isinstance(sample_id, str):
-            raise ValueError("trace session is missing sample_id")  # noqa: TRY004
-        hit_turn = session.get("first_hit_turn")
-        if session.get("hit") and isinstance(hit_turn, int) and not isinstance(hit_turn, bool):
-            turn_count = hit_turn
-        elif session.get("hit"):
-            raise ValueError("trace hit session has invalid first_hit_turn")
-        else:
-            turn_count = MAX_TURNS
-        if not 1 <= turn_count <= MAX_TURNS:
-            raise ValueError("trace turn count is invalid")
-        expected.extend((opaque_session_id(sample_id), turn) for turn in range(1, turn_count + 1))
-    if len(records) != len(expected):
+    record_index = 0
+    matched: list[dict[str, object]] = []
+    for evidence in call_evidence:
+        if not isinstance(evidence, _CallEvidence):
+            raise ValueError("trace call evidence is invalid")  # noqa: TRY004
+        record = records[record_index] if record_index < len(records) else None
+        matches_call = isinstance(record, dict) and (
+            record.get("session_id") == evidence.session_id and record.get("turn") == evidence.turn
+        )
+        if not matches_call:
+            if evidence.trace_required:
+                raise ValueError("trace records are stale, malformed, or out of order")
+            continue
+        if not isinstance(record.get("elapsed_ms"), (int, float)) or isinstance(record.get("elapsed_ms"), bool):
+            raise ValueError("trace records are stale, malformed, or out of order")  # noqa: TRY004
+        if not isinstance(record.get("fallbacks"), (list, tuple, set)):
+            raise ValueError("trace records are stale, malformed, or out of order")  # noqa: TRY004
+        matched.append(record)
+        record_index += 1
+    if record_index != len(records):
         raise ValueError("trace record count does not match evaluation")
-    latency_values = [
-        float(record["elapsed_ms"])
-        for record, (session_id, turn) in zip(records, expected, strict=True)
-        if isinstance(record, dict)
-        and record.get("session_id") == session_id
-        and record.get("turn") == turn
-        and isinstance(record.get("elapsed_ms"), (int, float))
-        and not isinstance(record.get("elapsed_ms"), bool)
-        and isinstance(record.get("fallbacks"), (list, tuple, set))
-    ]
-    if len(latency_values) != len(expected):
-        raise ValueError("trace records are stale, malformed, or out of order")
-    fallback_count = sum(
-        bool(record["fallbacks"]) for record in records
-    )
-    routes = Counter(
-        str(record.get("route", "unknown")) for record in records
-    )
+    latency_values = [float(record["elapsed_ms"]) for record in matched]
+    fallback_count = sum(bool(record["fallbacks"]) for record in matched)
+    routes = Counter(str(record.get("route", "unknown")) for record in matched)
     return _latency_summary(latency_values), fallback_count, dict(sorted(routes.items()))
 
 
@@ -499,11 +579,27 @@ def _reserve_audit_output(proxy_root: Path, audit_label: str, output: Path) -> P
         raise ValueError("audit output must use the canonical sealed audit path")
     _reject_existing_destination(expected)
     lock.parent.mkdir(parents=True, exist_ok=True)
+    handle: object | None = None
+    created = False
     try:
-        with lock.open("x", encoding="utf-8") as handle:
-            handle.write("reserved\n")
+        handle = lock.open("x", encoding="utf-8")
+        created = True
+        handle.write("reserved\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+        handle.close()
+        handle = None
     except FileExistsError as error:
         raise FileExistsError("sealed audit reservation already exists") from error
+    except BaseException:
+        if handle is not None:
+            try:
+                handle.close()
+            except OSError:
+                pass
+        if created:
+            lock.unlink(missing_ok=True)
+        raise
     return lock
 
 
@@ -535,11 +631,15 @@ def run_proxy(args: argparse.Namespace) -> None:
             try:
                 agent = agent_class(args.catalog)
                 config_hash = config_hash or _config_hash(agent)
-                result = evaluate_proxy(agent, selected_rows, catalog_ids, categories, products)
+                call_evidence: list[_CallEvidence] = []
+                result = evaluate_proxy(
+                    agent, selected_rows, catalog_ids, categories, products,
+                    call_evidence=call_evidence,
+                )
                 sessions = result["sessions"]
                 if not isinstance(sessions, list):
                     raise ValueError("proxy evaluator did not return sessions")  # noqa: TRY004
-                latency, fallback_count, routes = _trace_details(agent, sessions)
+                latency, fallback_count, routes = _trace_details(agent, call_evidence)
                 invalid_count = int(result["invalid_response_count"])
                 total_fallback_count += fallback_count
                 total_invalid_count += invalid_count

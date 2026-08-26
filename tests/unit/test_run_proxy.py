@@ -108,13 +108,15 @@ def test_write_audit_report_is_aggregate_only_and_exclusive(tmp_path: Path):
     from tools.run_proxy import write_audit_report
 
     destination = tmp_path / "audit" / "baseline.json"
-    result = {"hit_rate_at_10": 1.0, "sessions": [{"sample_id": "secret"}]}
-    write_audit_report(destination, result, {"suite": "representative"})
+    result = _legal_audit_result()
+    result["sessions"] = [{"sample_id": "secret"}]
+    metadata = _legal_audit_metadata()
+    write_audit_report(destination, result, metadata)
 
     payload = json.loads(destination.read_text(encoding="utf-8"))
-    assert payload == {"suite": "representative", "aggregate": {"hit_rate_at_10": 1.0}}
+    assert payload == {**metadata, "aggregate": {key: value for key, value in result.items() if key != "sessions"}}
     with pytest.raises(FileExistsError):
-        write_audit_report(destination, result, {"suite": "representative"})
+        write_audit_report(destination, result, metadata)
 
 
 @pytest.mark.parametrize(
@@ -319,11 +321,14 @@ def _patch_small_proxy_run(
 ) -> None:
     from tools import run_proxy
 
-    result = {
-        "recommended_technical_score": 0.5,
-        "invalid_response_count": invalid_count,
-        "sessions": [{"sample_id": "one", "scenario_type": "buying"}],
-    }
+    result = _legal_audit_result()
+    result.update(
+        {
+            "recommended_technical_score": 0.5,
+            "invalid_response_count": invalid_count,
+            "sessions": [{"sample_id": "one", "scenario_type": "buying"}],
+        }
+    )
     verified = run_proxy._VerifiedProxySuite(
         {}, [{"sample_id": "one"}], "manifest_hash", "dataset_hash"
     )
@@ -331,7 +336,7 @@ def _patch_small_proxy_run(
     monkeypatch.setattr(run_proxy, "select_proxy_rows", lambda rows, suite, folds, audit: [(1, rows)])
     monkeypatch.setattr(run_proxy, "catalog_index", lambda path: (set(), {}, {}))
     monkeypatch.setattr(run_proxy, "_load_agent", lambda spec: lambda catalog: object())
-    monkeypatch.setattr(run_proxy, "evaluate_proxy", lambda *args: result)
+    monkeypatch.setattr(run_proxy, "evaluate_proxy", lambda *args, **kwargs: result)
     monkeypatch.setattr(
         run_proxy, "_trace_details", lambda agent, sessions: ({"count": 0}, fallback_count, {})
     )
@@ -454,7 +459,7 @@ def test_verified_proxy_suite_rejects_opaque_session_id_collisions(
         ({"sessions": [], "targets": []}, {"suite": "representative"}, "unknown"),
         ({"sessions": [], "scenario_metrics": {"x": {"misses": 1}}}, {"suite": "representative"}, "sensitive"),
         ({"sessions": []}, {"suite": "representative", "extra": 1}, "unknown"),
-        ({"sessions": []}, {"suite": "representative", "nested": {"TARGET": "x"}}, "unknown"),
+        ({"sessions": []}, {"suite": "representative", "nested": {"TARGET": "x"}}, "sensitive"),
     ],
 )
 def test_audit_report_allowlist_rejects_unknown_and_sensitive_fields(
@@ -470,17 +475,13 @@ def test_audit_report_allowlist_keeps_only_approved_aggregate(tmp_path: Path):
     from tools.run_proxy import write_audit_report
 
     destination = tmp_path / "audit.json"
-    write_audit_report(
-        destination,
-        {"sessions": [], "sample_count": 1, "mrr": 1.0, "scenario_metrics": {}},
-        {"suite": "representative", "audit_label": "baseline", "fallback_count": 0},
-    )
+    result = _legal_audit_result()
+    metadata = _legal_audit_metadata()
+    write_audit_report(destination, result, metadata)
 
     assert json.loads(destination.read_text(encoding="utf-8")) == {
-        "aggregate": {"mrr": 1.0, "sample_count": 1, "scenario_metrics": {}},
-        "audit_label": "baseline",
-        "fallback_count": 0,
-        "suite": "representative",
+        **metadata,
+        "aggregate": {key: value for key, value in result.items() if key != "sessions"},
     }
 
 
@@ -504,26 +505,33 @@ def test_atomic_report_rejects_serialization_and_link_failures_without_partial_o
 
 
 def test_trace_details_requires_exact_session_turn_alignment():
-    from tools.run_proxy import _trace_details, opaque_session_id
+    from tools.run_proxy import _CallEvidence, _trace_details, opaque_session_id
 
-    session = {"sample_id": "one", "hit": True, "first_hit_turn": 2}
+    evidence = [
+        _CallEvidence(opaque_session_id("one"), 1, True),
+        _CallEvidence(opaque_session_id("one"), 2, True),
+    ]
     expected = [
         {"session_id": opaque_session_id("one"), "turn": 1, "elapsed_ms": 1.0, "fallbacks": [], "route": "buying"},
         {"session_id": opaque_session_id("one"), "turn": 2, "elapsed_ms": 2.0, "fallbacks": [], "route": "buying"},
     ]
     agent = SimpleNamespace(traces=SimpleNamespace(records=expected))
 
-    assert _trace_details(agent, [session])[0] == {"count": 2, "p50": 1.5, "p95": 2.0, "max": 2.0}
+    assert _trace_details(agent, evidence)[0] == {"count": 2, "p50": 1.5, "p95": 2.0, "max": 2.0}
     for broken in (expected[:-1], list(reversed(expected)), [{**expected[0], "session_id": "stale"}, expected[1]]):
         agent.traces.records = broken
         with pytest.raises(ValueError, match="trace"):
-            _trace_details(agent, [session])
+            _trace_details(agent, evidence)
 
 
 def test_trace_details_rejects_truncated_large_trace_list():
-    from tools.run_proxy import _trace_details, opaque_session_id
+    from tools.run_proxy import _CallEvidence, _trace_details, opaque_session_id
 
-    sessions = [{"sample_id": str(index), "hit": False, "first_hit_turn": None} for index in range(501)]
+    evidence = [
+        _CallEvidence(opaque_session_id(str(index)), turn, True)
+        for index in range(501)
+        for turn in range(1, 11)
+    ]
     records = [
         {"session_id": opaque_session_id(str(index)), "turn": turn, "elapsed_ms": 1.0, "fallbacks": []}
         for index in range(501)
@@ -532,7 +540,7 @@ def test_trace_details_rejects_truncated_large_trace_list():
     agent = SimpleNamespace(traces=SimpleNamespace(records=records))
 
     with pytest.raises(ValueError, match="trace"):
-        _trace_details(agent, sessions)
+        _trace_details(agent, evidence)
 
 
 def test_parse_proxy_args_accepts_the_sealed_cli_contract(tmp_path: Path):
@@ -636,3 +644,288 @@ def test_audit_failure_releases_owned_lock(tmp_path: Path, monkeypatch: pytest.M
 
     assert not args.output.exists()
     assert not args.output.with_suffix(".lock").exists()
+
+
+def _legal_audit_result() -> dict:
+    metrics = {"sample_count": 1, "hit_rate_at_10": 1.0, "mrr": 1.0, "mttc": 1.0}
+    return {
+        "sample_count": 4,
+        "hit_rate_at_10": 1.0,
+        "mrr": 1.0,
+        "mttc": 1.0,
+        "efficiency": 1.0,
+        "recommended_technical_score": 1.0,
+        "reported_token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        "scenario_metrics": {
+            "boundary": metrics.copy(), "browsing": metrics.copy(),
+            "buying": metrics.copy(), "intent_override": metrics.copy(),
+        },
+        "invalid_response_count": 0,
+        "sessions": [],
+    }
+
+
+def _legal_audit_metadata() -> dict:
+    return {
+        "created_at": "2026-08-27T00:00:00+00:00", "commit": "abc",
+        "config_hash": "config", "manifest_hash": "manifest", "dataset_hash": "dataset",
+        "suite": "representative", "fallback_count": 0, "invalid_response_count": 0,
+        "audit_label": "baseline",
+    }
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda result: result["scenario_metrics"]["buying"].update({"target_id": "secret"}),
+        lambda result: result["scenario_metrics"].update({"other": {}}),
+        lambda result: result["reported_token_usage"].update({"extra": 1}),
+        lambda result: result.update({"sample_count": True}),
+        lambda result: result["scenario_metrics"]["boundary"].update({"sample_count": 2}),
+    ],
+)
+def test_audit_payload_requires_exact_nested_schema(mutate):
+    from tools.run_proxy import _audit_payload
+
+    result = _legal_audit_result()
+    mutate(result)
+
+    with pytest.raises(ValueError):
+        _audit_payload(result, _legal_audit_metadata())
+
+
+def test_audit_payload_requires_exact_metadata_schema():
+    from tools.run_proxy import _audit_payload
+
+    metadata = _legal_audit_metadata()
+    metadata["fallback_count"] = True
+
+    with pytest.raises(ValueError):
+        _audit_payload(_legal_audit_result(), metadata)
+
+
+def test_trace_evidence_allows_only_exception_call_to_be_missing():
+    from tools.run_proxy import _CallEvidence, _trace_details, opaque_session_id
+
+    session_id = opaque_session_id("one")
+    evidence = [
+        _CallEvidence(session_id, 1, True),
+        _CallEvidence(session_id, 2, False),
+        _CallEvidence(session_id, 3, True),
+    ]
+    records = [
+        {"session_id": session_id, "turn": 1, "elapsed_ms": 1.0, "fallbacks": []},
+        {"session_id": session_id, "turn": 3, "elapsed_ms": 1.0, "fallbacks": []},
+    ]
+    agent = SimpleNamespace(traces=SimpleNamespace(records=records))
+
+    assert _trace_details(agent, evidence)[0]["count"] == 2
+    agent.traces.records = [records[1]]
+    with pytest.raises(ValueError, match="trace"):
+        _trace_details(agent, evidence)
+    agent.traces.records = [records[0], {**records[1], "turn": 4}, records[1]]
+    with pytest.raises(ValueError, match="trace"):
+        _trace_details(agent, evidence)
+
+
+def test_evaluate_proxy_records_exception_and_invalid_response_call_evidence():
+    from tools.run_proxy import evaluate_proxy, opaque_session_id
+
+    calls: list = []
+
+    class Agent:
+        def reset(self, session_id: str, user_profile: dict) -> None:
+            pass
+
+        def respond(self, session_id: str, user_message: str, turn: int, top_k: int) -> object:
+            if turn == 1:
+                raise RuntimeError("no trace")
+            return "invalid"
+
+    evaluate_proxy(
+        Agent(), [_sample()], {"A"}, {"A": ["Clothing", "Shirts"]},
+        {"A": {"parent_asin": "A"}}, call_evidence=calls,
+    )
+
+    assert [(item.session_id, item.turn, item.trace_required) for item in calls] == [
+        (opaque_session_id("proxy_sample_1"), 1, False),
+        (opaque_session_id("proxy_sample_1"), 2, True),
+        (opaque_session_id("proxy_sample_1"), 3, True),
+        (opaque_session_id("proxy_sample_1"), 4, True),
+        (opaque_session_id("proxy_sample_1"), 5, True),
+        (opaque_session_id("proxy_sample_1"), 6, True),
+        (opaque_session_id("proxy_sample_1"), 7, True),
+        (opaque_session_id("proxy_sample_1"), 8, True),
+        (opaque_session_id("proxy_sample_1"), 9, True),
+        (opaque_session_id("proxy_sample_1"), 10, True),
+    ]
+
+
+def _patch_real_proxy_run(monkeypatch: pytest.MonkeyPatch, agent_class: type) -> None:
+    from tools import run_proxy
+
+    rows = [{**_sample(), "proxy_fold": 1}]
+    verified = run_proxy._VerifiedProxySuite({}, rows, "manifest_hash", "dataset_hash")
+    monkeypatch.setattr(run_proxy, "_load_verified_proxy_suite", lambda root, suite: verified)
+    monkeypatch.setattr(run_proxy, "select_proxy_rows", lambda rows, suite, folds, audit: [(1, rows)])
+    monkeypatch.setattr(
+        run_proxy,
+        "catalog_index",
+        lambda path: ({"A"}, {"A": ["Clothing", "Shirts"]}, {"A": {"parent_asin": "A"}}),
+    )
+    monkeypatch.setattr(run_proxy, "_load_agent", lambda spec: agent_class)
+    monkeypatch.setattr(run_proxy, "_git_commit", lambda: "commit")
+    monkeypatch.setattr(run_proxy, "_config_hash", lambda agent: "config")
+
+
+def test_run_proxy_tolerates_only_exception_calls_without_trace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from tools.run_proxy import run_proxy
+
+    class ExceptionThenTraceAgent:
+        def __init__(self, catalog: Path) -> None:
+            self.traces = SimpleNamespace(records=[])
+
+        def reset(self, session_id: str, user_profile: dict) -> None:
+            pass
+
+        def respond(self, session_id: str, user_message: str, turn: int, top_k: int) -> dict:
+            if turn == 1:
+                raise RuntimeError("no response and no trace")
+            self.traces.records.append(
+                {"session_id": session_id, "turn": turn, "elapsed_ms": 1.0, "fallbacks": []}
+            )
+            return {"message": "ok", "ask_attribute": None, "recommendations": ["A"]}
+
+    _patch_real_proxy_run(monkeypatch, ExceptionThenTraceAgent)
+    args = _run_args(tmp_path, audit_label=None)
+
+    with pytest.raises(SystemExit, match="1"):
+        run_proxy(args)
+
+    report = json.loads(args.output.read_text(encoding="utf-8"))
+    assert report["invalid_response_count"] == 1
+    assert report["folds"][0]["latency_ms"]["count"] == 1
+
+
+def test_run_proxy_requires_trace_for_invalid_returned_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from tools.run_proxy import run_proxy
+
+    class InvalidWithoutTraceAgent:
+        def __init__(self, catalog: Path) -> None:
+            self.traces = SimpleNamespace(records=[])
+
+        def reset(self, session_id: str, user_profile: dict) -> None:
+            pass
+
+        def respond(self, session_id: str, user_message: str, turn: int, top_k: int) -> object:
+            return "invalid payload"
+
+    _patch_real_proxy_run(monkeypatch, InvalidWithoutTraceAgent)
+    args = _run_args(tmp_path, audit_label=None)
+
+    with pytest.raises(ValueError, match="trace"):
+        run_proxy(args)
+
+    assert not args.output.exists()
+
+
+@pytest.mark.parametrize("extra_record", (False, True))
+def test_run_proxy_rejects_stale_and_extra_trace_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extra_record: bool
+):
+    from tools.run_proxy import run_proxy
+
+    class TraceAgent:
+        def __init__(self, catalog: Path) -> None:
+            self.traces = SimpleNamespace(records=[])
+
+        def reset(self, session_id: str, user_profile: dict) -> None:
+            pass
+
+        def respond(self, session_id: str, user_message: str, turn: int, top_k: int) -> dict:
+            self.traces.records.append(
+                {
+                    "session_id": session_id,
+                    "turn": turn if extra_record else 0,
+                    "elapsed_ms": 1.0,
+                    "fallbacks": [],
+                }
+            )
+            if extra_record:
+                self.traces.records.append(
+                    {"session_id": session_id, "turn": 2, "elapsed_ms": 1.0, "fallbacks": []}
+                )
+            return {"message": "ok", "ask_attribute": None, "recommendations": ["A"]}
+
+    _patch_real_proxy_run(monkeypatch, TraceAgent)
+    args = _run_args(tmp_path, audit_label=None)
+
+    with pytest.raises(ValueError, match="trace"):
+        run_proxy(args)
+
+    assert not args.output.exists()
+
+
+@pytest.mark.parametrize("failure", ("write", "flush", "fsync", "close"))
+def test_reserve_audit_output_cleans_owned_lock_after_durable_write_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+):
+    from tools import run_proxy
+
+    output = tmp_path / "proxy" / "audit" / "baseline.json"
+    original_open = Path.open
+
+    class BrokenLock:
+        def __init__(self, handle: object) -> None:
+            self.handle = handle
+
+        def write(self, value: str) -> int:
+            if failure == "write":
+                raise OSError("write failed")
+            return self.handle.write(value)
+
+        def flush(self) -> None:
+            if failure == "flush":
+                raise OSError("flush failed")
+            self.handle.flush()
+
+        def fileno(self) -> int:
+            return self.handle.fileno()
+
+        def close(self) -> None:
+            self.handle.close()
+            if failure == "close":
+                raise OSError("close failed")
+
+    def broken_open(path: Path, *args: object, **kwargs: object):
+        handle = original_open(path, *args, **kwargs)
+        return BrokenLock(handle)
+
+    monkeypatch.setattr(Path, "open", broken_open)
+    if failure == "fsync":
+        monkeypatch.setattr(
+            run_proxy.os,
+            "fsync",
+            lambda descriptor: (_ for _ in ()).throw(OSError("fsync failed")),
+        )
+    with pytest.raises(OSError, match=failure):
+        run_proxy._reserve_audit_output(tmp_path / "proxy", "baseline", output)
+    assert not output.with_suffix(".lock").exists()
+
+
+def test_reserve_audit_output_preserves_preexisting_lock(tmp_path: Path):
+    from tools.run_proxy import _reserve_audit_output
+
+    output = tmp_path / "proxy" / "audit" / "baseline.json"
+    lock = output.with_suffix(".lock")
+    lock.parent.mkdir(parents=True)
+    lock.write_text("other reservation\n", encoding="utf-8")
+
+    with pytest.raises(FileExistsError, match="reservation"):
+        _reserve_audit_output(tmp_path / "proxy", "baseline", output)
+
+    assert lock.read_text(encoding="utf-8") == "other reservation\n"
