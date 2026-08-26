@@ -70,11 +70,31 @@ def _safe_profile(profile: object) -> dict[str, object]:
     if not isinstance(profile, dict) or _contains_sensitive_material(profile):
         raise ValueError("profile is invalid or contains sensitive fields")
     result = {str(key): value for key, value in profile.items() if key in _PROFILE_KEYS}
+    _validate_profile(result)
+    return result
+
+
+def _validate_profile(profile: object) -> None:
+    if not isinstance(profile, dict):
+        raise TypeError("profile must be an object")
+    if not set(profile).issubset(_PROFILE_KEYS):
+        raise ValueError("profile contains fields outside the allowlist")
+    if _contains_sensitive_material(profile):
+        raise ValueError("profile is invalid or contains sensitive fields")
+    rating = profile.get("average_prior_rating")
+    if rating is not None and (isinstance(rating, bool) or not isinstance(rating, (int, float)) or not math.isfinite(rating)):
+        raise ValueError("average_prior_rating must be finite")
+    tags = profile.get("preference_tags")
+    if tags is not None and (not isinstance(tags, list) or any(not isinstance(tag, str) or not tag.strip() for tag in tags)):
+        raise ValueError("preference_tags must be nonempty strings")
+    for key in ("purchase_frequency", "rating_style", "summary"):
+        value = profile.get(key)
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            raise ValueError(f"{key} must be a nonempty string")
     try:
-        json.dumps(result, allow_nan=False)
+        json.dumps(profile, allow_nan=False)
     except (TypeError, ValueError) as error:
         raise ValueError("profile is not JSON serializable") from error
-    return result
 
 
 def validate_transcript(rows: object) -> None:
@@ -105,7 +125,7 @@ def validate_transcript(rows: object) -> None:
             raise ValueError("message must be a nonempty string")
         if _contains_sensitive_material(message):
             raise ValueError("message contains sensitive material")
-        _safe_profile(row["profile"])
+        _validate_profile(row["profile"])
         if current != session_id:
             if current is not None:
                 if expected_turn != 5:
@@ -336,7 +356,9 @@ def aggregate_trials(trials: list[dict[str, object]]) -> dict[str, object]:
     }
 
 
-def compare_reports(candidate: dict[str, object], baseline: dict[str, object]) -> dict[str, object]:
+def compare_reports(
+    candidate: dict[str, object], baseline: dict[str, object], *, require_dense: bool = True
+) -> dict[str, object]:
     def metrics(report: dict[str, object], *, baseline_mode: bool) -> tuple[float, float, float, float]:
         latency = report.get("latency_ms")
         if not isinstance(latency, dict):
@@ -348,7 +370,9 @@ def compare_reports(candidate: dict[str, object], baseline: dict[str, object]) -
     same_output = candidate.get("response_hash") == baseline.get("response_hash") and candidate.get("transcript_hash") == baseline.get("transcript_hash")
     no_regression = cand_p95 <= base_p95 * 1.05 and cand_init <= base_init * 1.05 and cand_peak <= base_peak * 1.05
     material_gain = cand_p95 <= base_p95 * 0.90 or cand_init <= base_init * 0.95 or cand_peak <= base_peak * 0.95
-    safe = cand_max < 1500 and candidate.get("dense_available") is True and candidate.get("fallback_count") == 0
+    safe = cand_max < 1500 and candidate.get("fallback_count") == 0 and (
+        not require_dense or candidate.get("dense_available") is True
+    )
     return {"accepted": bool(same_output and no_regression and material_gain and safe), "same_output": same_output,
             "no_regression": no_regression, "material_gain": material_gain, "safe": safe,
             "deltas": {"p95_pct": (cand_p95 / base_p95 - 1) * 100, "init_pct": (cand_init / base_init - 1) * 100, "peak_pct": (cand_peak / base_peak - 1) * 100}}
@@ -377,10 +401,7 @@ def run_parent(catalog_path: str | Path, transcript_path: str | Path, *, trials:
     transcript_hash = sha256_file(transcript)
     environment = os.environ.copy()
     environment.pop("COMPASSCART_DISABLE_DENSE", None)
-    prefixes = [str(root / "src"), str(root)]
-    if environment.get("PYTHONPATH"):
-        prefixes.append(environment["PYTHONPATH"])
-    environment["PYTHONPATH"] = os.pathsep.join(prefixes)
+    environment["PYTHONPATH"] = os.pathsep.join([str(root / "src"), str(root)])
     result_trials: list[dict[str, object]] = []
     with tempfile.TemporaryDirectory(prefix="compasscart-benchmark-") as temporary:
         cwd = root if cwd_mode == "root" else Path(temporary)
@@ -451,7 +472,9 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit("benchmark requires --transcript and --output")
     report = run_parent(args.catalog, args.transcript, trials=args.trials, cwd_mode=args.cwd_mode)
     if args.compare:
-        report["comparison"] = compare_reports(report, load_report(args.compare))
+        report["comparison"] = compare_reports(
+            report, load_report(args.compare), require_dense=not args.allow_dense_unavailable
+        )
     write_report(args.output, report)
     latency = report["latency_ms"]
     failed = ((not args.allow_dense_unavailable and report["dense_available"] is not True) or report["fallback_count"] != 0 or not isinstance(latency, dict) or _finite(latency.get("max")) >= 1500 or (args.compare and not report["comparison"]["accepted"]))

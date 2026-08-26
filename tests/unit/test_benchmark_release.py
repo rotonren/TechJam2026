@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -63,6 +64,7 @@ def test_validate_transcript_rejects_invalid_or_sensitive_rows() -> None:
         [{**row, "turn": True} if row["turn"] == 1 else row for row in rows],
         [{key: value for key, value in row.items() if key != "profile"} if row["turn"] == 1 else row for row in rows],
         [{**row, "profile": []} if row["turn"] == 1 else row for row in rows],
+        [{**row, "profile": {"arbitrary": "value"}} if row["turn"] == 1 else row for row in rows],
         [{**row, "message": " "} if row["turn"] == 1 else row for row in rows],
         [{**row, "session_id": "target-leak"} if row["session_id"] == "bench_0001" else row for row in rows],
         [{**row, "target": "leak"} if row["turn"] == 1 else row for row in rows],
@@ -72,6 +74,23 @@ def test_validate_transcript_rejects_invalid_or_sensitive_rows() -> None:
     for candidate in invalid:
         with pytest.raises((TypeError, ValueError)):
             bench.validate_transcript(candidate)
+
+
+def test_run_worker_rejects_profile_extras_before_constructing_agent(tmp_path: Path) -> None:
+    transcript = tmp_path / "transcript.jsonl"
+    rows = _rows()
+    rows[0]["profile"] = {"hit": "leak"}
+    transcript.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    constructed = False
+
+    class MustNotConstruct:
+        def __init__(self, _: str) -> None:
+            nonlocal constructed
+            constructed = True
+
+    with pytest.raises(ValueError):
+        bench.run_worker(tmp_path / "catalog.jsonl", transcript, agent_class=MustNotConstruct)
+    assert constructed is False
 
 
 def test_compare_reports_enforces_hash_output_performance_and_safety_gates() -> None:
@@ -88,6 +107,32 @@ def test_compare_reports_enforces_hash_output_performance_and_safety_gates() -> 
     )["accepted"] is False
     with pytest.raises(ValueError):
         bench.compare_reports(candidate, {**baseline, "init_ms": 0})
+
+
+def test_main_allow_dense_unavailable_relaxes_only_dense_comparison_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    baseline = bench.aggregate_trials([_trial(init_ms=100, peak_mib=100, latencies_ms=[100] * 20)])
+    baseline_path = tmp_path / "baseline.json"
+    baseline_path.write_text(json.dumps(baseline), encoding="utf-8")
+    accepted = bench.aggregate_trials([_trial(dense_available=False, init_ms=95, peak_mib=100, latencies_ms=[90] * 20)])
+    monkeypatch.setattr(bench, "run_parent", lambda *_args, **_kwargs: accepted)
+
+    allowed_output = tmp_path / "allowed.json"
+    bench.main(["--transcript", "input.jsonl", "--output", str(allowed_output), "--compare", str(baseline_path), "--allow-dense-unavailable"])
+    assert json.loads(allowed_output.read_text(encoding="utf-8"))["comparison"]["accepted"] is True
+
+    denied_output = tmp_path / "denied.json"
+    with pytest.raises(SystemExit):
+        bench.main(["--transcript", "input.jsonl", "--output", str(denied_output), "--compare", str(baseline_path)])
+    assert denied_output.exists()
+
+    no_gain = bench.aggregate_trials([_trial(dense_available=False, init_ms=96, peak_mib=100, latencies_ms=[100] * 20)])
+    monkeypatch.setattr(bench, "run_parent", lambda *_args, **_kwargs: no_gain)
+    rejected_output = tmp_path / "rejected.json"
+    with pytest.raises(SystemExit):
+        bench.main(["--transcript", "input.jsonl", "--output", str(rejected_output), "--compare", str(baseline_path), "--allow-dense-unavailable"])
+    assert json.loads(rejected_output.read_text(encoding="utf-8"))["comparison"]["accepted"] is False
 
 
 class _CaptureAgent:
@@ -206,11 +251,14 @@ def test_run_parent_builds_isolated_child_command_and_parses_single_json(tmp_pat
         return type("Done", (), {"stdout": json.dumps(worker), "stderr": "", "returncode": 0})()
 
     monkeypatch.setattr(bench.subprocess, "run", fake_run)
+    monkeypatch.setenv("PYTHONPATH", "hostile-parent-path")
+    monkeypatch.setenv("COMPASSCART_DISABLE_DENSE", "1")
     report = bench.run_parent(tmp_path / "catalog.jsonl", transcript, trials=2, cwd_mode="outside")
     assert report["trial_count"] == 2
     assert len(calls) == 2
     assert calls[0][0][:3] == [sys.executable, "-m", "tools.benchmark_release"]
-    assert str(bench._repo_root() / "src") in calls[0][1]["PYTHONPATH"]
+    assert calls[0][1]["PYTHONPATH"] == os.pathsep.join([str(bench._repo_root() / "src"), str(bench._repo_root())])
+    assert "COMPASSCART_DISABLE_DENSE" not in calls[0][1]
     assert calls[0][2] != bench._repo_root()
 
 
