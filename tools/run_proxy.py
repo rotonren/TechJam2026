@@ -438,6 +438,8 @@ def _validate_metric_summary(value: object) -> int:
             raise ValueError("audit scenario mttc is invalid")
     elif not _is_finite_number(mttc, minimum=1.0, maximum=float(MAX_TURNS + 1)):
         raise ValueError("audit scenario mttc is invalid")
+    if count == 0 and (value["hit_rate_at_10"] != 0.0 or value["mrr"] != 0.0 or mttc is not None):
+        raise ValueError("audit empty scenario metrics are invalid")
     return count
 
 
@@ -486,6 +488,23 @@ def _validate_audit_aggregate(aggregate: dict[str, object], metadata: dict[str, 
     scenario_counts = {name: _validate_metric_summary(scenarios[name]) for name in AUDIT_SCENARIOS}
     if sum(scenario_counts.values()) != count:
         raise ValueError("audit scenario sample counts are inconsistent")
+    if count == 0:
+        if aggregate["hit_rate_at_10"] != 0.0 or aggregate["mrr"] != 0.0 or mttc is not None:
+            raise ValueError("audit empty aggregate metrics are invalid")
+    else:
+        weighted_metrics = {
+            key: sum(
+                float(scenarios[name][key]) * scenario_counts[name]
+                for name in AUDIT_SCENARIOS
+                if scenario_counts[name]
+            ) / count
+            for key in ("hit_rate_at_10", "mrr", "mttc")
+        }
+        if any(
+            not math.isclose(float(aggregate[key]), weighted_metrics[key], rel_tol=0.0, abs_tol=1.000001e-6)
+            for key in weighted_metrics
+        ):
+            raise ValueError("audit aggregate metrics disagree with scenario metrics")
     if (
         not _is_nonnegative_int(aggregate["invalid_response_count"])
         or aggregate["invalid_response_count"] != 0

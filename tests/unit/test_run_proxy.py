@@ -1046,6 +1046,9 @@ def test_audit_report_technical_score_uses_raw_efficiency_before_rounding(tmp_pa
             "recommended_technical_score": 0.415354,
         }
     )
+    for metric in result["scenario_metrics"].values():
+        if metric["sample_count"]:
+            metric.update({"hit_rate_at_10": 0.5, "mrr": 0.3376451, "mttc": 7.796954})
 
     write_audit_report(tmp_path / "valid.json", result, _legal_audit_metadata())
 
@@ -1095,6 +1098,54 @@ def test_audit_report_accepts_official_metrics_with_subgroup_rounding_drift(tmp_
         "invalid_response_count": 0,
         "sessions": [],
     }
+
+    write_audit_report(tmp_path / "audit.json", result, _legal_audit_metadata())
+
+
+def test_audit_report_rejects_coordinated_overall_metric_mutation(tmp_path: Path):
+    from tools.run_proxy import write_audit_report
+
+    result = _weighted_audit_result()
+    for metric in result["scenario_metrics"].values():
+        if metric["sample_count"]:
+            metric["hit_rate_at_10"] = 0.637056
+    result.update(
+        {
+            "hit_rate_at_10": 0.75,
+            "recommended_technical_score": 0.5775,
+        }
+    )
+
+    with pytest.raises(ValueError, match="scenario"):
+        write_audit_report(tmp_path / "audit.json", result, _legal_audit_metadata())
+
+
+def test_audit_report_rejects_noncanonical_empty_scenario_metrics(tmp_path: Path):
+    from tools.run_proxy import write_audit_report
+
+    result = _weighted_audit_result()
+    result["scenario_metrics"]["buying"].update({"hit_rate_at_10": 0.1, "mrr": 0.1})
+
+    with pytest.raises(ValueError, match="scenario"):
+        write_audit_report(tmp_path / "audit.json", result, _legal_audit_metadata())
+
+
+def test_audit_report_accepts_canonical_empty_metric_summaries(tmp_path: Path):
+    from tools.run_proxy import write_audit_report
+
+    result = _legal_audit_result()
+    empty_metric = {"sample_count": 0, "hit_rate_at_10": 0.0, "mrr": 0.0, "mttc": None}
+    result.update(
+        {
+            "sample_count": 0,
+            "hit_rate_at_10": 0.0,
+            "mrr": 0.0,
+            "mttc": None,
+            "efficiency": 0.0,
+            "recommended_technical_score": 0.0,
+            "scenario_metrics": {name: empty_metric.copy() for name in result["scenario_metrics"]},
+        }
+    )
 
     write_audit_report(tmp_path / "audit.json", result, _legal_audit_metadata())
 
