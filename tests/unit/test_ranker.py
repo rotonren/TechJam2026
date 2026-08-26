@@ -25,6 +25,25 @@ def test_explicit_hard_match_beats_conflicting_product(fixture_catalog_path):
     assert ranked[0].parent_asin == "SHOE1"
 
 
+def test_semantic_category_match_beats_conflicting_product(fixture_catalog_path):
+    index = CatalogIndex(fixture_catalog_path)
+    index.quality.update({"DRESS1": 0.0, "SHOE1": 0.0})
+    index.attributes["SHOE1"]["category"] = ()
+    state = SessionState(
+        "s1",
+        route="buying",
+        constraints=[
+            Constraint("category", "athletic shoes", 1.0, True, "message", 1, 1)
+        ],
+    )
+
+    ranked = ConstraintRanker(index).rank(
+        _candidates(index, ["DRESS1", "SHOE1"]), state
+    )
+
+    assert ranked[0].parent_asin == "SHOE1"
+
+
 def test_message_constraint_outweighs_profile_preference(fixture_catalog_path):
     index = CatalogIndex(fixture_catalog_path)
     state = SessionState(

@@ -5,10 +5,9 @@ from collections import defaultdict
 from collections.abc import Collection, Iterable, Mapping, Sequence
 
 from .catalog import CatalogIndex
-from .constraints import hard_constraint_violations
 from .dense import DenseBackend
 from .models import Candidate, Constraint, RetrievalPlan, SessionState
-from .normalization import normalize_category_value, normalize_value
+from .normalization import normalize_value
 
 
 def reciprocal_rank_fusion(
@@ -180,12 +179,24 @@ class HybridRetriever:
                 if self._price_matches(product.get("price"), constraint)
             }
 
+        if constraint.attribute == "category":
+            matched = set().union(
+                *(self.catalog.category_ids(value) for value in constraint.values())
+            )
+            if constraint.operator == "not_in":
+                postings = self.catalog.category_term_inverted.values()
+                present = (
+                    set().union(*postings)
+                    if self.catalog.category_term_inverted
+                    else set()
+                )
+                return present - matched
+            if constraint.operator in {"eq", "in"}:
+                return matched
+            return set()
+
         attribute = constraint.attribute
-        normalizer = (
-            normalize_category_value
-            if attribute == "category"
-            else normalize_value
-        )
+        normalizer = normalize_value
         inverted = self.catalog.attribute_inverted.get(attribute, {})
 
         def ids_for(value: str) -> set[str]:
@@ -257,11 +268,7 @@ class HybridRetriever:
         constraints = plan.effective_hard_constraints()
         if not constraints:
             return ()
-        return hard_constraint_violations(
-            self.catalog.product(identifier),
-            self.catalog.attributes[identifier],
-            constraints,
-        )
+        return self.catalog.violations(identifier, constraints)
 
     def _exact_ids(
         self,
@@ -291,9 +298,13 @@ class HybridRetriever:
             return []
 
     def _fallback_ids(self, plan: RetrievalPlan) -> list[str]:
-        category_ids: set[str] = set()
-        for value in plan.hard_filters.get("category", ()):
-            category_ids.update(self.catalog.attribute_ids("category", value))
+        category_groups = [
+            self._ids_for_constraint(constraint)
+            for constraint in plan.effective_hard_constraints()
+            if constraint.attribute == "category"
+            and constraint.operator in {"eq", "in"}
+        ]
+        category_ids = set.intersection(*category_groups) if category_groups else set()
         ordered_category = sorted(
             category_ids, key=lambda item: (-self.catalog.quality[item], item)
         )

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from .catalog import CatalogIndex
-from .constraints import matches_constraint
 from .models import Candidate, Constraint, SessionState
 from .normalization import terms
 
@@ -80,11 +79,7 @@ class ConstraintRanker:
         )
 
     def _matches(self, identifier: str, constraint: Constraint) -> bool:
-        return matches_constraint(
-            self.catalog.product(identifier),
-            self.catalog.attributes.get(identifier, {}),
-            constraint,
-        )
+        return self.catalog.matches(identifier, constraint)
 
     def _conflicts(self, identifier: str, constraint: Constraint) -> bool:
         return not self._matches(identifier, constraint)

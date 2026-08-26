@@ -173,3 +173,36 @@ def test_attribute_candidate_lookup_does_not_scan_every_catalog_item(
     retriever._exact_ids = fail_on_full_scan
 
     assert retriever._attribute_candidates(plan, 10) == ["SHOE1"]
+
+
+def test_category_filter_candidates_and_fallback_share_semantics(
+    fixture_catalog_path, monkeypatch
+):
+    index = CatalogIndex(fixture_catalog_path)
+    retriever = HybridRetriever(index)
+    category = _hard_constraint("category", "athletic shoes")
+    plan = RetrievalPlan(
+        route="buying",
+        query_text="athletic shoes",
+        hard_filters={"category": ("athletic shoes",)},
+        hard_constraints=(category,),
+    )
+    monkeypatch.setattr(index, "popular_ids", lambda _limit: ["DRESS1", "SHOE1"])
+
+    assert retriever._exact_ids(["SHOE1", "DRESS1"], plan) == ["SHOE1"]
+    assert retriever._attribute_candidates(plan, 10) == ["SHOE1"]
+    assert retriever._fallback_ids(plan)[0] == "SHOE1"
+
+
+def test_category_not_in_candidate_ids_use_semantic_category_union(
+    fixture_catalog_path,
+):
+    index = CatalogIndex(fixture_catalog_path)
+    retriever = HybridRetriever(index)
+    excluded = _hard_constraint("category", "athletic shoes", operator="not_in")
+
+    assert retriever._ids_for_constraint(excluded) == {
+        "BELT1",
+        "DRESS1",
+        "JACKET1",
+    }
