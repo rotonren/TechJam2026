@@ -8,7 +8,7 @@ from pathlib import Path
 from .catalog import CatalogIndex
 from .config import RuntimeConfig
 from .constraints import hard_constraint_violations
-from .dense import load_dense_backend
+from .dense import NullDenseBackend, load_dense_backend
 from .models import Candidate, QuestionDecision, RetrievalPlan, SessionState
 from .parser import MessageParser
 from .question_policy import QuestionPolicy
@@ -18,6 +18,8 @@ from .retrieval import HybridRetriever
 from .router import RoutePlanner
 from .state import SessionStore
 from .tracing import TraceSink
+
+SUBMISSION_ROOT = Path(__file__).resolve().parents[2]
 
 
 class CompassCartAgent:
@@ -32,11 +34,12 @@ class CompassCartAgent:
         self.parser = MessageParser(self.catalog.parser_vocabulary())
         self.sessions = SessionStore(self.parser)
         self.router = RoutePlanner(self.config)
-        self.dense = load_dense_backend(
-            self.config.dense_model_dir,
-            self.config.dense_vector_dir,
-            self.config.dense_manifest_path,
-        )
+        try:
+            dense_paths = self.config.resolve_dense_paths(SUBMISSION_ROOT)
+        except ValueError:
+            self.dense = NullDenseBackend("layout_invalid")
+        else:
+            self.dense = load_dense_backend(*dense_paths)
         self.retriever = HybridRetriever(
             self.catalog, self.dense, rrf_k=self.config.rrf_k
         )
@@ -178,6 +181,7 @@ class CompassCartAgent:
                     )
                 ),
                 "ask_attribute": question.ask_attribute,
+                "dense_status": self.dense.status,
                 "fallbacks": fallbacks,
                 "elapsed_ms": elapsed_ms,
             }

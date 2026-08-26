@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
 import zipfile
 from pathlib import Path
 
@@ -61,3 +65,53 @@ def test_submission_archive_is_reproducible(tmp_path: Path):
     assert first.sha256 == second.sha256
     assert first.file_count == second.file_count
     assert first.size_bytes == second.size_bytes
+
+
+def test_extracted_submission_loads_dense_assets_outside_cwd(
+    submission_zip: Path,
+    fixture_catalog_path: Path,
+    tmp_path: Path,
+):
+    release_root = tmp_path / "release"
+    outside_cwd = tmp_path / "outside"
+    release_root.mkdir()
+    outside_cwd.mkdir()
+    with zipfile.ZipFile(submission_zip) as archive:
+        archive.extractall(release_root)
+
+    environment = os.environ.copy()
+    environment.pop("COMPASSCART_DISABLE_DENSE", None)
+    environment["PYTHONPATH"] = os.pathsep.join(
+        (str(release_root / "src"), str(release_root))
+    )
+    script = """
+import json
+import sys
+from agent import Agent
+
+agent = Agent(sys.argv[1])
+agent.reset("package", {})
+response = agent.respond("package", "running shoes", turn=1, top_k=3)
+print(json.dumps({
+    "dense_available": agent.dense.available,
+    "dense_status": agent.dense.status,
+    "trace_dense_status": agent.traces.records[-1]["dense_status"],
+    "response_keys": sorted(response),
+}))
+"""
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script, str(fixture_catalog_path.resolve())],
+        cwd=outside_cwd,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert json.loads(completed.stdout) == {
+        "dense_available": True,
+        "dense_status": "available",
+        "trace_dense_status": "available",
+        "response_keys": ["ask_attribute", "message", "recommendations", "usage"],
+    }

@@ -31,3 +31,19 @@ class RuntimeConfig:
     )
     rank_fusion_weight: float = 0.10
     mmr_lambda: float = 0.85
+
+    def resolve_dense_paths(
+        self, submission_root: Path
+    ) -> tuple[Path, Path, Path]:
+        root = submission_root.resolve()
+        if not (root / "agent.py").is_file() or not (root / "assets").is_dir():
+            raise ValueError("submission root must contain agent.py and assets")
+
+        def resolve(path: Path) -> Path:
+            return path if path.is_absolute() else root / path
+
+        return (
+            resolve(self.dense_model_dir),
+            resolve(self.dense_vector_dir),
+            resolve(self.dense_manifest_path),
+        )

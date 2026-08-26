@@ -14,11 +14,17 @@ class DenseBackend(Protocol):
     @property
     def available(self) -> bool: ...
 
+    @property
+    def status(self) -> str: ...
+
     def search(self, text: str, limit: int) -> list[Candidate]: ...
 
 
 class NullDenseBackend:
     available = False
+
+    def __init__(self, status: str = "unavailable") -> None:
+        self.status = status
 
     def search(self, text: str, limit: int) -> list[Candidate]:
         del text, limit
@@ -26,6 +32,8 @@ class NullDenseBackend:
 
 
 class OnnxDenseBackend:
+    status = "available"
+
     def __init__(
         self,
         session: object,
@@ -108,7 +116,7 @@ def load_dense_backend(
     manifest_path: str | Path,
 ) -> DenseBackend:
     if os.environ.get("COMPASSCART_DISABLE_DENSE") == "1":
-        return NullDenseBackend()
+        return NullDenseBackend("disabled_by_environment")
     model_dir = Path(model_dir)
     vector_dir = Path(vector_dir)
     manifest_path = Path(manifest_path)
@@ -143,8 +151,14 @@ def load_dense_backend(
             vectors=np.load(vectors_path, allow_pickle=False),
             scales=np.load(scales_path, allow_pickle=False),
         )
-    except Exception:  # noqa: BLE001 - every asset/load failure is lexical-only.
-        return NullDenseBackend()
+    except FileNotFoundError:
+        return NullDenseBackend("asset_missing")
+    except ImportError:
+        return NullDenseBackend("dependency_missing")
+    except ValueError:
+        return NullDenseBackend("asset_invalid")
+    except Exception:  # noqa: BLE001 - optional dense failures remain lexical-only.
+        return NullDenseBackend("initialization_failed")
 
 
 def _verify_manifest(manifest_path: Path) -> None:

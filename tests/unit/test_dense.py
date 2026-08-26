@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import builtins
+import hashlib
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
@@ -39,6 +42,32 @@ class _Session:
         return [np.array([[[1.0, 0.0], [1.0, 0.0]]], dtype=np.float32)]
 
 
+def _write_loader_assets(root: Path) -> tuple[Path, Path, Path]:
+    model_dir = root / "model"
+    vector_dir = root / "vectors"
+    model_dir.mkdir()
+    vector_dir.mkdir()
+    paths = (
+        model_dir / "model.int8.onnx",
+        model_dir / "tokenizer.json",
+        vector_dir / "product_ids.npy",
+        vector_dir / "vectors.int8.npy",
+        vector_dir / "scales.npy",
+    )
+    for path in paths:
+        path.write_bytes(b"fixture")
+    manifest = root / "SHA256SUMS"
+    manifest.write_text(
+        "".join(
+            f"{hashlib.sha256(path.read_bytes()).hexdigest()}  "
+            f"{path.relative_to(root).as_posix()}\n"
+            for path in paths
+        ),
+        encoding="utf-8",
+    )
+    return model_dir, vector_dir, manifest
+
+
 def test_missing_assets_return_null_backend(tmp_path):
     backend = load_dense_backend(
         tmp_path / "model", tmp_path / "vectors", tmp_path / "SHA256SUMS"
@@ -46,6 +75,7 @@ def test_missing_assets_return_null_backend(tmp_path):
 
     assert isinstance(backend, NullDenseBackend)
     assert backend.available is False
+    assert backend.status == "asset_missing"
     assert backend.search("shoes", 10) == []
 
 
@@ -58,6 +88,53 @@ def test_checksum_mismatch_returns_null_backend(tmp_path):
     backend = load_dense_backend(tmp_path, tmp_path, manifest)
 
     assert isinstance(backend, NullDenseBackend)
+    assert backend.status == "asset_invalid"
+
+
+def test_environment_disable_has_priority_over_missing_assets(tmp_path, monkeypatch):
+    monkeypatch.setenv("COMPASSCART_DISABLE_DENSE", "1")
+
+    backend = load_dense_backend(
+        tmp_path / "missing-model",
+        tmp_path / "missing-vectors",
+        tmp_path / "missing-manifest",
+    )
+
+    assert isinstance(backend, NullDenseBackend)
+    assert backend.status == "disabled_by_environment"
+
+
+def test_dependency_import_failure_returns_reason(tmp_path, monkeypatch):
+    model_dir, vector_dir, manifest = _write_loader_assets(tmp_path)
+    real_import = builtins.__import__
+
+    def fail_onnxruntime_import(name, *args, **kwargs):
+        if name == "onnxruntime":
+            raise ImportError("dependency unavailable")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fail_onnxruntime_import)
+
+    backend = load_dense_backend(model_dir, vector_dir, manifest)
+
+    assert isinstance(backend, NullDenseBackend)
+    assert backend.status == "dependency_missing"
+
+
+def test_unexpected_initialization_failure_returns_reason(tmp_path, monkeypatch):
+    import onnxruntime
+
+    model_dir, vector_dir, manifest = _write_loader_assets(tmp_path)
+
+    def fail_session(*_args, **_kwargs):
+        raise RuntimeError("session failed")
+
+    monkeypatch.setattr(onnxruntime, "InferenceSession", fail_session)
+
+    backend = load_dense_backend(model_dir, vector_dir, manifest)
+
+    assert isinstance(backend, NullDenseBackend)
+    assert backend.status == "initialization_failed"
 
 
 def test_local_backend_ranks_by_mean_pooled_cosine():
@@ -71,6 +148,7 @@ def test_local_backend_ranks_by_mean_pooled_cosine():
 
     results = backend.search("query", 2)
 
+    assert backend.status == "available"
     assert [item.parent_asin for item in results] == ["A", "B"]
     assert results[0].score > results[1].score
 
