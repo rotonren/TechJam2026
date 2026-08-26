@@ -20,7 +20,7 @@ def _trial(**overrides: object) -> dict[str, object]:
         "trace_latencies_ms": [1.0] * 800, "instrumentation_delta_ms": {"count": 800, "p50": 1.0, "p95": 1.0, "max": 1.0},
         "dense_available": True, "dense_status": "available", "fallback_count": 0,
         "response_hash": "a" * 64, "transcript_hash": "b" * 64, "catalog_hash": "c" * 64,
-        "response_count": 800, "platform": {"python": "test"},
+        "response_count": 800, "platform": {"python": "test", "platform": "test"},
     }
     trial.update(overrides)
     return trial
@@ -226,16 +226,16 @@ def test_capture_seals_environment_and_rolls_back_on_bundle_failure(tmp_path: Pa
     assert Path.cwd() == original_cwd
 
 
-def test_verify_captured_transcript_only_publishes_sidecar_on_exact_match(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_capture_existing_transcript_only_publishes_sidecar_on_exact_match(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     transcript = tmp_path / "existing.jsonl"
     transcript.write_bytes(b"same")
     monkeypatch.setattr(bench, "_capture_payload", lambda *_args, **_kwargs: (b"different", _capture_metadata()))
     with pytest.raises(ValueError, match="does not match"):
-        bench.verify_captured_transcript(tmp_path, tmp_path / "catalog.jsonl", transcript)
+        bench.capture_transcript(tmp_path, tmp_path / "catalog.jsonl", transcript)
     assert not Path(str(transcript) + ".manifest.json").exists()
 
     monkeypatch.setattr(bench, "_capture_payload", lambda *_args, **_kwargs: (b"same", _capture_metadata()))
-    assert bench.verify_captured_transcript(tmp_path, tmp_path / "catalog.jsonl", transcript) == hashlib.sha256(b"same").hexdigest()
+    assert bench.capture_transcript(tmp_path, tmp_path / "catalog.jsonl", transcript) == hashlib.sha256(b"same").hexdigest()
     assert json.loads(Path(str(transcript) + ".manifest.json").read_text(encoding="utf-8"))["transcript_hash"] == hashlib.sha256(b"same").hexdigest()
 
 
@@ -315,6 +315,22 @@ def test_run_worker_uses_wall_clock_latency_not_agent_trace(tmp_path: Path) -> N
     assert result["catalog_hash"] == "c" * 64
 
 
+def test_run_worker_times_only_agent_construction_and_rechecks_catalog(tmp_path: Path) -> None:
+    transcript = tmp_path / "transcript.jsonl"
+    transcript.write_text("".join(json.dumps(row) + "\n" for row in _rows()), encoding="utf-8")
+    clock_values = iter([0.0, 1.0, *[float(index) for index in range(2, 1_603)]])
+    hashes = iter(["c" * 64, "c" * 64])
+    result = bench.run_worker(
+        tmp_path / "catalog.jsonl", transcript, agent_class=_WorkerAgent,
+        clock=lambda: next(clock_values), catalog_hasher=lambda _: next(hashes),
+    )
+    assert result["init_ms"] == 1000.0
+
+    changing_hashes = iter(["c" * 64, "d" * 64])
+    with pytest.raises(ValueError, match="catalog changed"):
+        bench.run_worker(tmp_path / "catalog.jsonl", transcript, agent_class=_WorkerAgent, catalog_hasher=lambda _: next(changing_hashes))
+
+
 def test_memory_uses_platform_high_water_units(monkeypatch: pytest.MonkeyPatch) -> None:
     process = type("Process", (), {"memory_info": lambda self: type("Info", (), {"rss": 8 * 1024 * 1024, "peak_wset": 32 * 1024 * 1024})()})()
     assert bench._memory_mib(process=process, os_name="nt") == (8.0, 32.0, "windows_peak_wset")
@@ -333,6 +349,8 @@ def test_aggregate_trials_rejects_inexact_schema_and_catalog_disagreement() -> N
         bench.aggregate_trials([{**valid, "latencies_ms": valid["latencies_ms"][:-1]}])
     with pytest.raises(ValueError):
         bench.aggregate_trials([{**valid, "fallback_count": True}])
+    with pytest.raises(ValueError):
+        bench.aggregate_trials([{**valid, "platform": {"recommendation": "leak"}}])
 
 
 def test_compare_reports_requires_catalog_provenance_and_exact_boundaries() -> None:
@@ -414,6 +432,26 @@ def test_cli_rejects_incompatible_options_and_invalid_baseline_before_workers(
     assert called is False
 
 
+def test_parent_preflight_rejects_historical_or_forged_aggregate_before_workers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    called = False
+    monkeypatch.setattr(bench, "run_parent", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("worker ran")))
+    output = tmp_path / "report.json"
+    historical = tmp_path / "historical.json"
+    historical.write_text(json.dumps({"latency_ms": {"p95": 1}}), encoding="utf-8")
+    with pytest.raises(ValueError):
+        bench.main(["--transcript", "input.jsonl", "--output", str(output), "--compare", str(historical)])
+    assert called is False
+
+    baseline = _aggregate_full()
+    baseline["init_ms"] = 999.0
+    forged = tmp_path / "forged.json"
+    forged.write_text(json.dumps(baseline), encoding="utf-8")
+    with pytest.raises(ValueError, match="aggregate"):
+        bench.main(["--transcript", "input.jsonl", "--output", str(tmp_path / "forged-output.json"), "--compare", str(forged)])
+
+
 def test_run_parent_builds_isolated_child_command_and_parses_single_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     transcript = tmp_path / "transcript.jsonl"
     transcript.write_text("".join(json.dumps(row) + "\n" for row in _rows()), encoding="utf-8")
@@ -449,4 +487,6 @@ def test_report_writer_and_cli_reject_malformed_or_conflicting_inputs(tmp_path: 
         bench.load_report(tmp_path / "bad.json")
     with pytest.raises(SystemExit):
         bench.parse_args(["--worker", "--capture-transcript"])
+    with pytest.raises(SystemExit):
+        bench.parse_args(["--verify-captured-transcript", "--transcript", "input.jsonl", "--proxy-root", "proxy"])
     assert bench.parse_args(["--transcript", "input.jsonl", "--output", "report.json"]).worker is False

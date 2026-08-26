@@ -32,7 +32,10 @@ _RESPONSE_COUNT = _SESSION_COUNT * len(_TURNS)
 _PROFILE_KEYS = frozenset({
     "average_prior_rating", "preference_tags", "purchase_frequency", "rating_style", "summary",
 })
-_SENSITIVE_KEYS = frozenset({"target", "ground_truth", "intent_card", "behavior", "recommendations", "hits"})
+_SENSITIVE_KEYS = frozenset({
+    "target", "targets", "ground_truth", "intent_card", "behavior", "recommendation",
+    "recommendations", "hit", "hits",
+})
 _ROW_KEYS = frozenset({"session_id", "turn", "profile", "message"})
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 _TRIAL_KEYS = frozenset({
@@ -44,6 +47,8 @@ _CAPTURE_METADATA_KEYS = frozenset({
     "catalog_hash", "proxy_manifest_hash", "representative_dataset_hash", "agent_class", "config_hash",
     "dense_available", "dense_status", "capture_seed", "session_count", "response_count", "cwd_mode", "platform",
 })
+_TRIAL_PLATFORM_KEYS = frozenset({"python", "platform"})
+_PARENT_PLATFORM_KEYS = frozenset({"os", "python", "processor", "cpu_logical", "cpu_physical", "ram_mib", "onnxruntime", "psutil"})
 
 
 def _repo_root() -> Path:
@@ -325,33 +330,18 @@ def capture_transcript(
     """Freeze and seal a response-independent 800-row transcript and sidecar."""
     destination = Path(output)
     manifest_path = Path(f"{destination}.manifest.json")
-    if os.path.lexists(destination) or os.path.lexists(manifest_path):
-        raise FileExistsError("transcript output or manifest already exists")
+    if os.path.lexists(manifest_path):
+        raise FileExistsError("transcript manifest already exists")
     encoded, metadata = _capture_payload(proxy_root, catalog_path, agent_class=agent_class, suite_loader=suite_loader)
     digest = hashlib.sha256(encoded).hexdigest()
     manifest = _capture_manifest(metadata, transcript_hash=digest)
-    _publish_bundle([(destination, encoded), (manifest_path, _canonical_bytes(manifest) + b"\n")])
-    return digest
-
-
-def verify_captured_transcript(
-    proxy_root: str | Path, catalog_path: str | Path, transcript_path: str | Path, *,
-    agent_class: type | Callable[[str], object] | None = None,
-    suite_loader: Callable[[str | Path, str], object] | None = None,
-) -> str:
-    """Replay capture only to attest an existing transcript, never replace its bytes."""
-    destination = Path(transcript_path)
-    manifest_path = Path(f"{destination}.manifest.json")
-    if not destination.is_file():
-        raise FileNotFoundError("captured transcript does not exist")
-    if os.path.lexists(manifest_path):
-        raise FileExistsError("captured transcript manifest already exists")
-    existing = destination.read_bytes()
-    encoded, metadata = _capture_payload(proxy_root, catalog_path, agent_class=agent_class, suite_loader=suite_loader)
-    if encoded != existing:
-        raise ValueError("replayed transcript does not match existing bytes")
-    digest = hashlib.sha256(existing).hexdigest()
-    _publish_bundle([(manifest_path, _canonical_bytes(_capture_manifest(metadata, transcript_hash=digest)) + b"\n")])
+    manifest_payload = _canonical_bytes(manifest) + b"\n"
+    if os.path.lexists(destination):
+        if destination.read_bytes() != encoded:
+            raise ValueError("replayed transcript does not match existing bytes")
+        _publish_bundle([(manifest_path, manifest_payload)])
+    else:
+        _publish_bundle([(destination, encoded), (manifest_path, manifest_payload)])
     return digest
 
 
@@ -439,7 +429,9 @@ def _validate_trial(trial: object) -> dict[str, object]:
         raise ValueError("trial response count is invalid")
     for name in ("response_hash", "transcript_hash", "catalog_hash"):
         _validate_hash(trial[name], name)
-    if not isinstance(trial["platform"], dict) or _contains_sensitive_key(trial["platform"]):
+    if not isinstance(trial["platform"], dict) or set(trial["platform"]) != _TRIAL_PLATFORM_KEYS or _contains_sensitive_key(trial["platform"]):
+        raise ValueError("trial platform is invalid")
+    if any(not isinstance(value, str) or not value.strip() for value in trial["platform"].values()):
         raise ValueError("trial platform is invalid")
     try:
         json.dumps(trial["platform"], allow_nan=False)
@@ -461,9 +453,9 @@ def run_worker(
     validate_transcript(rows)
     if agent_class is None:
         from agent import Agent as agent_class
-    started = clock()
     catalog_hash = catalog_hasher(catalog_path)
     _validate_hash(catalog_hash, "catalog_hash")
+    started = clock()
     agent = agent_class(str(Path(catalog_path).resolve()))
     init_ms = (clock() - started) * 1000
     _finite(init_ms)
@@ -507,6 +499,8 @@ def run_worker(
     records = getattr(trace_sink, "records", None)
     if not isinstance(records, list) or len(records) != _RESPONSE_COUNT:
         raise ValueError("trace count does not match transcript")
+    if catalog_hasher(catalog_path) != catalog_hash:
+        raise ValueError("catalog changed during worker replay")
     dense = getattr(agent, "dense", None)
     dense_available = bool(getattr(dense, "available", False))
     dense_status = getattr(dense, "status", "available" if dense_available else "unavailable")
@@ -564,6 +558,35 @@ def aggregate_trials(trials: list[dict[str, object]]) -> dict[str, object]:
         "response_hash": response_hashes.pop(), "transcript_hash": transcript_hashes.pop(), "catalog_hash": catalog_hashes.pop(),
         "peak_metric_source": peak_sources.pop(), "response_count": _RESPONSE_COUNT, "trials": trials,
     }
+
+
+def _validate_aggregate_report(report: object) -> dict[str, object]:
+    if not isinstance(report, dict):
+        raise TypeError("aggregate report must be an object")
+    aggregate_keys = {
+        "trial_count", "init_ms", "peak_mib", "rss_mib", "latency_ms", "dense_available",
+        "dense_statuses", "fallback_count", "response_hash", "transcript_hash", "catalog_hash",
+        "peak_metric_source", "response_count", "trials",
+    }
+    keys = set(report)
+    if keys != aggregate_keys and keys != aggregate_keys | {"cwd_mode", "platform"}:
+        raise ValueError("aggregate report schema is invalid")
+    trials = report.get("trials")
+    if not isinstance(trials, list) or not trials:
+        raise ValueError("aggregate report trials are invalid")
+    expected = aggregate_trials(trials)
+    for key, value in expected.items():
+        if report.get(key) != value:
+            raise ValueError("aggregate report does not match raw trial aggregate")
+    if "platform" in report:
+        if report.get("cwd_mode") not in {"root", "outside"}:
+            raise ValueError("aggregate report cwd mode is invalid")
+        platform_data = report["platform"]
+        if not isinstance(platform_data, dict) or set(platform_data) != _PARENT_PLATFORM_KEYS or _contains_sensitive_key(platform_data):
+            raise ValueError("aggregate report platform is invalid")
+        if not isinstance(platform_data["os"], str) or not isinstance(platform_data["python"], str) or not isinstance(platform_data["processor"], str):
+            raise ValueError("aggregate report platform is invalid")
+    return report
 
 
 def compare_reports(
@@ -726,7 +749,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--capture-transcript", action="store_true")
-    mode.add_argument("--verify-captured-transcript", action="store_true")
     mode.add_argument("--worker", action="store_true")
     parser.add_argument("--catalog", default="data/catalog.jsonl")
     parser.add_argument("--proxy-root")
@@ -742,9 +764,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.capture_transcript:
         allowed = {"--capture-transcript", "--catalog", "--proxy-root", "--output"}
         required = {"--proxy-root", "--output"}
-    elif args.verify_captured_transcript:
-        allowed = {"--verify-captured-transcript", "--catalog", "--proxy-root", "--transcript"}
-        required = {"--proxy-root", "--transcript"}
     elif args.worker:
         allowed = {"--worker", "--catalog", "--transcript"}
         required = {"--transcript"}
@@ -766,10 +785,6 @@ def main(argv: list[str] | None = None) -> None:
         digest = capture_transcript(args.proxy_root, args.catalog, args.output)
         print(json.dumps({"responses": _RESPONSE_COUNT, "sha256": digest}, separators=(",", ":")))
         return
-    if args.verify_captured_transcript:
-        digest = verify_captured_transcript(args.proxy_root, args.catalog, args.transcript)
-        print(json.dumps({"sha256": digest, "verified": True}, separators=(",", ":")))
-        return
     if args.worker:
         print(json.dumps(run_worker(args.catalog, args.transcript), sort_keys=True, separators=(",", ":"), allow_nan=False))
         return
@@ -777,7 +792,7 @@ def main(argv: list[str] | None = None) -> None:
     baseline: dict[str, object] | None = None
     if args.compare:
         baseline = load_report(args.compare)
-        compare_reports(baseline, baseline, require_dense=False)
+        _validate_aggregate_report(baseline)
     report = run_parent(
         args.catalog, args.transcript, trials=args.trials, cwd_mode=args.cwd_mode,
         worker_timeout_seconds=args.worker_timeout_seconds,
