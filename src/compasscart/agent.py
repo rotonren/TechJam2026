@@ -40,7 +40,11 @@ class CompassCartAgent:
         self.retriever = HybridRetriever(
             self.catalog, self.dense, rrf_k=self.config.rrf_k
         )
-        self.ranker = ConstraintRanker(self.catalog)
+        self.ranker = ConstraintRanker(
+            self.catalog,
+            fusion_weight=self.config.rank_fusion_weight,
+            mmr_lambda=self.config.mmr_lambda,
+        )
         self.question_policy = QuestionPolicy()
         self.response_builder = ResponseBuilder(
             self.catalog.valid_ids,

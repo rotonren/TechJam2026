@@ -1,3 +1,5 @@
+import pytest
+
 from compasscart.catalog import CatalogIndex
 from compasscart.models import Candidate, Constraint, SessionState
 from compasscart.ranker import ConstraintRanker
@@ -113,3 +115,57 @@ def test_exact_candidates_rank_before_higher_scoring_relaxed_candidates(
 
     assert [item.parent_asin for item in ranked] == ["BELT1", "JACKET1"]
     assert ranked[1].relaxed is True
+
+
+def test_fusion_reorders_exact_candidates_without_promoting_relaxed(
+    fixture_catalog_path,
+):
+    index = CatalogIndex(fixture_catalog_path)
+    index.quality["DRESS1"] = 0.0
+    index.quality["SHOE1"] = 0.0
+    index.quality["JACKET1"] = 0.0
+    candidates = [
+        Candidate(
+            "DRESS1",
+            index.product("DRESS1"),
+            {"lexical": 0.08, "attribute": 0.8},
+            0.9,
+        ),
+        Candidate(
+            "SHOE1", index.product("SHOE1"), {"lexical": 0.1}, 0.1
+        ),
+        Candidate(
+            "JACKET1",
+            index.product("JACKET1"),
+            {"lexical": 0.1, "attribute": 0.9},
+            1.0,
+            relaxed=True,
+        ),
+    ]
+    state = SessionState("s1", route="buying")
+
+    baseline = ConstraintRanker(index, fusion_weight=0.0).rank(candidates, state)
+    experiment = ConstraintRanker(index, fusion_weight=0.10).rank(candidates, state)
+
+    assert [item.parent_asin for item in baseline] == [
+        "SHOE1",
+        "DRESS1",
+        "JACKET1",
+    ]
+    assert [item.parent_asin for item in experiment] == [
+        "DRESS1",
+        "SHOE1",
+        "JACKET1",
+    ]
+    assert experiment[0].score > experiment[1].score
+    assert experiment[-1].relaxed is True
+
+
+@pytest.mark.parametrize("fusion_weight", [-0.01, 0.11])
+def test_ranker_rejects_out_of_range_fusion_weight(
+    fixture_catalog_path, fusion_weight
+):
+    index = CatalogIndex(fixture_catalog_path)
+
+    with pytest.raises(ValueError, match="fusion_weight"):
+        ConstraintRanker(index, fusion_weight=fusion_weight)

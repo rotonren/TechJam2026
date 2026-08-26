@@ -6,8 +6,19 @@ from .normalization import terms
 
 
 class ConstraintRanker:
-    def __init__(self, catalog: CatalogIndex, *, mmr_lambda: float = 0.85) -> None:
+    def __init__(
+        self,
+        catalog: CatalogIndex,
+        *,
+        fusion_weight: float = 0.0,
+        mmr_lambda: float = 0.85,
+    ) -> None:
+        if not 0.0 <= fusion_weight <= 0.10:
+            raise ValueError("fusion_weight must be between 0.0 and 0.10")
+        if not 0.0 <= mmr_lambda <= 1.0:
+            raise ValueError("mmr_lambda must be between 0.0 and 1.0")
         self.catalog = catalog
+        self.fusion_weight = fusion_weight
         self.mmr_lambda = mmr_lambda
 
     def rank(
@@ -19,8 +30,14 @@ class ConstraintRanker:
     ) -> list[Candidate]:
         if not candidates:
             return []
-        lexical = self._normalized_source(candidates, "lexical")
+        lexical = self._normalized_source(
+            candidates,
+            "lexical",
+            allow_score_fallback=self.fusion_weight == 0.0,
+        )
         dense = self._normalized_source(candidates, "dense")
+        fusion = self._normalized_scores(candidates)
+        source_weight = (0.40 - self.fusion_weight) / 2.0
         hard = [item for item in state.active_constraints() if item.is_hard]
         soft = [
             item
@@ -44,8 +61,9 @@ class ConstraintRanker:
             conflict = float(any(self._conflicts(identifier, item) for item in hard))
             score = (
                 0.30 * hard_coverage
-                + 0.20 * lexical[identifier]
-                + 0.20 * dense[identifier]
+                + source_weight * lexical[identifier]
+                + source_weight * dense[identifier]
+                + self.fusion_weight * fusion[identifier]
                 + 0.10 * category_match
                 + 0.10 * soft_coverage
                 + 0.05 * profile_affinity
@@ -93,13 +111,16 @@ class ConstraintRanker:
 
     @staticmethod
     def _normalized_source(
-        candidates: list[Candidate], source: str
+        candidates: list[Candidate],
+        source: str,
+        *,
+        allow_score_fallback: bool = True,
     ) -> dict[str, float]:
         values = {
             item.parent_asin: max(item.source_scores.get(source, 0.0), 0.0)
             for item in candidates
         }
-        if source == "lexical" and not any(values.values()):
+        if source == "lexical" and allow_score_fallback and not any(values.values()):
             fusion = {item.parent_asin: max(item.score, 0.0) for item in candidates}
             minimum = min(fusion.values(), default=0.0)
             maximum = max(fusion.values(), default=0.0)
@@ -109,6 +130,16 @@ class ConstraintRanker:
                     identifier: (value - minimum) / scale
                     for identifier, value in fusion.items()
                 }
+        maximum = max(values.values(), default=0.0)
+        if maximum <= 0:
+            return {identifier: 0.0 for identifier in values}
+        return {identifier: value / maximum for identifier, value in values.items()}
+
+    @staticmethod
+    def _normalized_scores(candidates: list[Candidate]) -> dict[str, float]:
+        values = {
+            item.parent_asin: max(float(item.score), 0.0) for item in candidates
+        }
         maximum = max(values.values(), default=0.0)
         if maximum <= 0:
             return {identifier: 0.0 for identifier in values}
