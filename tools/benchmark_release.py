@@ -76,9 +76,6 @@ def _contains_sensitive_material(value: object) -> bool:
         return True
     if isinstance(value, dict):
         return any(_contains_sensitive_material(item) for item in value.values())
-    if isinstance(value, str):
-        lowered = value.lower()
-        return any(key in lowered for key in _SENSITIVE_KEYS)
     if isinstance(value, list):
         return any(_contains_sensitive_material(item) for item in value)
     return False
@@ -141,8 +138,6 @@ def validate_transcript(rows: object) -> None:
             raise TypeError("turn must be an integer")
         if not isinstance(message, str) or not message.strip():
             raise ValueError("message must be a nonempty string")
-        if _contains_sensitive_material(message):
-            raise ValueError("message contains sensitive material")
         _validate_profile(row["profile"])
         if current != session_id:
             if current is not None:

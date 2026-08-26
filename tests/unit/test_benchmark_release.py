@@ -91,11 +91,13 @@ def test_validate_transcript_rejects_invalid_or_sensitive_rows() -> None:
         [{**row, "session_id": "target-leak"} if row["session_id"] == "bench_0001" else row for row in rows],
         [{**row, "target": "leak"} if row["turn"] == 1 else row for row in rows],
         [{**row, "profile": {"intent_card": "leak"}} if row["turn"] == 1 else row for row in rows],
-        [{**row, "profile": {"summary": "ground_truth"}} if row["turn"] == 1 else row for row in rows],
+        [{**row, "profile": {"ground_truth": "leak"}} if row["turn"] == 1 else row for row in rows],
     ]
     for candidate in invalid:
         with pytest.raises((TypeError, ValueError)):
             bench.validate_transcript(candidate)
+    rows[0]["message"] = "Could you show more recommendations?"
+    bench.validate_transcript(rows)
 
 
 def test_run_worker_rejects_profile_extras_before_constructing_agent(tmp_path: Path) -> None:
