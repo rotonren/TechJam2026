@@ -37,6 +37,15 @@ over their S0 rates by `0.078125`, `0.140625`, and `0.083333` respectively.
 
 ## Official Public Evaluation
 
+The optimization run originally recorded `0.660411`. A release-alignment
+reproduction on the same runtime commit with Python `3.12.13`, NumPy `2.5.2`,
+ONNX Runtime `1.29.0`, and tokenizers `0.23.1` scored `0.660605` (HitRate@10
+`0.840`, MRR `0.376349`, MTTC `4.615`). The `0.000194` score difference is
+recorded as compatible dependency-boundary drift; exact input and evaluator
+hashes are stored in `final-results.json`. The reproduced value is used by the
+owner-review release materials, while the table below preserves the original
+experiment output.
+
 The primary comparison is the fresh same-host Windows baseline against the
 final candidate. This avoids treating ARM/x86 dense-boundary differences as a
 code improvement.

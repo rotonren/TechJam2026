@@ -9,8 +9,10 @@ import random
 import statistics
 import subprocess
 from collections import Counter, defaultdict
+from dataclasses import asdict, is_dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from evaluator.local_evaluator import catalog_index, evaluate, load_jsonl
 
@@ -108,8 +110,26 @@ def _git_commit() -> str:
         return "unknown"
 
 
+def _canonical_config_value(value: Any) -> Any:
+    if is_dataclass(value) and not isinstance(value, type):
+        return _canonical_config_value(asdict(value))
+    if isinstance(value, Path):
+        return value.as_posix()
+    if isinstance(value, dict):
+        return {
+            str(key): _canonical_config_value(item)
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+        }
+    if isinstance(value, (list, tuple)):
+        return [_canonical_config_value(item) for item in value]
+    return value
+
+
 def _config_hash(agent: object) -> str:
-    payload = repr(getattr(agent, "config", None)).encode()
+    canonical = _canonical_config_value(getattr(agent, "config", None))
+    payload = json.dumps(
+        canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode()
     return hashlib.sha256(payload).hexdigest()
 
 

@@ -31,6 +31,8 @@ Agent contract still returns valid catalog IDs through lexical fallback.
 ## Evidence (2:35-3:00)
 
 Close on the official metrics in `final-results.json`: starter `0.106710`,
-selected development CV mean `0.519195`, sealed fold 5 `0.514768`, and the
-final v2 public score. State zero fallbacks across all five folds, zero runtime
-API cost, and the deterministic package SHA256 printed by the release command.
+selected development CV mean `0.662377`, selection score `0.644160`, and the
+optimized public score `0.660605` (HitRate@10 `0.840`, MRR `0.376349`, MTTC
+`4.615`). State zero fallbacks across the four selection folds, zero runtime API
+cost, and the deterministic package SHA256 printed by the release command. Do
+not describe historical fold 5 as a blind audit for the optimized candidate.
