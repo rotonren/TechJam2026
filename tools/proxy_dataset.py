@@ -295,7 +295,7 @@ class _StagedEntry:
     temporary: Path
     existed: bool = False
     backup: Path | None = None
-    moved: bool = False
+    backup_holds_original: bool = False
     published: bool = False
 
 
@@ -328,11 +328,11 @@ def _rollback_staged(entries: list[_StagedEntry]) -> list[Exception]:
             except OSError as error:
                 errors.append(error)
     for entry in entries:
-        if entry.moved and entry.backup is not None:
+        if entry.backup_holds_original and entry.backup is not None:
             try:
                 _remove_entry(entry.destination)
                 os.replace(entry.backup, entry.destination)
-                entry.moved = False
+                entry.backup_holds_original = False
             except OSError as error:
                 errors.append(error)
     for entry in entries:
@@ -344,10 +344,17 @@ def _rollback_staged(entries: list[_StagedEntry]) -> list[Exception]:
     return errors
 
 
-def _cleanup_staged(entries: list[_StagedEntry]) -> list[Exception]:
+def _cleanup_staged(
+    entries: list[_StagedEntry], *, preserve_original_backups: bool,
+) -> list[Exception]:
     errors: list[Exception] = []
     for entry in entries:
-        for path in (entry.temporary, entry.backup):
+        paths = [entry.temporary]
+        if entry.backup is not None and not (
+            preserve_original_backups and entry.backup_holds_original
+        ):
+            paths.append(entry.backup)
+        for path in paths:
             if path is None:
                 continue
             try:
@@ -355,6 +362,14 @@ def _cleanup_staged(entries: list[_StagedEntry]) -> list[Exception]:
             except OSError as error:
                 errors.append(error)
     return errors
+
+
+def _retained_backup_details(entries: list[_StagedEntry]) -> list[str]:
+    return [
+        f"destination {entry.destination.resolve()} retained original at {entry.backup.resolve()}"
+        for entry in entries
+        if entry.backup_holds_original and entry.backup is not None and _entry_exists(entry.backup)
+    ]
 
 
 def _replace_staged(staged: list[tuple[Path, Path]]) -> None:
@@ -373,9 +388,11 @@ def _replace_staged(staged: list[tuple[Path, Path]]) -> None:
             try:
                 os.replace(entry.destination, entry.backup)
             except Exception:
-                entry.moved = not _entry_exists(entry.destination) and _entry_exists(entry.backup)
+                entry.backup_holds_original = (
+                    not _entry_exists(entry.destination) and _entry_exists(entry.backup)
+                )
                 raise
-            entry.moved = True
+            entry.backup_holds_original = True
         for entry in entries:
             try:
                 os.replace(entry.temporary, entry.destination)
@@ -385,14 +402,17 @@ def _replace_staged(staged: list[tuple[Path, Path]]) -> None:
             entry.published = True
     except Exception as original_error:
         rollback_errors = _rollback_staged(entries)
-        cleanup_errors = _cleanup_staged(entries)
+        cleanup_errors = _cleanup_staged(entries, preserve_original_backups=True)
+        retained_backups = _retained_backup_details(entries)
         if rollback_errors or cleanup_errors:
             details = "; ".join(str(error) for error in [*rollback_errors, *cleanup_errors])
+            if retained_backups:
+                details += "; " + "; ".join(retained_backups)
             raise RuntimeError(
                 f"proxy output replacement failed: {original_error}; rollback failed: {details}"
             ) from original_error
         raise
-    cleanup_errors = _cleanup_staged(entries)
+    cleanup_errors = _cleanup_staged(entries, preserve_original_backups=False)
     if cleanup_errors:
         details = "; ".join(str(error) for error in cleanup_errors)
         raise RuntimeError(f"proxy output replacement succeeded but cleanup failed: {details}")

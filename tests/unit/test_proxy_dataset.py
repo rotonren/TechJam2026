@@ -541,6 +541,118 @@ def test_replace_staged_rollback_preserves_hardlink_entry(tmp_path: Path, monkey
     assert os.path.samefile(external, representative)
 
 
+@pytest.mark.parametrize("restore_position", range(1, 4))
+def test_replace_staged_retains_original_backup_when_each_restore_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, restore_position: int,
+) -> None:
+    output = tmp_path / "output"
+    output.mkdir()
+    filenames = ("representative.jsonl", "stress.jsonl", "manifest.json")
+    old = {filename: f"old-{filename}" for filename in filenames}
+    for filename, content in old.items():
+        (output / filename).write_text(content, encoding="utf-8")
+    (output / "unrelated.txt").write_text("preserve", encoding="utf-8")
+    staged = staged_bundle(output, "new")
+    actual_replace = proxy_dataset.os.replace
+    calls = 0
+
+    def fail_publication_and_restore(source: object, destination: object) -> None:
+        nonlocal calls
+        calls += 1
+        if calls in {4, 4 + restore_position}:
+            raise OSError(f"fault at replacement {calls}")
+        actual_replace(source, destination)
+
+    monkeypatch.setattr(proxy_dataset.os, "replace", fail_publication_and_restore)
+
+    with pytest.raises(RuntimeError) as error:
+        proxy_dataset._replace_staged(staged)
+
+    failed_filename = filenames[restore_position - 1]
+    retained = list(output.glob(".*.bak"))
+    assert len(retained) == 1
+    assert retained[0].read_text(encoding="utf-8") == old[failed_filename]
+    assert str(retained[0].resolve()) in str(error.value)
+    assert not os.path.lexists(output / failed_filename)
+    assert {
+        filename: (output / filename).read_text(encoding="utf-8")
+        for filename in filenames
+        if filename != failed_filename
+    } == {filename: old[filename] for filename in filenames if filename != failed_filename}
+    assert (output / "unrelated.txt").read_text(encoding="utf-8") == "preserve"
+    assert list(output.glob(".*.tmp")) == []
+
+
+def test_replace_staged_retains_every_backup_after_multiple_restore_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "output"
+    output.mkdir()
+    filenames = ("representative.jsonl", "stress.jsonl", "manifest.json")
+    old = {filename: f"old-{filename}" for filename in filenames}
+    for filename, content in old.items():
+        (output / filename).write_text(content, encoding="utf-8")
+    staged = staged_bundle(output, "new")
+    actual_replace = proxy_dataset.os.replace
+    calls = 0
+
+    def fail_publication_and_two_restores(source: object, destination: object) -> None:
+        nonlocal calls
+        calls += 1
+        if calls in {4, 5, 6}:
+            raise OSError(f"fault at replacement {calls}")
+        actual_replace(source, destination)
+
+    monkeypatch.setattr(proxy_dataset.os, "replace", fail_publication_and_two_restores)
+
+    with pytest.raises(RuntimeError) as error:
+        proxy_dataset._replace_staged(staged)
+
+    retained = list(output.glob(".*.bak"))
+    assert len(retained) == 2
+    assert {path.read_text(encoding="utf-8") for path in retained} == {
+        old["representative.jsonl"], old["stress.jsonl"],
+    }
+    assert all(str(path.resolve()) in str(error.value) for path in retained)
+    assert not os.path.lexists(output / "representative.jsonl")
+    assert not os.path.lexists(output / "stress.jsonl")
+    assert (output / "manifest.json").read_text(encoding="utf-8") == old["manifest.json"]
+    assert list(output.glob(".*.tmp")) == []
+
+
+def test_replace_staged_mixed_existing_and_absent_destinations_preserves_recovery_backup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "output"
+    output.mkdir()
+    (output / "representative.jsonl").write_text("old-representative", encoding="utf-8")
+    (output / "manifest.json").write_text("old-manifest", encoding="utf-8")
+    staged = staged_bundle(output, "new")
+    actual_replace = proxy_dataset.os.replace
+    calls = 0
+
+    def fail_publication_and_first_restore(source: object, destination: object) -> None:
+        nonlocal calls
+        calls += 1
+        if calls in {3, 4}:
+            raise OSError(f"fault at replacement {calls}")
+        actual_replace(source, destination)
+
+    monkeypatch.setattr(proxy_dataset.os, "replace", fail_publication_and_first_restore)
+
+    with pytest.raises(RuntimeError) as error:
+        proxy_dataset._replace_staged(staged)
+
+    retained = list(output.glob(".*.bak"))
+    assert len(retained) == 1
+    assert retained[0].read_text(encoding="utf-8") == "old-representative"
+    assert str(retained[0].resolve()) in str(error.value)
+    assert not os.path.lexists(output / "representative.jsonl")
+    assert not os.path.lexists(output / "stress.jsonl")
+    assert (output / "manifest.json").read_text(encoding="utf-8") == "old-manifest"
+    assert list(output.glob(".*.tmp")) == []
+
+
 def test_cli_help_exposes_force_and_keeps_frozen_bypass_hidden(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setattr(sys, "argv", ["proxy_dataset", "--help"])
 
