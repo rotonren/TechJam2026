@@ -395,7 +395,7 @@ def test_stage_rejects_cross_report_lineage_mismatches(mutate, failure_code: str
     assert failure_code in outcome["failure_codes"]
 
 
-def test_stage_accepts_legacy_parent_with_same_valid_commit() -> None:
+def test_stage_rejects_arbitrary_legacy_parent_even_with_matching_git_commit() -> None:
     from tools.compare_proxy_stages import compare_stage
 
     parent_dev, candidate_dev = _report(), _report(all_hits=True)
@@ -406,7 +406,19 @@ def test_stage_accepts_legacy_parent_with_same_valid_commit() -> None:
 
     outcome = compare_stage(parent_dev, candidate_dev, parent_stress, candidate_stress, stage="S3")
 
-    assert outcome["accepted"] is True
+    assert "parent_source_identity_mismatch" in outcome["failure_codes"]
+
+
+def test_legacy_parent_acceptance_is_limited_to_real_p0_identity_pair() -> None:
+    from tools.compare_proxy_stages import _cross_report_lineage_failures, _metrics
+
+    parent_dev = json.loads(Path("var/balanced-hardening/proxy-v1/dev-p0.json").read_text(encoding="utf-8"))
+    parent_stress = json.loads(Path("var/balanced-hardening/proxy-v1/stress-p0.json").read_text(encoding="utf-8"))
+
+    assert _cross_report_lineage_failures(
+        _metrics(parent_dev), _metrics(_report(all_hits=True)),
+        _metrics(parent_stress), _metrics(_report(suite="stress")),
+    ) == []
 
 
 def _gate_metrics() -> dict[str, object]:
@@ -587,7 +599,7 @@ def test_stress_overall_fallback_and_invalid_gate_matrix() -> None:
     assert "candidate_runtime_invalid" in compare_stress(parent, candidate)["failure_codes"]
 
 
-def test_complete_accepts_legacy_parent_with_same_valid_commit(tmp_path: Path) -> None:
+def test_complete_rejects_arbitrary_legacy_parent_even_with_matching_git_commit(tmp_path: Path) -> None:
     from tools.compare_proxy_stages import (
         compare_complete,
         compare_development,
@@ -605,4 +617,4 @@ def test_complete_accepts_legacy_parent_with_same_valid_commit(tmp_path: Path) -
 
     outcome = compare_complete(parent_dev, candidate_dev, parent_stress, _report(suite="stress"), _resource_report(), receipt, stage="S3", current_runtime_hash="a" * 64, current_config_hash="b" * 64)
 
-    assert outcome["accepted"] is True
+    assert "parent_source_identity_mismatch" in outcome["failure_codes"]

@@ -6,7 +6,6 @@ import hashlib
 import json
 import math
 import os
-import re
 import statistics
 import tempfile
 from dataclasses import asdict, dataclass
@@ -20,11 +19,15 @@ from tools.run_cv import selection_score
 from tools.runtime_fingerprint import config_hash, runtime_hash
 
 _HASH_RE: Final = __import__("re").compile(r"^[0-9a-f]{64}$")
-_GIT_SHA_RE: Final = re.compile(r"^[0-9a-f]{7,40}$")
 _SCENARIOS: Final = frozenset({"buying", "browsing", "intent_override", "boundary"})
 _PRIMARY_SCENARIOS: Final = ("buying", "browsing", "intent_override")
 _REPO_ROOT: Final = Path(__file__).resolve().parents[1]
 _R0_BASELINE: Final = _REPO_ROOT / "var" / "balanced-hardening" / "benchmark-r0-wall-v2.json"
+_P0_LEGACY_COMMIT: Final = "f604f4758eb67b13c0e5c27de681029d90e60b27"
+_P0_LEGACY_CONFIG_HASH: Final = "c6cdceba49d6ed23ba8108fb53f8ba79b4b910f372cdc5c46ad9c7da69a38593"
+_P0_LEGACY_MANIFEST_HASH: Final = "9dfb5694a7b733952c40ea4be4661480ed8d01adb28f8fb0dc73e8f8a89f7c9d"
+_P0_LEGACY_DEV_DATASET_HASH: Final = "9866ffcc3836d554876d07d0350f1c8e7cabb7f26b067bf63b44f74068e9bca1"
+_P0_LEGACY_STRESS_DATASET_HASH: Final = "2c8db1634fda0607fc698f3c239b0a3375b30bd08d0252497d727b5a32c67f75"
 _NORMAL_TOP_LEVEL_KEYS: Final = frozenset({
     "created_at", "commit", "config_hash", "manifest_hash", "dataset_hash", "suite",
     "fallback_count", "invalid_response_count", "folds", "mean_technical_score",
@@ -342,12 +345,29 @@ def _same_provenance(parent: dict[str, object], candidate: dict[str, object], *,
     return failures
 
 
+def _is_p0_legacy_parent_pair(parent_development: dict[str, object], parent_stress: dict[str, object]) -> bool:
+    return (
+        parent_development["suite"] == "representative"
+        and parent_development["commit"] == _P0_LEGACY_COMMIT
+        and parent_development["config_hash"] == _P0_LEGACY_CONFIG_HASH
+        and parent_development["manifest_hash"] == _P0_LEGACY_MANIFEST_HASH
+        and parent_development["dataset_hash"] == _P0_LEGACY_DEV_DATASET_HASH
+        and parent_stress["suite"] == "stress"
+        and parent_stress["commit"] == _P0_LEGACY_COMMIT
+        and parent_stress["config_hash"] == _P0_LEGACY_CONFIG_HASH
+        and parent_stress["manifest_hash"] == _P0_LEGACY_MANIFEST_HASH
+        and parent_stress["dataset_hash"] == _P0_LEGACY_STRESS_DATASET_HASH
+    )
+
+
 def _cross_report_lineage_failures(parent_development: dict[str, object], candidate_development: dict[str, object], parent_stress: dict[str, object], candidate_stress: dict[str, object]) -> list[str]:
     failures = []
     legacy_parent = not parent_development["runtime_hash"] and not parent_stress["runtime_hash"]
-    parent_identity_matches = parent_development["config_hash"] == parent_stress["config_hash"] and (
-        (legacy_parent and isinstance(parent_development["commit"], str) and _GIT_SHA_RE.fullmatch(parent_development["commit"]) is not None and parent_development["commit"] == parent_stress["commit"])
-        or (not legacy_parent and parent_development["runtime_hash"] == parent_stress["runtime_hash"])
+    parent_identity_matches = (
+        _is_p0_legacy_parent_pair(parent_development, parent_stress)
+        if legacy_parent
+        else parent_development["config_hash"] == parent_stress["config_hash"]
+        and parent_development["runtime_hash"] == parent_stress["runtime_hash"]
     )
     if not parent_identity_matches:
         failures.append("parent_source_identity_mismatch")

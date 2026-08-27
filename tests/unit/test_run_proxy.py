@@ -624,6 +624,45 @@ def test_normal_proxy_rejects_custom_agent_before_evaluation(
         run_proxy.run_proxy(args)
 
 
+def test_audit_proxy_rejects_custom_agent_before_reservation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tools import run_proxy
+
+    _patch_small_proxy_run(monkeypatch, invalid_count=0)
+    args = _run_args(tmp_path, audit_label="baseline")
+    args.agent = "custom:Agent"
+    monkeypatch.setattr(
+        run_proxy, "_reserve_audit_output", lambda *_args: pytest.fail("must not reserve")
+    )
+
+    with pytest.raises(ValueError, match="default agent"):
+        run_proxy.run_proxy(args)
+
+
+def test_default_agent_loader_ignores_outside_cwd_shadow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import inspect
+    import os
+    import sys
+
+    from tools import run_proxy
+
+    shadow = tmp_path / "agent.py"
+    shadow.write_text("class Agent: pass\n", encoding="utf-8")
+    original_cwd = Path.cwd()
+    monkeypatch.delitem(sys.modules, "agent", raising=False)
+    monkeypatch.setattr(sys, "path", [str(tmp_path), *sys.path])
+    os.chdir(tmp_path)
+    try:
+        agent_class = run_proxy._load_agent("agent:Agent")
+    finally:
+        os.chdir(original_cwd)
+
+    assert Path(inspect.getsourcefile(agent_class)).resolve() == (
+        Path(run_proxy.__file__).resolve().parents[1] / "src" / "compasscart" / "agent.py"
+    )
+
+
 def test_normal_proxy_rejects_runtime_or_fold_config_drift(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

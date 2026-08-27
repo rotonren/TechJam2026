@@ -5,7 +5,8 @@ from __future__ import annotations
 import argparse
 import gc
 import hashlib
-import importlib
+import importlib.util
+import inspect
 import json
 import math
 import os
@@ -599,8 +600,26 @@ def write_audit_report(
 
 
 def _load_agent(specification: str) -> type:
-    module_name, class_name = specification.split(":", 1)
-    return getattr(importlib.import_module(module_name), class_name)
+    if specification != "agent:Agent":
+        raise ValueError("proxy evidence requires the default agent:Agent")
+    repository = Path(__file__).resolve().parents[1]
+    entrypoint = repository / "agent.py"
+    spec = importlib.util.spec_from_file_location("_compasscart_sealed_agent", entrypoint)
+    if spec is None or spec.loader is None:
+        raise ValueError("default agent entrypoint is invalid")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    agent_class = getattr(module, "Agent", None)
+    source = inspect.getsourcefile(agent_class) if isinstance(agent_class, type) else None
+    expected_source = repository / "src" / "compasscart" / "agent.py"
+    if (
+        not isinstance(agent_class, type)
+        or agent_class.__module__ != "compasscart.agent"
+        or source is None
+        or Path(source).resolve() != expected_source
+    ):
+        raise ValueError("default agent source identity is invalid")
+    return agent_class
 
 
 def _git_commit() -> str:
@@ -800,12 +819,13 @@ def run_proxy(args: argparse.Namespace) -> None:
     audit_lock: _AuditLockOwnership | None = None
     execution_runtime_hash: str | None = None
     try:
+        if args.agent != "agent:Agent":
+            raise ValueError("proxy evidence requires the default agent:Agent")
+        agent_class = _load_agent(args.agent)
         if args.audit_label is not None:
             audit_lock = _reserve_audit_output(proxy_root, args.audit_label, output)
             _preflight_audit_publish(audit_lock, output)
         else:
-            if args.agent != "agent:Agent":
-                raise ValueError("normal proxy evidence requires the default agent:Agent")
             if _is_within(output.resolve(), (proxy_root.resolve() / "audit").resolve()):
                 raise ValueError("non-audit reports cannot target the sealed audit directory")
             _reject_existing_destination(output)
@@ -814,7 +834,6 @@ def run_proxy(args: argparse.Namespace) -> None:
         rows = verified.rows
         selections = select_proxy_rows(rows, args.suite, args.folds, args.audit_label)
         catalog_ids, categories, products = catalog_index(args.catalog)
-        agent_class = _load_agent(args.agent)
         manifest_hash = verified.manifest_hash
         dataset_hash = verified.dataset_hash
         fold_reports: list[dict[str, object]] = []
