@@ -17,8 +17,8 @@ foundation baselines. The frozen proxy manifest hash is
 
 The R0 and P0 release benchmarks used the same frozen transcript hash,
 `77f4399d65cabff5fcb5f0006132ba43fc47bf8571737ba6a88465ebb7066590`,
-with Dense available and zero fallback in every trial. P0 median P95 was
-186.956 ms versus R0 449.975 ms; median initialization was 13479.594 ms
+with Dense available and zero fallback in every trial. P0 median trial-P95 was
+186.750 ms versus R0 438.090 ms; median initialization was 13479.594 ms
 versus 13676.364 ms; median peak memory was 556.453 MiB versus 555.906 MiB.
 P0 maximum response time was 292.233 ms.
 

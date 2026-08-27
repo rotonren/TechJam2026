@@ -373,6 +373,26 @@ def test_run_worker_rejects_sidecar_agent_or_config_mismatch(tmp_path: Path) -> 
         bench.run_worker(catalog, transcript, agent_class=_WorkerAgent)
 
 
+def test_run_worker_attests_candidate_config_without_requiring_frozen_capture_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    transcript = tmp_path / "transcript.jsonl"
+    catalog = tmp_path / "catalog.jsonl"
+    transcript.write_text("".join(json.dumps(row) + "\n" for row in _rows()), encoding="utf-8")
+    catalog.write_text("catalog", encoding="utf-8")
+    _write_manifest(
+        transcript, catalog, agent_class=f"{_WorkerAgent.__module__}:{_WorkerAgent.__qualname__}",
+        config_hash="a" * 64,
+    )
+    monkeypatch.setattr(bench, "config_hash", lambda _: "b" * 64)
+    monkeypatch.setattr(bench, "runtime_hash", lambda: "c" * 64)
+
+    result = bench.run_worker(catalog, transcript, agent_class=_WorkerAgent)
+
+    assert result["config_hash"] == "b" * 64
+    assert result["capture_provenance"]["config_hash"] == "a" * 64
+
+
 def test_aggregate_trials_uses_medians_latency_summary_and_matching_hashes() -> None:
     report = bench.aggregate_trials([
         _trial(init_ms=10, peak_mib=100, rss_mib=80, latencies_ms=[1] * 800),
@@ -382,7 +402,7 @@ def test_aggregate_trials_uses_medians_latency_summary_and_matching_hashes() -> 
 
     assert report["init_ms"] == 20
     assert report["peak_mib"] == 110
-    assert report["latency_ms"]["p95"] == 4
+    assert report["latency_ms"]["p95"] == 2
     assert report["dense_available"] is True
     assert report["response_hash"] == "a" * 64
     with pytest.raises(ValueError):
@@ -833,6 +853,34 @@ def test_resource_comparison_rejects_fallback_or_dense_unavailability() -> None:
 
     assert bench.compare_reports(fallback, baseline, comparison_mode="resource")["accepted"] is False
     assert bench.compare_reports(unavailable, baseline, comparison_mode="resource")["accepted"] is False
+
+
+def test_legacy_r0_baseline_is_accepted_but_candidate_schema_remains_strict() -> None:
+    baseline = json.loads(Path("var/balanced-hardening/benchmark-r0-wall-v2.json").read_text(encoding="utf-8"))
+
+    normalized = bench.validate_baseline_report(baseline)
+    assert normalized["latency_ms"]["p95"] == 438.09
+    with pytest.raises(ValueError, match="schema"):
+        bench._validate_aggregate_report(baseline)
+
+
+def test_resource_comparison_uses_median_of_trial_p95_values() -> None:
+    trials = [_trial(latencies_ms=[value] * 800) for value in (100.0, 438.09, 900.0)]
+    for trial in trials:
+        trial["instrumentation_delta_ms"] = bench._latency_summary([
+            wall - trace for wall, trace in zip(trial["latencies_ms"], trial["trace_latencies_ms"], strict=True)
+        ])
+
+    aggregate = bench.aggregate_trials(trials)
+    assert aggregate["latency_ms"]["p95"] == 438.09
+
+
+def test_resource_mode_rejects_dense_unavailable_override_at_cli() -> None:
+    with pytest.raises(SystemExit):
+        bench.parse_args([
+            "--transcript", "input.jsonl", "--output", "report.json", "--compare", "baseline.json",
+            "--comparison-mode", "resource", "--allow-dense-unavailable",
+        ])
 
 
 def test_compare_reports_returns_structured_compatibility_mismatches() -> None:
