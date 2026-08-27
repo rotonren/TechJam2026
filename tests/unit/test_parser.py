@@ -228,28 +228,41 @@ def test_parser_keeps_shopping_evidence_when_request_mentions_more():
 
 
 @pytest.mark.parametrize(
-    ("message", "no_preference_attribute"),
+    "message",
     (
-        ("Please narrow it down.", None),
-        ("I need another direction.", None),
-        ("Keep searching.", None),
-        ("Nothing more.", None),
-        ("I'm flexible on features beyond waterproof.", None),
-        ("No other requirement.", None),
-        ("Any feature is fine.", "feature"),
-        ("I'm flexible about feature.", "feature"),
+        "Those options are not quite right yet. Ask me about one specific attribute.",
+        "Please narrow this down by asking one concrete question.",
+        "I need another direction; ask about a specific preference.",
+        "Keep searching and ask me for one useful detail.",
     ),
 )
-def test_full_control_reply_templates_do_not_infer_pending_constraints(
-    message, no_preference_attribute
-):
+def test_complete_control_reply_templates_are_non_substantive(message):
     result = MessageParser({"feature": ("waterproof",)}).parse(
         message, turn=2, expected_attribute="feature"
     )
 
     assert result.constraints == ()
     assert result.has_substantive_evidence is False
-    assert result.no_preference_attribute == no_preference_attribute
+    assert result.route_hint != "buying"
+
+
+@pytest.mark.parametrize(
+    "message",
+    (
+        "I don't have an additional preference for feature.",
+        "Nothing more to add about feature.",
+        "I'm flexible on feature beyond that.",
+        "No other requirement for feature right now.",
+    ),
+)
+def test_complete_no_additional_templates_clear_pending_attribute(message):
+    result = MessageParser({"feature": ("waterproof",)}).parse(
+        message, turn=2, expected_attribute="feature"
+    )
+
+    assert result.constraints == ()
+    assert result.has_substantive_evidence is False
+    assert result.no_preference_attribute == "feature"
 
 
 @pytest.mark.parametrize(

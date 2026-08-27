@@ -38,11 +38,27 @@ _ATTRIBUTE_SLOT = (
     r"(?:category|material|color|size|style|brand|budget|feature(?:s)?|"
     r"use[ _-]?case|other)"
 )
+_NO_ADDITIONAL_REPLY = (
+    r"(?:i don['’]?t have an additional preference for "
+    + _ATTRIBUTE_SLOT
+    + r"|nothing more to add about "
+    + _ATTRIBUTE_SLOT
+    + r"|i(?:'|’)m flexible on "
+    + _ATTRIBUTE_SLOT
+    + r" beyond that|no other requirement for "
+    + _ATTRIBUTE_SLOT
+    + r" right now)"
+)
+_NO_ADDITIONAL_REPLY_RE = re.compile(
+    _NO_ADDITIONAL_REPLY + r"[.!?]?", re.IGNORECASE
+)
 _CONTROL_ONLY_RE = re.compile(
     r"(?:show me more(?: options)?|more options|different choices|search|thanks|thank you|"
-    r"please narrow(?: it)? down|i need another direction|keep searching|"
-    r"nothing more|no other requirement|"
-    r"i(?:'|’)m flexible on " + _ATTRIBUTE_SLOT + r" beyond(?: [a-z0-9 -]+)?|"
+    r"please narrow this down by asking one concrete question|"
+    r"i need another direction;\s*ask about a specific preference|"
+    r"keep searching and ask me for one useful detail|"
+    + _NO_ADDITIONAL_REPLY
+    + r"|"
     r"any " + _ATTRIBUTE_SLOT + r" is fine|"
     r"i(?:'|’)m flexible about " + _ATTRIBUTE_SLOT + r"|"
     r"those options are not quite right yet[.!?]\s*ask me about one specific attribute|"
@@ -295,13 +311,14 @@ class MessageParser:
         replace_preferences = bool(_PREFERENCE_RESET_RE.search(text))
         is_continuation = bool(_CONTINUATION_RE.search(text))
         is_control_only = bool(_CONTROL_ONLY_RE.fullmatch(text))
+        is_no_additional = bool(_NO_ADDITIONAL_REPLY_RE.fullmatch(text))
         if is_override:
             expected_attribute = None
 
         if is_control_only:
             attribute = (
                 expected_attribute or self._mentioned_attribute(text)
-                if _NO_PREFERENCE_RE.search(text)
+                if _NO_PREFERENCE_RE.search(text) or is_no_additional
                 else None
             )
             return ParseResult(
