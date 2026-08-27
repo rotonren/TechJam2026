@@ -273,6 +273,112 @@ def test_compare_stress_and_compare_stage_helpers_apply_the_same_gates() -> None
     assert result["accepted"] is True
 
 
+@pytest.mark.parametrize(
+    ("mutate", "failure_code"),
+    [
+        (lambda parent_dev, candidate_dev, parent_stress, candidate_stress: parent_stress.update({"config_hash": "e" * 64}), "parent_source_identity_mismatch"),
+        (lambda parent_dev, candidate_dev, parent_stress, candidate_stress: parent_stress.update({"runtime_hash": "e" * 64}), "parent_source_identity_mismatch"),
+        (lambda parent_dev, candidate_dev, parent_stress, candidate_stress: candidate_stress.update({"config_hash": "e" * 64}), "candidate_config_identity_mismatch"),
+        (lambda parent_dev, candidate_dev, parent_stress, candidate_stress: candidate_stress.update({"runtime_hash": "e" * 64}), "candidate_runtime_identity_mismatch"),
+    ],
+)
+def test_stage_rejects_cross_report_lineage_mismatches(mutate, failure_code: str) -> None:
+    from tools.compare_proxy_stages import compare_stage
+
+    parent_dev, candidate_dev = _report(), _report(all_hits=True)
+    parent_stress, candidate_stress = _report(suite="stress"), _report(suite="stress")
+    mutate(parent_dev, candidate_dev, parent_stress, candidate_stress)
+
+    outcome = compare_stage(parent_dev, candidate_dev, parent_stress, candidate_stress, stage="S3")
+
+    assert failure_code in outcome["failure_codes"]
+
+
+def test_stage_accepts_legacy_parent_with_same_valid_commit() -> None:
+    from tools.compare_proxy_stages import compare_stage
+
+    parent_dev, candidate_dev = _report(), _report(all_hits=True)
+    parent_stress, candidate_stress = _report(suite="stress"), _report(suite="stress")
+    for report in (parent_dev, parent_stress):
+        report.pop("runtime_hash")
+        report["commit"] = "ac36def"
+
+    outcome = compare_stage(parent_dev, candidate_dev, parent_stress, candidate_stress, stage="S3")
+
+    assert outcome["accepted"] is True
+
+
+def _gate_metrics() -> dict[str, object]:
+    return {
+        "selection": 1.0,
+        "mean": 1.0,
+        "scores": {1: 1.0, 2: 1.0, 3: 1.0, 4: 1.0},
+        "scenario_rates": {"buying": 1.0, "browsing": 1.0, "intent_override": 1.0},
+    }
+
+
+def _set_gate_delta(metrics: dict[str, object], metric: str, delta: float) -> None:
+    if metric in {"selection", "mean"}:
+        metrics[metric] = 1.0 + delta
+    elif metric.startswith("fold_"):
+        metrics["scores"][int(metric.removeprefix("fold_"))] = 1.0 + delta
+    else:
+        metrics["scenario_rates"][metric] = 1.0 + delta
+
+
+@pytest.mark.parametrize(
+    ("stage", "metric", "threshold", "failure_code"),
+    [
+        ("S3", "selection", 0.003, "development_selection_regression"),
+        ("S1", "selection", -0.001, "development_selection_regression"),
+        ("S3", "mean", 0.0, "development_mean_regression"),
+        ("S3", "fold_1", -0.015, "development_fold_regression"),
+        ("S3", "fold_2", -0.015, "development_fold_regression"),
+        ("S3", "fold_3", -0.015, "development_fold_regression"),
+        ("S3", "fold_4", -0.015, "development_fold_regression"),
+        ("S3", "buying", -0.02, "development_buying_regression"),
+        ("S3", "browsing", -0.02, "development_browsing_regression"),
+        ("S3", "intent_override", -0.02, "development_intent_override_regression"),
+    ],
+)
+def test_development_gate_accepts_exact_threshold_and_rejects_one_micro_unit_lower(stage: str, metric: str, threshold: float, failure_code: str) -> None:
+    from tools.compare_proxy_stages import _development_gate, _policy
+
+    parent = _gate_metrics()
+    candidate = deepcopy(parent)
+    candidate["selection"] = 1.0 + _policy(stage).minimum_selection_delta
+    _set_gate_delta(candidate, metric, threshold)
+
+    assert _development_gate(parent, candidate, _policy(stage))["failure_codes"] == []
+
+    _set_gate_delta(candidate, metric, threshold - 0.000001)
+
+    assert failure_code in _development_gate(parent, candidate, _policy(stage))["failure_codes"]
+
+
+@pytest.mark.parametrize(
+    ("metric", "threshold", "failure_code"),
+    [
+        ("mean", -0.01, "stress_mean_regression"),
+        ("buying", -0.025, "stress_buying_regression"),
+        ("browsing", -0.025, "stress_browsing_regression"),
+        ("intent_override", -0.025, "stress_intent_override_regression"),
+    ],
+)
+def test_stress_gate_accepts_exact_threshold_and_rejects_one_micro_unit_lower(metric: str, threshold: float, failure_code: str) -> None:
+    from tools.compare_proxy_stages import _policy, _stress_gate
+
+    parent = _gate_metrics()
+    candidate = deepcopy(parent)
+    _set_gate_delta(candidate, metric, threshold)
+
+    assert _stress_gate(parent, candidate, _policy("S3"))["failure_codes"] == []
+
+    _set_gate_delta(candidate, metric, threshold - 0.000001)
+
+    assert failure_code in _stress_gate(parent, candidate, _policy("S3"))["failure_codes"]
+
+
 @pytest.mark.parametrize("commit", [None, "not-a-sha", "a" * 41])
 def test_complete_rejects_legacy_parent_without_matching_recorded_git_commit(
     tmp_path: Path, commit: object

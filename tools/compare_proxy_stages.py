@@ -229,12 +229,24 @@ def _same_provenance(parent: dict[str, object], candidate: dict[str, object], *,
     return failures
 
 
-def compare_development(parent_dev: dict[str, object], candidate_dev: dict[str, object], *, stage: str, correctness_fix: bool = False) -> dict[str, object]:
-    policy = _policy(stage, correctness_fix)
-    parent, candidate = _metrics(parent_dev), _metrics(candidate_dev)
-    failures = _same_provenance(parent, candidate, prefix="development")
-    if not candidate["runtime_hash"]:
-        failures.append("candidate_runtime_hash_missing")
+def _cross_report_lineage_failures(parent_development: dict[str, object], candidate_development: dict[str, object], parent_stress: dict[str, object], candidate_stress: dict[str, object]) -> list[str]:
+    failures = []
+    legacy_parent = not parent_development["runtime_hash"] and not parent_stress["runtime_hash"]
+    parent_identity_matches = parent_development["config_hash"] == parent_stress["config_hash"] and (
+        (legacy_parent and isinstance(parent_development["commit"], str) and _GIT_SHA_RE.fullmatch(parent_development["commit"]) is not None and parent_development["commit"] == parent_stress["commit"])
+        or (not legacy_parent and parent_development["runtime_hash"] == parent_stress["runtime_hash"])
+    )
+    if not parent_identity_matches:
+        failures.append("parent_source_identity_mismatch")
+    if not isinstance(candidate_development["runtime_hash"], str) or candidate_development["runtime_hash"] != candidate_stress["runtime_hash"]:
+        failures.append("candidate_runtime_identity_mismatch")
+    if candidate_development["config_hash"] != candidate_stress["config_hash"]:
+        failures.append("candidate_config_identity_mismatch")
+    return failures
+
+
+def _development_gate(parent: dict[str, object], candidate: dict[str, object], policy: StageGatePolicy) -> dict[str, object]:
+    failures = []
     deltas = {"selection": candidate["selection"] - parent["selection"], "mean": candidate["mean"] - parent["mean"]}
     if _units(deltas["selection"]) < _units(policy.minimum_selection_delta):
         failures.append("development_selection_regression")
@@ -251,6 +263,31 @@ def compare_development(parent_dev: dict[str, object], candidate_dev: dict[str, 
         deltas[f"{scenario}_hit_rate"] = delta
         if _units(delta) < -_units(policy.maximum_dev_scenario_decline):
             failures.append(f"development_{scenario}_regression")
+    return _result(deltas, failures)
+
+
+def _stress_gate(parent: dict[str, object], candidate: dict[str, object], policy: StageGatePolicy) -> dict[str, object]:
+    failures = []
+    deltas: dict[str, float] = {"stress_mean": candidate["mean"] - parent["mean"]}
+    if _units(deltas["stress_mean"]) < -_units(policy.maximum_stress_decline):
+        failures.append("stress_mean_regression")
+    for scenario in _PRIMARY_SCENARIOS:
+        delta = candidate["scenario_rates"][scenario] - parent["scenario_rates"][scenario]
+        deltas[f"stress_{scenario}_hit_rate"] = delta
+        if _units(delta) < -_units(policy.maximum_stress_scenario_decline):
+            failures.append(f"stress_{scenario}_regression")
+    return _result(deltas, failures)
+
+
+def compare_development(parent_dev: dict[str, object], candidate_dev: dict[str, object], *, stage: str, correctness_fix: bool = False) -> dict[str, object]:
+    policy = _policy(stage, correctness_fix)
+    parent, candidate = _metrics(parent_dev), _metrics(candidate_dev)
+    failures = _same_provenance(parent, candidate, prefix="development")
+    if not candidate["runtime_hash"]:
+        failures.append("candidate_runtime_hash_missing")
+    gate = _development_gate(parent, candidate, policy)
+    deltas = gate["deltas"]
+    failures.extend(gate["failure_codes"])
     deltas["boundary_hits"] = candidate["boundary_hits"] - parent["boundary_hits"]
     if deltas["boundary_hits"] < 0:
         failures.append("development_boundary_regression")
@@ -263,14 +300,9 @@ def compare_stress(parent_stress: dict[str, object], candidate_stress: dict[str,
     policy = _policy(stage)
     parent, candidate = _metrics(parent_stress), _metrics(candidate_stress)
     failures = _same_provenance(parent, candidate, prefix="stress")
-    deltas: dict[str, float] = {"stress_mean": candidate["mean"] - parent["mean"]}
-    if _units(deltas["stress_mean"]) < -_units(policy.maximum_stress_decline):
-        failures.append("stress_mean_regression")
-    for scenario in _PRIMARY_SCENARIOS:
-        delta = candidate["scenario_rates"][scenario] - parent["scenario_rates"][scenario]
-        deltas[f"stress_{scenario}_hit_rate"] = delta
-        if _units(delta) < -_units(policy.maximum_stress_scenario_decline):
-            failures.append(f"stress_{scenario}_regression")
+    gate = _stress_gate(parent, candidate, policy)
+    deltas = gate["deltas"]
+    failures.extend(gate["failure_codes"])
     deltas["stress_boundary_hits"] = candidate["boundary_hits"] - parent["boundary_hits"]
     if deltas["stress_boundary_hits"] < 0:
         failures.append("stress_boundary_regression")
@@ -282,7 +314,8 @@ def compare_stress(parent_stress: dict[str, object], candidate_stress: dict[str,
 def compare_stage(parent_dev: dict[str, object], candidate_dev: dict[str, object], parent_stress: dict[str, object], candidate_stress: dict[str, object], *, stage: str) -> dict[str, object]:
     development = compare_development(parent_dev, candidate_dev, stage=stage)
     stress = compare_stress(parent_stress, candidate_stress, stage=stage)
-    return _result({**development["deltas"], **stress["deltas"]}, [*development["failure_codes"], *stress["failure_codes"]])
+    lineage = _cross_report_lineage_failures(_metrics(parent_dev), _metrics(candidate_dev), _metrics(parent_stress), _metrics(candidate_stress))
+    return _result({**development["deltas"], **stress["deltas"]}, [*development["failure_codes"], *stress["failure_codes"], *lineage])
 
 
 def _receipt_payload(candidate_dev: dict[str, object], *, stage: str, result: dict[str, object]) -> dict[str, object]:
@@ -328,14 +361,7 @@ def compare_complete(parent_dev: dict[str, object], candidate_dev: dict[str, obj
     receipt = _load_receipt(development_receipt, candidate_dev, stage, development)
     parent_development, candidate_development = _metrics(parent_dev), _metrics(candidate_dev)
     parent, candidate = _metrics(parent_stress), _metrics(candidate_stress)
-    failures = [*development["failure_codes"], *stress["failure_codes"]]
-    legacy_parent = not parent["runtime_hash"] and not parent_development["runtime_hash"]
-    parent_identity_matches = parent["config_hash"] == parent_development["config_hash"] and (
-        (legacy_parent and isinstance(parent["commit"], str) and _GIT_SHA_RE.fullmatch(parent["commit"]) is not None and parent["commit"] == parent_development["commit"])
-        or (not legacy_parent and parent["runtime_hash"] == parent_development["runtime_hash"])
-    )
-    if not parent_identity_matches:
-        failures.append("parent_source_identity_mismatch")
+    failures = [*development["failure_codes"], *stress["failure_codes"], *_cross_report_lineage_failures(parent_development, candidate_development, parent, candidate)]
     fingerprints = (candidate_development["runtime_hash"], candidate["runtime_hash"], resource_report.get("runtime_hash"), receipt["runtime_hash"], current_runtime_hash or runtime_hash())
     configs = (candidate_development["config_hash"], candidate["config_hash"], resource_report.get("config_hash"), receipt["config_hash"], current_config_hash or config_hash(RuntimeConfig()))
     if not all(isinstance(item, str) and item == fingerprints[0] for item in fingerprints):
