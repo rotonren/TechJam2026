@@ -116,3 +116,14 @@ unchanged. Fallback and invalid-response counts remained zero. The candidate
 failed only the precommitted `+0.003` minimum selection improvement, so the
 feature was restored to `False`. No S3 factor became an accepted scoring
 parent.
+
+### S4 Answerability-Aware Questions
+
+The fixed S4 candidate was rejected on representative development folds
+against P0 before any stress, resource, audit, or public run. Mean TechnicalScore
+changed by `-0.066585`, selection by `-0.065832`, and Boundary lost eight
+hits. Buying, Browsing, and Intent Override HitRate@10 changed by `-0.082683`,
+`-0.115264`, and `-0.062241`; every development fold regressed. Fallback and
+invalid-response counts remained zero. The S4 production changes were fully
+reverted and are not part of the frozen candidate. S5 was intentionally
+deferred after the user requested an accelerated final delivery.
