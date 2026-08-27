@@ -30,7 +30,7 @@ class RuntimeConfig:
         ("dense", 0.35),
         ("attribute", 0.30),
     )
-    rank_fusion_weight: float = 0.10
+    rank_fusion_weight: float = 0.15
     rank_attribute_weight: float = 0.0
     rank_consensus_bonus: float = 0.0
     rank_boundary_bonus: float = 0.0
