@@ -22,6 +22,13 @@ with Dense available and zero fallback in every trial. P0 median trial-P95 was
 versus 13676.364 ms; median peak memory was 556.453 MiB versus 555.906 MiB.
 P0 maximum response time was 292.233 ms.
 
+The final stable-candidate resource benchmark passed against R0 with Dense
+available and zero fallback in all three trials. Median P95 was `183.692 ms`
+(`-58.070%` versus R0), median initialization was `13219.807 ms`
+(`-3.338%`), median peak working set was `557.008 MiB` (`+0.198%`), and the
+maximum response time was `529.531 ms`, below the `1.5 s` limit. The repeated
+response hash was deterministic.
+
 ## Audit Baseline
 
 Previously recorded aggregate-only audit baseline: 394 samples, HitRate@10
