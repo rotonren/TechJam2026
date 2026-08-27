@@ -24,6 +24,29 @@ def test_agent_response_matches_official_contract(fixture_catalog_path):
     assert response["usage"] == {"prompt_tokens": 0, "completion_tokens": 0}
 
 
+def test_agent_trace_accepts_legacy_dense_backend_without_status(
+    fixture_catalog_path,
+    monkeypatch,
+):
+    class LegacyDenseBackend:
+        available = True
+
+        def search(self, _text: str, _limit: int) -> list[Candidate]:
+            return []
+
+    monkeypatch.setenv("COMPASSCART_DISABLE_DENSE", "1")
+    agent = Agent(fixture_catalog_path)
+    legacy_dense = LegacyDenseBackend()
+    agent.dense = legacy_dense
+    agent.retriever.dense = legacy_dense
+    agent.reset("legacy-dense", {})
+
+    response = agent.respond("legacy-dense", "running shoes", turn=1, top_k=3)
+
+    assert set(response) == {"message", "ask_attribute", "recommendations", "usage"}
+    assert agent.traces.records[-1]["dense_status"] == "unknown"
+
+
 def test_agent_requires_reset(fixture_catalog_path):
     agent = Agent(fixture_catalog_path)
 

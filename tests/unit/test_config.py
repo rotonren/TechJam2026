@@ -49,6 +49,55 @@ def test_resolve_dense_paths_preserves_absolute_overrides(tmp_path: Path):
     )
 
 
+def test_resolve_dense_paths_accepts_relative_and_absolute_strings(tmp_path: Path):
+    submission_root = tmp_path / "release"
+    submission_root.mkdir()
+    _write_submission_layout(submission_root)
+    absolute_model = tmp_path / "external" / "model"
+    config = RuntimeConfig(
+        dense_model_dir=str(absolute_model),
+        dense_vector_dir="custom/vectors",
+        dense_manifest_path="custom/SHA256SUMS",
+    )
+
+    assert config.resolve_dense_paths(submission_root) == (
+        absolute_model,
+        submission_root / "custom" / "vectors",
+        submission_root / "custom" / "SHA256SUMS",
+    )
+
+
+def test_agent_initializes_with_string_dense_paths(
+    fixture_catalog_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    loaded_paths: list[tuple[Path, Path, Path]] = []
+
+    def capture_loader(
+        model_dir: Path, vector_dir: Path, manifest_path: Path
+    ) -> NullDenseBackend:
+        loaded_paths.append((model_dir, vector_dir, manifest_path))
+        return NullDenseBackend("asset_missing")
+
+    monkeypatch.setattr(agent_module, "load_dense_backend", capture_loader)
+    config = RuntimeConfig(
+        dense_model_dir="assets/model",
+        dense_vector_dir="assets/product_vectors",
+        dense_manifest_path="assets/SHA256SUMS",
+    )
+
+    agent = CompassCartAgent(fixture_catalog_path, config=config)
+
+    assert agent.dense.status == "asset_missing"
+    assert loaded_paths == [
+        (
+            agent_module.SUBMISSION_ROOT / "assets" / "model",
+            agent_module.SUBMISSION_ROOT / "assets" / "product_vectors",
+            agent_module.SUBMISSION_ROOT / "assets" / "SHA256SUMS",
+        )
+    ]
+
+
 @pytest.mark.parametrize("missing", ["agent.py", "assets"])
 def test_resolve_dense_paths_rejects_invalid_submission_layout(
     tmp_path: Path, missing: str

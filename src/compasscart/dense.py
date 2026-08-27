@@ -84,6 +84,7 @@ class OnnxDenseBackend:
             ]
         except Exception:  # noqa: BLE001 - corrupt optional inference disables dense.
             self._available = False
+            self.status = "inference_failed"
             return []
 
     def _embed(self, text: str) -> np.ndarray:

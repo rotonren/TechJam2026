@@ -159,6 +159,9 @@ class CompassCartAgent:
         # previous-page exclusion behavior.
         state.continuation_requested = False
         elapsed_ms = round((time.perf_counter() - started) * 1_000, 3)
+        dense_status = getattr(self.dense, "status", "unknown")
+        if not isinstance(dense_status, str) or not dense_status.strip():
+            dense_status = "unknown"
         self.traces.record(
             {
                 "session_id": session_id,
@@ -181,7 +184,7 @@ class CompassCartAgent:
                     )
                 ),
                 "ask_attribute": question.ask_attribute,
-                "dense_status": self.dense.status,
+                "dense_status": dense_status,
                 "fallbacks": fallbacks,
                 "elapsed_ms": elapsed_ms,
             }

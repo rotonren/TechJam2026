@@ -87,12 +87,16 @@ def test_extracted_submission_loads_dense_assets_outside_cwd(
     script = """
 import json
 import sys
+import agent as agent_module
+import compasscart.agent as compasscart_agent_module
 from agent import Agent
 
 agent = Agent(sys.argv[1])
 agent.reset("package", {})
 response = agent.respond("package", "running shoes", turn=1, top_k=3)
 print(json.dumps({
+    "agent_file": agent_module.__file__,
+    "compasscart_agent_file": compasscart_agent_module.__file__,
     "dense_available": agent.dense.available,
     "dense_status": agent.dense.status,
     "trace_dense_status": agent.traces.records[-1]["dense_status"],
@@ -107,11 +111,25 @@ print(json.dumps({
         capture_output=True,
         text=True,
         check=True,
+        timeout=120,
     )
 
-    assert json.loads(completed.stdout) == {
+    payload = json.loads(completed.stdout)
+    assert {
+        key: payload[key]
+        for key in (
+            "dense_available",
+            "dense_status",
+            "trace_dense_status",
+            "response_keys",
+        )
+    } == {
         "dense_available": True,
         "dense_status": "available",
         "trace_dense_status": "available",
         "response_keys": ["ask_attribute", "message", "recommendations", "usage"],
     }
+    assert Path(payload["agent_file"]).resolve() == (release_root / "agent.py").resolve()
+    assert Path(payload["compasscart_agent_file"]).resolve() == (
+        release_root / "src" / "compasscart" / "agent.py"
+    ).resolve()

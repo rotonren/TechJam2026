@@ -168,6 +168,7 @@ def test_inference_exception_disables_backend():
 
     assert backend.search("query", 1) == []
     assert backend.available is False
+    assert backend.status == "inference_failed"
 
 
 def test_dense_candidates_participate_in_rrf(fixture_catalog_path):

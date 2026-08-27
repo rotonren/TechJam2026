@@ -10,9 +10,9 @@ class RuntimeConfig:
     rrf_k: int = 60
     max_recommendations: int = 10
     component_timeout_ms: int = 800
-    dense_model_dir: Path = Path("assets/model")
-    dense_vector_dir: Path = Path("assets/product_vectors")
-    dense_manifest_path: Path = Path("assets/SHA256SUMS")
+    dense_model_dir: str | Path = Path("assets/model")
+    dense_vector_dir: str | Path = Path("assets/product_vectors")
+    dense_manifest_path: str | Path = Path("assets/SHA256SUMS")
     bm25_field_weights: tuple[float, ...] = (0.0, 6.0, 4.0, 2.5, 2.5, 1.5, 1.0)
     buying_route_weights: tuple[tuple[str, float], ...] = (
         ("attribute", 0.45),
@@ -39,8 +39,9 @@ class RuntimeConfig:
         if not (root / "agent.py").is_file() or not (root / "assets").is_dir():
             raise ValueError("submission root must contain agent.py and assets")
 
-        def resolve(path: Path) -> Path:
-            return path if path.is_absolute() else root / path
+        def resolve(path: str | Path) -> Path:
+            resolved_path = Path(path)
+            return resolved_path if resolved_path.is_absolute() else root / resolved_path
 
         return (
             resolve(self.dense_model_dir),
