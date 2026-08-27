@@ -95,3 +95,13 @@ and Boundary lost one hit. Intent Override HitRate@10 improved by `+0.008299`,
 while Buying and Browsing changed by `-0.006240` and `-0.009345`. Fallback
 and invalid-response counts remained zero. The fusion weight was restored to
 `0.10`.
+
+### S3 Boundary Bonus
+
+The predeclared boundary bonus `0.025` was rejected on representative
+development folds against P0 before any stress, resource, audit, or public
+run. Mean TechnicalScore changed by `-0.007624` and selection by `-0.006989`;
+Boundary hits were unchanged. Intent Override HitRate@10 improved by
+`+0.004149`, while Buying and Browsing changed by `-0.012481` and `-0.017134`.
+Fallback and invalid-response counts remained zero. The boundary bonus was
+restored to `0.0`.
