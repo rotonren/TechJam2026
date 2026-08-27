@@ -30,6 +30,17 @@ def test_popular_ids_uses_order_cached_during_catalog_load(fixture_catalog_path)
     assert index.popular_ids(4) == expected
 
 
+def test_popular_ids_preserves_slice_limit_semantics(fixture_catalog_path):
+    index = CatalogIndex(fixture_catalog_path)
+    full_order = index.popular_ids(len(index.valid_ids))
+
+    assert index.popular_ids(-1) == full_order[:-1]
+    with pytest.raises(TypeError):
+        index.popular_ids(2.9)
+    with pytest.raises(TypeError):
+        index.popular_ids("2")
+
+
 @pytest.mark.parametrize("enable_fts", (True, False))
 def test_catalog_does_not_build_a_duplicate_field_term_index(
     fixture_catalog_path, enable_fts

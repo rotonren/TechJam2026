@@ -245,7 +245,8 @@ class CatalogIndex:
         return self.products[parent_asin]
 
     def popular_ids(self, limit: int = 10) -> list[str]:
-        return list(self._popular_order[: max(int(limit), 0)])
+        """Return the catalog-load popularity order using normal slice semantics."""
+        return list(self._popular_order[:limit])
 
     def search_lexical(self, plan: RetrievalPlan, *, limit: int) -> list[Candidate]:
         query_terms = terms(plan.query_text)
