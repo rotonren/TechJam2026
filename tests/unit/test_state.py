@@ -1,3 +1,5 @@
+import pytest
+
 from agent import Agent
 from compasscart.models import Constraint
 from compasscart.parser import MessageParser
@@ -187,6 +189,21 @@ def test_control_only_message_does_not_replace_substantive_history():
     state = store.update("s1", "Here are the closest matches I found.", 2)
 
     assert state.query_history == ["I need a belt"]
+
+
+@pytest.mark.parametrize(
+    "message",
+    ("Thanks", "search", "Here are the closest matches I found."),
+)
+def test_pending_feature_does_not_treat_control_only_text_as_evidence(message):
+    store = SessionStore(MessageParser({"feature": ("waterproof",)}))
+    store.reset("s1", {})
+
+    state = store.update("s1", message, 1, expected_attribute="feature")
+
+    assert state.query_history == []
+    assert state.active_constraints() == []
+    assert message not in Agent._query_text(message, state)
 
 
 def test_goal_override_replaces_prior_hard_constraints_and_question_state():

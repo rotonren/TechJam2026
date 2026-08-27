@@ -34,8 +34,17 @@ _PREFERENCE_RESET_RE = re.compile(
 _CONTINUATION_RE = re.compile(
     r"\b(?:show me more|more options|different choices)\b", re.IGNORECASE
 )
+_ATTRIBUTE_SLOT = (
+    r"(?:category|material|color|size|style|brand|budget|feature(?:s)?|"
+    r"use[ _-]?case|other)"
+)
 _CONTROL_ONLY_RE = re.compile(
     r"(?:show me more(?: options)?|more options|different choices|search|thanks|thank you|"
+    r"please narrow(?: it)? down|i need another direction|keep searching|"
+    r"nothing more|no other requirement|"
+    r"i(?:'|’)m flexible on " + _ATTRIBUTE_SLOT + r" beyond(?: [a-z0-9 -]+)?|"
+    r"any " + _ATTRIBUTE_SLOT + r" is fine|"
+    r"i(?:'|’)m flexible about " + _ATTRIBUTE_SLOT + r"|"
     r"those options are not quite right yet[.!?]\s*ask me about one specific attribute|"
     r"here are the closest matches i found(?: these are close alternatives after relaxing .*)?|"
     r"what type of product are you looking for|do you have a material preference|"
@@ -48,7 +57,9 @@ _CONTROL_ONLY_RE = re.compile(
 )
 _NO_PREFERENCE_RE = re.compile(
     r"\b(?:don['’]?t|do not|no)\s+(?:have\s+)?(?:an?\s+)?(?:additional\s+)?"
-    r"preference\b|\b(?:doesn['’]?t|does not) matter\b|\buse your judgment\b",
+    r"preference\b|\b(?:doesn['’]?t|does not) matter\b|\buse your judgment\b|"
+    r"\bany\s+" + _ATTRIBUTE_SLOT + r"\s+is\s+fine\b|"
+    r"\bi(?:'|’)m\s+flexible\s+about\s+" + _ATTRIBUTE_SLOT + r"\b",
     re.IGNORECASE,
 )
 _BROWSING_RE = re.compile(
@@ -287,8 +298,12 @@ class MessageParser:
         if is_override:
             expected_attribute = None
 
-        if _NO_PREFERENCE_RE.search(text):
-            attribute = expected_attribute or self._mentioned_attribute(text)
+        if is_control_only:
+            attribute = (
+                expected_attribute or self._mentioned_attribute(text)
+                if _NO_PREFERENCE_RE.search(text)
+                else None
+            )
             return ParseResult(
                 no_preference_attribute=attribute,
                 is_override=is_override,
@@ -297,14 +312,12 @@ class MessageParser:
                 has_substantive_evidence=False,
             )
 
-        # Continuation commands are control input, not answers to a pending
-        # attribute question.  Returning before catalog-vocabulary matching
-        # also prevents noisy aliases such as "show me more" from becoming a
-        # hard feature/use-case constraint.
-        if is_control_only and is_continuation:
+        if _NO_PREFERENCE_RE.search(text):
+            attribute = expected_attribute or self._mentioned_attribute(text)
             return ParseResult(
+                no_preference_attribute=attribute,
                 is_override=is_override,
-                is_continuation=True,
+                is_continuation=is_continuation,
                 replace_preferences=replace_preferences,
                 has_substantive_evidence=False,
             )

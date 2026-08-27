@@ -227,6 +227,45 @@ def test_parser_keeps_shopping_evidence_when_request_mentions_more():
     assert unknown.has_substantive_evidence is True
 
 
+@pytest.mark.parametrize(
+    ("message", "no_preference_attribute"),
+    (
+        ("Please narrow it down.", None),
+        ("I need another direction.", None),
+        ("Keep searching.", None),
+        ("Nothing more.", None),
+        ("I'm flexible on features beyond waterproof.", None),
+        ("No other requirement.", None),
+        ("Any feature is fine.", "feature"),
+        ("I'm flexible about feature.", "feature"),
+    ),
+)
+def test_full_control_reply_templates_do_not_infer_pending_constraints(
+    message, no_preference_attribute
+):
+    result = MessageParser({"feature": ("waterproof",)}).parse(
+        message, turn=2, expected_attribute="feature"
+    )
+
+    assert result.constraints == ()
+    assert result.has_substantive_evidence is False
+    assert result.no_preference_attribute == no_preference_attribute
+
+
+@pytest.mark.parametrize(
+    "message",
+    (
+        "show me more waterproof hiking boots",
+        "thanks, I need waterproof hiking boots",
+        "search for waterproof hiking boots",
+    ),
+)
+def test_control_words_in_a_shopping_request_remain_substantive(message):
+    result = MessageParser().parse(message, turn=2)
+
+    assert result.has_substantive_evidence is True
+
+
 def test_semantic_fixed_term_is_not_inferred_as_brand_without_brand_cue():
     parser = MessageParser(
         {"brand": ("Waterproof",), "category": ("Jackets",)}
