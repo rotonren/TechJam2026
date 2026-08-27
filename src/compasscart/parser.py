@@ -72,7 +72,7 @@ _CATEGORY_RE = re.compile(
     re.IGNORECASE,
 )
 _GOAL_CATEGORY_RE = re.compile(
-    r"\b(?:i\s+)?(?:need|want|looking for)\s+(?:an?\s+|some\s+)?"
+    r"\b(?:i\s+)?(?:need|want|looking for|shopping for)\s+(?:an?\s+|some\s+)?"
     r"(?P<category>[a-z][a-z\s-]{0,48}?)(?=\s*(?:[,.!;]|\b(?:but|with|that)\b|$))",
     re.IGNORECASE,
 )
@@ -329,11 +329,9 @@ class MessageParser:
                 for item in extracted
             )
             and not any(item.operator == "not_in" for item in extracted)
-            and self._has_unrecognized_expected_text(
-                text, extracted, expected_attribute
-            )
+            and (residual := self._unrecognized_expected_text(text))
         ):
-            extracted.extend(self._extract_expected(text, expected_attribute, source))
+            extracted.extend(self._extract_expected(residual, expected_attribute, source))
 
         route_hint: RouteHint = None
         if _BUYING_RE.search(text):
@@ -364,12 +362,19 @@ class MessageParser:
         Character spans are used so multi-word catalog aliases and budget
         phrases are removed without changing the original query evidence.
         """
+        del extracted, expected_attribute
+        return bool(self._unrecognized_expected_text(text))
+
+    def _unrecognized_expected_text(self, text: str) -> str:
         covered: list[tuple[int, int]] = []
         for start, end, attribute, _ in self._raw_vocabulary_matches(text):
             covered.append(
-                self._explicit_alias_span(attribute, text, start, end) or (start, end)
+                self._alias_cue_span(attribute, text, start, end) or (start, end)
             )
-        covered.extend(match.span() for match in _GOAL_CATEGORY_RE.finditer(text))
+        covered.extend(
+            (goal_start, category_start)
+            for goal_start, category_start, _ in self._goal_category_head_spans(text)
+        )
         for pattern in (_BUDGET_BETWEEN_RE, _BUDGET_DIRECTION_RE, _BUDGET_DEFAULT_RE):
             covered.extend(match.span() for match in pattern.finditer(text))
         category_match = _EXPLICIT_CATEGORY_RE.search(text) or _CATEGORY_RE.search(text)
@@ -381,7 +386,7 @@ class MessageParser:
                 start = category_start + token_match.start()
                 end = category_start + token_match.end()
                 covered.append(
-                    self._explicit_alias_span("category", text, start, end)
+                    self._alias_cue_span("category", text, start, end)
                     or (start, end)
                 )
 
@@ -401,7 +406,9 @@ class MessageParser:
             for index, character in enumerate(text)
         ]
         residual_tokens = terms("".join(residual_chars))
-        return any(token not in _EXPECTED_FILLER_TERMS for token in residual_tokens)
+        if not any(token not in _EXPECTED_FILLER_TERMS for token in residual_tokens):
+            return ""
+        return normalize_value("".join(residual_chars))
 
     def _extract_expected(
         self, text: str, attribute: str, source: ConstraintSource
@@ -509,6 +516,9 @@ class MessageParser:
                 attribute == "category" and self._is_negative_value(text, start)
             )
             and not self._overlaps_explicit_alias_cue_for_other_attribute(
+                attribute, text, start, end
+            )
+            and not self._overlaps_goal_category_head_for_other_attribute(
                 attribute, text, start, end
             )
         ]
@@ -668,6 +678,7 @@ class MessageParser:
                 attribute == "category"
                 and self._is_category_goal_span(text, start, end)
             )
+            or self._is_before_goal_category_head(text, start, end)
         )
 
     @staticmethod
@@ -676,7 +687,7 @@ class MessageParser:
     ) -> bool:
         return any(
             candidate != attribute
-            and MessageParser._explicit_alias_span(candidate, text, start, end)
+            and MessageParser._alias_cue_span(candidate, text, start, end)
             for candidate in (
                 "brand",
                 "category",
@@ -690,6 +701,17 @@ class MessageParser:
         )
 
     @staticmethod
+    def _overlaps_goal_category_head_for_other_attribute(
+        attribute: str, text: str, start: int, end: int
+    ) -> bool:
+        return attribute != "category" and any(
+            start < head_end and head_start < end
+            for _, head_start, head_end in MessageParser._goal_category_head_spans(
+                text
+            )
+        )
+
+    @staticmethod
     def _has_category_goal_phrase(text: str) -> bool:
         return bool(_GOAL_CATEGORY_RE.search(text))
 
@@ -697,12 +719,37 @@ class MessageParser:
     def _is_category_goal_span(text: str, start: int, end: int) -> bool:
         return any(
             category_start <= start and end <= category_end
-            for match in _GOAL_CATEGORY_RE.finditer(text)
-            for category_start, category_end in (match.span("category"),)
+            for _, category_start, category_end in MessageParser._goal_category_head_spans(
+                text
+            )
         )
 
     @staticmethod
-    def _explicit_alias_span(
+    def _is_before_goal_category_head(text: str, start: int, end: int) -> bool:
+        return any(
+            goal_start <= start and end <= category_start
+            for goal_start, category_start, _ in MessageParser._goal_category_head_spans(
+                text
+            )
+        )
+
+    @staticmethod
+    def _goal_category_head_spans(text: str) -> tuple[tuple[int, int, int], ...]:
+        heads: list[tuple[int, int, int]] = []
+        for match in _GOAL_CATEGORY_RE.finditer(text):
+            category_start, _ = match.span("category")
+            known = [
+                (token.start() + category_start, token.end() + category_start)
+                for token in _TOKEN_SPAN_RE.finditer(match.group("category"))
+                if token.group(0).lower() in _KNOWN_CATEGORIES
+            ]
+            if known:
+                head_start, head_end = known[-1]
+                heads.append((match.start(), head_start, head_end))
+        return tuple(heads)
+
+    @staticmethod
+    def _alias_cue_span(
         attribute: str, text: str, start: int, end: int
     ) -> tuple[int, int] | None:
         prefix = text[:start]
@@ -710,7 +757,31 @@ class MessageParser:
         match = re.search(
             rf"\b{attribute_label}(?:\s+is)?\s*[:=-]\s*$", prefix
         )
-        return (match.start(), end) if match else None
+        if match:
+            return (match.start(), end)
+        left = text[max(0, start - 24) : start]
+        right = text[end : min(len(text), end + 16)]
+        if attribute == "brand":
+            natural = re.search(
+                r"\b(?:brand|by|from)(?:\s+is)?\s*[:=-]?\s*$", left
+            )
+            if natural:
+                return (max(0, start - 24) + natural.start(), end)
+            natural = re.match(r"\s*(?:brand)\b", right)
+            if natural:
+                return (start, end + natural.end())
+        if attribute == "style":
+            natural = re.search(
+                r"\b(?:style|styled|look|design)(?:\s+is)?\s*[:=-]?\s*$", left
+            )
+            if natural:
+                return (max(0, start - 24) + natural.start(), end)
+            natural = re.match(
+                r"\s*[,;:=-]?\s*(?:style|styled|look|design)\b", right
+            )
+            if natural:
+                return (start, end + natural.end())
+        return None
 
     @staticmethod
     def _overlaps_any(
@@ -725,28 +796,11 @@ class MessageParser:
     def _has_explicit_alias_cue(
         attribute: str, value: str, text: str, start: int, end: int
     ) -> bool:
-        left = text[max(0, start - 24) : start]
-        right = text[end : min(len(text), end + 16)]
-        if MessageParser._explicit_alias_span(attribute, text, start, end):
+        if MessageParser._alias_cue_span(attribute, text, start, end):
             return True
         if attribute == "brand":
-            if "brand" in terms(value) or re.search(r"['’]s\b", text[start:end]):
-                return True
-            return bool(
-                re.search(
-                    r"\b(?:brand|by|from)(?:\s+is)?\s*[:=-]?\s*$", left
-                )
-                or re.match(r"\s*(?:brand)\b", right)
-            )
-        if attribute == "style":
-            return bool(
-                re.search(
-                    r"\b(?:style|styled|look|design)(?:\s+is)?\s*[:=-]?\s*$",
-                    left,
-                )
-                or re.match(
-                    r"\s*[,;:=-]?\s*(?:style|styled|look|design)\b", right
-                )
+            return "brand" in terms(value) or bool(
+                re.search(r"['’]s\b", text[start:end])
             )
         return False
 

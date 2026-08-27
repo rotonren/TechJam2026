@@ -361,15 +361,64 @@ def test_explicit_cue_span_does_not_fallback_to_pending_soft_text(message, expec
     ]
 
 
-def test_residual_open_text_after_explicit_cue_remains_pending_soft_text():
+def test_residual_open_text_after_explicit_cue_remains_bounded_pending_soft_text():
     result = MessageParser({"category": ("Boots",)}).parse(
         "category: boots for snow", turn=2, expected_attribute="size"
     )
 
     assert [(item.attribute, item.value, item.is_hard) for item in result.constraints] == [
         ("category", "boots", True),
-        ("size", "category: boots for snow", False),
+        ("size", "for snow", False),
     ]
+
+
+@pytest.mark.parametrize(
+    "message", ("I need blue leather boots", "shopping for blue leather boots")
+)
+def test_pending_goal_clause_allows_attributes_until_the_category_head(message):
+    result = MessageParser(
+        {"category": ("Boots",), "size": ("Boots",)}
+    ).parse(message, turn=2, expected_attribute="size")
+
+    assert [(item.attribute, item.value, item.is_hard) for item in result.constraints] == [
+        ("color", "blue", True),
+        ("material", "leather", True),
+        ("category", "boots", True),
+    ]
+
+
+def test_pending_goal_clause_keeps_only_unrecognized_suffix_as_soft_evidence():
+    result = MessageParser({"category": ("Boots",), "size": ("Boots",)}).parse(
+        "I need boots for snow", turn=2, expected_attribute="size"
+    )
+
+    assert [(item.attribute, item.value, item.is_hard) for item in result.constraints] == [
+        ("category", "boots", True),
+        ("size", "for snow", False),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_attribute", "vocabulary", "expected"),
+    (
+        ("brand Acme", "style", {"brand": ("Acme",)}, ("brand", "acme")),
+        ("by Acme", "style", {"brand": ("Acme",)}, ("brand", "acme")),
+        (
+            "casual style",
+            "use_case",
+            {"style": ("Casual",), "use_case": ("Casual",)},
+            ("style", "casual"),
+        ),
+    ),
+)
+def test_natural_cues_are_exclusive_and_do_not_soft_fill_the_pending_attribute(
+    message, expected_attribute, vocabulary, expected
+):
+    result = MessageParser(vocabulary).parse(
+        message, turn=2, expected_attribute=expected_attribute
+    )
+
+    assert [(item.attribute, item.value) for item in result.constraints] == [expected]
 
 
 def test_goal_override_allows_category_replacement_while_pending():
