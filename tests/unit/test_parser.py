@@ -538,6 +538,26 @@ def test_uncertain_goal_keeps_browsing_route():
     assert result.route_hint == "browsing"
 
 
+@pytest.mark.parametrize(
+    "message",
+    (
+        "I'm not sure whether I want boots",
+        "not sure I want boots",
+        "not entirely sure whether I want boots",
+    ),
+)
+def test_pending_uncertain_goal_clauses_keep_category_and_browsing_route(message):
+    result = MessageParser({"category": ("Boots",)}).parse(
+        message, turn=2, expected_attribute="size"
+    )
+
+    assert result.is_goal_replacement is True
+    assert result.route_hint == "browsing"
+    assert [(item.attribute, item.value) for item in result.constraints] == [
+        ("category", "boots")
+    ]
+
+
 def test_no_preference_override_does_not_replace_preferences():
     result = MessageParser().parse(
         "I've changed my mind, no preference", turn=2, expected_attribute="size"

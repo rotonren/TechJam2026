@@ -44,6 +44,18 @@ _BROWSING_RE = re.compile(
     r"looking around|any suggestions)\b",
     re.IGNORECASE,
 )
+_UNCERTAIN_GOAL_PREFIX = (
+    r"\bnot(?:\s+[a-z]+){0,3}\s+sure"
+    r"(?:\s+(?:if|whether))?(?:\s+i)?"
+)
+_UNCERTAIN_GOAL_RE = re.compile(
+    _UNCERTAIN_GOAL_PREFIX
+    + r"\s+(?:need|want|looking\s+for|shopping\s+for)\b",
+    re.IGNORECASE,
+)
+_UNCERTAIN_GOAL_PREFIX_RE = re.compile(
+    _UNCERTAIN_GOAL_PREFIX + r"\s*$", re.IGNORECASE
+)
 _BUYING_RE = re.compile(
     r"\b(?:key requirement|must have|need|under|at most|no more than|budget)\b|[$£€]\s*\d",
     re.IGNORECASE,
@@ -348,7 +360,9 @@ class MessageParser:
             extracted.extend(self._extract_expected(residual, expected_attribute, source))
 
         route_hint: RouteHint = None
-        if _BUYING_RE.search(text):
+        if _UNCERTAIN_GOAL_RE.search(text):
+            route_hint = "browsing"
+        elif _BUYING_RE.search(text):
             route_hint = "buying"
         elif _BROWSING_RE.search(text):
             route_hint = "browsing"
@@ -785,6 +799,8 @@ class MessageParser:
     ) -> tuple[int, int] | None:
         window_start = max(0, match.start() - 32)
         prefix = text[window_start : match.start()]
+        if _UNCERTAIN_GOAL_PREFIX_RE.search(prefix):
+            return None
         negative = re.search(
             r"\b(?:don['’]?t|do\s+not|never|no\s+longer|not)\s+"
             r"(?:[a-z]+\s+){0,3}$",
@@ -793,7 +809,7 @@ class MessageParser:
         if negative is None:
             return None
         words = terms(negative.group(0))
-        if words[:2] == ["not", "only"] or words[:3] == ["not", "sure", "if"]:
+        if words[:2] == ["not", "only"]:
             return None
         return (window_start + negative.start(), window_start + negative.end())
 
