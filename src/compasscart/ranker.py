@@ -176,11 +176,15 @@ class ConstraintRanker:
     def _adaptive_mmr_eligible(self, candidates: list[Candidate]) -> bool:
         if len(candidates) < 11:
             return False
-        normalized = self._normalized_scores(candidates)
-        if abs(
-            normalized[candidates[9].parent_asin]
-            - normalized[candidates[10].parent_asin]
-        ) > 0.025:
+        maximum = max(item.score for item in candidates)
+        minimum = min(item.score for item in candidates)
+        scale = maximum - minimum
+        normalized_gap = (
+            abs(candidates[9].score - candidates[10].score) / scale
+            if scale > 0
+            else 0.0
+        )
+        if normalized_gap > 0.025:
             return False
         similar_pairs = 0
         first_ten = candidates[:10]

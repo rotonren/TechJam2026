@@ -478,7 +478,11 @@ def test_adaptive_mmr_true_requires_all_fixed_gates(fixture_catalog_path, monkey
     ranker = ConstraintRanker(
         index, fusion_weight=0.10, adaptive_browsing_mmr=True
     )
-    candidates = [Candidate(f"P{position:02d}", score=1.0 - position * 0.001) for position in range(11)]
+    candidates = [
+        Candidate(f"P{position:02d}", score=100.0 - position * 10.0)
+        for position in range(9)
+    ]
+    candidates.extend([Candidate("P09", score=1.0), Candidate("P10", score=0.0)])
     calls: list[float] = []
     monkeypatch.setattr(ranker, "_similarity", lambda _left, _right: 0.60)
 
@@ -503,9 +507,10 @@ def test_adaptive_mmr_uses_only_attribute_term_similarity(
         index, fusion_weight=0.10, adaptive_browsing_mmr=True
     )
     candidates = [
-        Candidate(f"P{position:02d}", score=1.0 - position * 0.001)
-        for position in range(11)
+        Candidate(f"P{position:02d}", score=100.0 - position * 10.0)
+        for position in range(9)
     ]
+    candidates.extend([Candidate("P09", score=1.0), Candidate("P10", score=0.0)])
     monkeypatch.setattr(
         ranker,
         "_diversity_terms",
@@ -525,7 +530,9 @@ def test_adaptive_mmr_uses_only_attribute_term_similarity(
     assert calls == 1
 
 
-def test_adaptive_mmr_normalizes_position_10_11_gap(fixture_catalog_path, monkeypatch):
+def test_adaptive_mmr_gates_off_when_min_max_normalized_gap_is_too_large(
+    fixture_catalog_path, monkeypatch
+):
     index = CatalogIndex(fixture_catalog_path)
     ranker = ConstraintRanker(
         index, fusion_weight=0.10, adaptive_browsing_mmr=True
@@ -534,6 +541,33 @@ def test_adaptive_mmr_normalizes_position_10_11_gap(fixture_catalog_path, monkey
         Candidate(f"P{position:02d}", score=100.0 - position)
         for position in range(11)
     ]
+    monkeypatch.setattr(ranker, "_similarity", lambda _left, _right: 0.60)
+    calls = 0
+
+    def record(items, limit):
+        nonlocal calls
+        calls += 1
+        return list(items[:limit])
+
+    monkeypatch.setattr(ranker, "_mmr", record)
+
+    ranker.rank(candidates, SessionState("s1", route="browsing"), top_k=10)
+
+    assert calls == 0
+
+
+def test_adaptive_mmr_gates_on_at_min_max_normalized_gap_boundary(
+    fixture_catalog_path, monkeypatch
+):
+    index = CatalogIndex(fixture_catalog_path)
+    ranker = ConstraintRanker(
+        index, fusion_weight=0.10, adaptive_browsing_mmr=True
+    )
+    candidates = [
+        Candidate(f"P{position:02d}", score=140.0 - 4.0 * position)
+        for position in range(9)
+    ]
+    candidates.extend([Candidate("P09", score=101.0), Candidate("P10", score=100.0)])
     monkeypatch.setattr(ranker, "_similarity", lambda _left, _right: 0.60)
     calls = 0
 
