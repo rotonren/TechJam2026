@@ -6,9 +6,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from compasscart.catalog import CatalogIndex
-from compasscart.dense import NullDenseBackend, OnnxDenseBackend, load_dense_backend
+from compasscart.dense import (
+    NullDenseBackend,
+    OnnxDenseBackend,
+    _verify_manifest,
+    load_dense_backend,
+)
+from compasscart.integrity import sha256_file
 from compasscart.models import Candidate, RetrievalPlan, SessionState
 from compasscart.retrieval import HybridRetriever
 from tools.build_dense_assets import (
@@ -91,6 +98,44 @@ def test_checksum_mismatch_returns_null_backend(tmp_path):
     assert backend.status == "asset_invalid"
 
 
+def test_manifest_verification_streams_without_path_read_bytes(tmp_path, monkeypatch):
+    path = tmp_path / "asset.bin"
+    payload = b"streamed asset" * 1_000
+    path.write_bytes(payload)
+    manifest = tmp_path / "SHA256SUMS"
+    manifest.write_text(
+        f"{hashlib.sha256(payload).hexdigest()}  asset.bin\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        Path,
+        "read_bytes",
+        lambda _path: pytest.fail("manifest verification must stream file content"),
+    )
+
+    _verify_manifest(manifest)
+
+
+def test_sha256_file_matches_hashlib_and_streams(tmp_path, monkeypatch):
+    path = tmp_path / "asset.bin"
+    payload = b"streamed asset" * 1_000
+    path.write_bytes(payload)
+    monkeypatch.setattr(
+        Path,
+        "read_bytes",
+        lambda _path: pytest.fail("sha256_file must stream file content"),
+    )
+
+    assert sha256_file(path, chunk_size=17) == hashlib.sha256(payload).hexdigest()
+
+
+def test_sha256_file_rejects_non_positive_chunk_size(tmp_path):
+    path = tmp_path / "asset.bin"
+    path.write_bytes(b"asset")
+
+    with pytest.raises(ValueError):
+        sha256_file(path, chunk_size=0)
+
+
 def test_environment_disable_has_priority_over_missing_assets(tmp_path, monkeypatch):
     monkeypatch.setenv("COMPASSCART_DISABLE_DENSE", "1")
 
@@ -153,7 +198,44 @@ def test_local_backend_ranks_by_mean_pooled_cosine():
     assert results[0].score > results[1].score
 
 
-def test_inference_exception_disables_backend():
+def test_dense_backend_preserves_unicode_product_ids_and_array_storage(tmp_path):
+    product_ids_path = tmp_path / "product_ids.npy"
+    vectors_path = tmp_path / "vectors.npy"
+    scales_path = tmp_path / "scales.npy"
+    np.save(product_ids_path, np.array(["A", "B"]))
+    np.save(vectors_path, np.array([[127, 0], [0, 127]], dtype=np.int8))
+    np.save(scales_path, np.array([1 / 127, 1 / 127], dtype=np.float32))
+    product_ids = np.load(product_ids_path, mmap_mode="r", allow_pickle=False)
+    vectors = np.load(vectors_path, mmap_mode="r", allow_pickle=False)
+    scales = np.load(scales_path, mmap_mode="r", allow_pickle=False)
+    backend = OnnxDenseBackend(
+        _Session(),
+        _Tokenizer(),
+        product_ids=product_ids,
+        vectors=vectors,
+        scales=scales,
+    )
+
+    assert isinstance(backend.product_ids, np.memmap)
+    assert isinstance(backend.vectors, np.memmap)
+    assert isinstance(backend.scales, np.memmap)
+    assert np.shares_memory(backend.product_ids, product_ids)
+    assert np.shares_memory(backend.vectors, vectors)
+    assert np.shares_memory(backend.scales, scales)
+
+
+def test_dense_backend_rejects_non_unicode_product_ids():
+    with pytest.raises(ValueError, match="product IDs"):
+        OnnxDenseBackend(
+            _Session(),
+            _Tokenizer(),
+            product_ids=np.array([b"A"]),
+            vectors=np.array([[127, 0]], dtype=np.int8),
+            scales=np.array([1 / 127], dtype=np.float32),
+        )
+
+
+def test_inference_exception_is_tolerated_until_failure_limit():
     class BrokenSession(_Session):
         def run(self, _outputs, _inputs):
             raise RuntimeError("inference failed")
@@ -166,6 +248,53 @@ def test_inference_exception_disables_backend():
         scales=np.array([1 / 127], dtype=np.float32),
     )
 
+    assert backend.search("query", 1) == []
+    assert backend.available is True
+    assert backend.status == "available"
+
+
+def test_dense_backend_resets_failure_count_after_success():
+    class FlakySession(_Session):
+        calls = 0
+
+        def run(self, outputs, inputs):
+            self.calls += 1
+            if self.calls in (1, 3, 4):
+                raise RuntimeError("inference failed")
+            return super().run(outputs, inputs)
+
+    backend = OnnxDenseBackend(
+        FlakySession(),
+        _Tokenizer(),
+        product_ids=np.array(["A"]),
+        vectors=np.array([[127, 0]], dtype=np.int8),
+        scales=np.array([1 / 127], dtype=np.float32),
+    )
+
+    assert backend.search("query", 1) == []
+    assert backend.search("query", 1)[0].parent_asin == "A"
+    assert backend.search("query", 1) == []
+    assert backend.search("query", 1) == []
+    assert backend.available is True
+
+
+def test_dense_backend_opens_circuit_after_failure_limit():
+    class BrokenSession(_Session):
+        def run(self, _outputs, _inputs):
+            raise RuntimeError("inference failed")
+
+    backend = OnnxDenseBackend(
+        BrokenSession(),
+        _Tokenizer(),
+        product_ids=np.array(["A"]),
+        vectors=np.array([[127, 0]], dtype=np.int8),
+        scales=np.array([1 / 127], dtype=np.float32),
+        failure_limit=3,
+    )
+
+    assert backend.search("query", 1) == []
+    assert backend.search("query", 1) == []
+    assert backend.available is True
     assert backend.search("query", 1) == []
     assert backend.available is False
     assert backend.status == "inference_failed"

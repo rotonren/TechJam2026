@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import hashlib
 import os
 from pathlib import Path
 from typing import Protocol
 
 import numpy as np
 
+from .integrity import sha256_file
 from .models import Candidate
 
 
@@ -42,18 +42,25 @@ class OnnxDenseBackend:
         product_ids: np.ndarray,
         vectors: np.ndarray,
         scales: np.ndarray,
+        failure_limit: int = 3,
     ) -> None:
         if vectors.ndim != 2 or len(product_ids) != vectors.shape[0]:
             raise ValueError("dense IDs and vectors have incompatible shapes")
         if scales.shape != (vectors.shape[0],):
             raise ValueError("dense vector scales have an incompatible shape")
+        if product_ids.dtype.kind != "U":
+            raise ValueError("dense product IDs must use a Unicode dtype")
+        if failure_limit < 1:
+            raise ValueError("dense failure limit must be positive")
         self.session = session
         self.tokenizer = tokenizer
-        self.product_ids = product_ids.astype(str)
+        self.product_ids = product_ids
         self.vectors = vectors.astype(np.int8, copy=False)
         self.scales = scales.astype(np.float32, copy=False)
         self._input_names = {item.name for item in session.get_inputs()}
         self._available = True
+        self._failure_limit = failure_limit
+        self._failures = 0
 
     @property
     def available(self) -> bool:
@@ -74,6 +81,7 @@ class OnnxDenseBackend:
                 indices.tolist(),
                 key=lambda index: (-float(scores[index]), self.product_ids[index]),
             )
+            self._failures = 0
             return [
                 Candidate(
                     parent_asin=str(self.product_ids[index]),
@@ -82,9 +90,11 @@ class OnnxDenseBackend:
                 )
                 for index in ranked
             ]
-        except Exception:  # noqa: BLE001 - corrupt optional inference disables dense.
-            self._available = False
-            self.status = "inference_failed"
+        except Exception:  # noqa: BLE001 - tolerate transient optional inference errors.
+            self._failures += 1
+            if self._failures >= self._failure_limit:
+                self._available = False
+                self.status = "inference_failed"
             return []
 
     def _embed(self, text: str) -> np.ndarray:
@@ -148,9 +158,9 @@ def load_dense_backend(
         return OnnxDenseBackend(
             session,
             tokenizer,
-            product_ids=np.load(product_ids_path, allow_pickle=False),
-            vectors=np.load(vectors_path, allow_pickle=False),
-            scales=np.load(scales_path, allow_pickle=False),
+            product_ids=np.load(product_ids_path, mmap_mode="r", allow_pickle=False),
+            vectors=np.load(vectors_path, mmap_mode="r", allow_pickle=False),
+            scales=np.load(scales_path, mmap_mode="r", allow_pickle=False),
         )
     except FileNotFoundError:
         return NullDenseBackend("asset_missing")
@@ -174,7 +184,7 @@ def _verify_manifest(manifest_path: Path) -> None:
         target = (root / relative.strip()).resolve()
         if root not in target.parents:
             raise ValueError("dense manifest path escapes asset root")
-        actual = hashlib.sha256(target.read_bytes()).hexdigest()
+        actual = sha256_file(target)
         if actual.lower() != digest.lower():
             raise ValueError(f"dense checksum mismatch: {relative}")
         entries += 1

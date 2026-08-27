@@ -6,6 +6,18 @@ from compasscart.models import Constraint, RetrievalPlan
 from compasscart.normalization import searchable_fields, searchable_term_set, terms
 
 
+class _ConnectionProxy:
+    def __init__(self, connection, execute):
+        self._connection = connection
+        self._execute = execute
+
+    def execute(self, sql, *args):
+        return self._execute(sql, *args)
+
+    def __getattr__(self, name):
+        return getattr(self._connection, name)
+
+
 def test_catalog_returns_valid_unique_matches(fixture_catalog_path):
     index = CatalogIndex(fixture_catalog_path)
     plan = RetrievalPlan(route="buying", query_text="blue running shoes")
@@ -152,6 +164,79 @@ def test_python_fallback_preserves_best_match(fixture_catalog_path):
     matches = index.search_lexical(plan, limit=10)
 
     assert matches[0].parent_asin == "JACKET1"
+
+
+def test_fts_operational_error_falls_back_without_disabling_fts(
+    fixture_catalog_path, monkeypatch
+):
+    index = CatalogIndex(fixture_catalog_path)
+    plan = RetrievalPlan(route="browsing", query_text="waterproof winter jacket")
+    original_execute = index.connection.execute
+
+    def fail_fts_query(sql, *args):
+        if "MATCH" in sql:
+            raise catalog_module.sqlite3.OperationalError("transient FTS error")
+        return original_execute(sql, *args)
+
+    monkeypatch.setattr(
+        index,
+        "connection",
+        _ConnectionProxy(index.connection, fail_fts_query),
+    )
+
+    assert index.search_lexical(plan, limit=10)[0].parent_asin == "JACKET1"
+    assert index._fts_enabled is True
+
+
+def test_fts_success_resets_transient_failure_count(fixture_catalog_path, monkeypatch):
+    index = CatalogIndex(fixture_catalog_path)
+    plan = RetrievalPlan(route="browsing", query_text="waterproof winter jacket")
+    original_execute = index.connection.execute
+    calls = 0
+
+    def flaky_fts_query(sql, *args):
+        nonlocal calls
+        if "MATCH" in sql:
+            calls += 1
+            if calls in (1, 3, 4):
+                raise catalog_module.sqlite3.OperationalError("transient FTS error")
+        return original_execute(sql, *args)
+
+    monkeypatch.setattr(
+        index,
+        "connection",
+        _ConnectionProxy(index.connection, flaky_fts_query),
+    )
+
+    for _ in range(4):
+        index.search_lexical(plan, limit=10)
+
+    assert index._fts_enabled is True
+
+
+def test_fts_circuit_opens_after_three_consecutive_operational_errors(
+    fixture_catalog_path, monkeypatch
+):
+    index = CatalogIndex(fixture_catalog_path)
+    plan = RetrievalPlan(route="browsing", query_text="waterproof winter jacket")
+    original_execute = index.connection.execute
+
+    def fail_fts_query(sql, *args):
+        if "MATCH" in sql:
+            raise catalog_module.sqlite3.OperationalError("transient FTS error")
+        return original_execute(sql, *args)
+
+    monkeypatch.setattr(
+        index,
+        "connection",
+        _ConnectionProxy(index.connection, fail_fts_query),
+    )
+
+    assert index.search_lexical(plan, limit=10)[0].parent_asin == "JACKET1"
+    assert index.search_lexical(plan, limit=10)[0].parent_asin == "JACKET1"
+    assert index._fts_enabled is True
+    assert index.search_lexical(plan, limit=10)[0].parent_asin == "JACKET1"
+    assert index._fts_enabled is False
 
 
 def test_python_fallback_uses_compact_masks_without_retokenizing_products(

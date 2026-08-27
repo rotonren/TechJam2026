@@ -7,6 +7,8 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from compasscart.integrity import sha256_file
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ASSET_FILES = (
     "assets/SHA256SUMS",
@@ -80,7 +82,7 @@ def _verify_assets(root: Path) -> None:
         target = (asset_root / normalized).resolve()
         if asset_root not in target.parents:
             raise ValueError(f"asset path escapes root: {relative}")
-        actual = hashlib.sha256(target.read_bytes()).hexdigest()
+        actual = sha256_file(target)
         if actual.lower() != digest.lower():
             raise ValueError(f"asset checksum mismatch: {relative}")
         verified.add(normalized)

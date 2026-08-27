@@ -105,6 +105,7 @@ class CatalogIndex:
         self.quality: dict[str, float] = {}
         self._popular_order: tuple[str, ...] = ()
         self._fts_enabled = False
+        self._fts_failures = 0
         self._load(enable_fts=enable_fts)
 
     def _load(self, *, enable_fts: bool) -> None:
@@ -264,9 +265,12 @@ class CatalogIndex:
                 ).fetchall()
                 ranked = [str(row[0]) for row in rows]
                 ranked = [item for item in ranked if self._matches_hard(item, plan)]
+                self._fts_failures = 0
                 return self._as_candidates(ranked[:limit], source="lexical")
             except sqlite3.OperationalError:
-                self._fts_enabled = False
+                self._fts_failures += 1
+                if self._fts_failures >= 3:
+                    self._fts_enabled = False
 
         return self._fallback_search(plan, query_terms, limit)
 
