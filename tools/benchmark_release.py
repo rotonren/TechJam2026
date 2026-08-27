@@ -26,6 +26,7 @@ from evaluator.local_evaluator import normalize_recommendations
 from tools.proxy_dataset import sha256_file, stable_int
 from tools.run_cv import _latency_summary
 from tools.run_proxy import ProxyDialogue, _load_verified_proxy_suite
+from tools.runtime_fingerprint import config_hash, runtime_hash
 
 _SESSION_COUNT = 200
 _TURNS = (1, 2, 3, 4)
@@ -42,7 +43,7 @@ _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 _TRIAL_KEYS = frozenset({
     "init_ms", "peak_mib", "rss_mib", "peak_metric_source", "latencies_ms",
     "trace_latencies_ms", "instrumentation_delta_ms", "dense_available", "dense_status",
-    "fallback_count", "response_hash", "transcript_hash", "catalog_hash", "catalog_snapshot_hash",
+    "fallback_count", "runtime_hash", "config_hash", "response_hash", "transcript_hash", "catalog_hash", "catalog_snapshot_hash",
     "capture_provenance", "response_count", "platform",
 })
 _CAPTURE_METADATA_KEYS = frozenset({
@@ -74,7 +75,7 @@ _COMPARISON_COMPATIBILITY_KEYS = frozenset(name for name, _ in _COMPARISON_COMPA
 _COMPARISON_BOOLEAN_KEYS = _COMPARISON_COMPATIBILITY_KEYS | frozenset({
     "accepted", "compatible", "no_regression", "material_gain", "safe",
 })
-_COMPARISON_KEYS = _COMPARISON_BOOLEAN_KEYS | frozenset({"reasons", "deltas"})
+_COMPARISON_KEYS = _COMPARISON_BOOLEAN_KEYS | frozenset({"comparison_mode", "reasons", "deltas"})
 
 
 def _repo_root() -> Path:
@@ -434,7 +435,7 @@ def _capture_payload(
         "proxy_manifest_hash": proxy_manifest_hash,
         "representative_dataset_hash": representative_dataset_hash,
         "agent_class": f"{agent.__class__.__module__}:{agent.__class__.__qualname__}",
-        "config_hash": hashlib.sha256(repr(getattr(agent, "config", None)).encode("utf-8")).hexdigest(),
+        "config_hash": config_hash(getattr(agent, "config", None)),
         "dense_available": dense_available,
         "dense_status": getattr(dense, "status", "available" if dense_available else "unavailable"),
         "capture_seed": 20260829, "session_count": _SESSION_COUNT, "response_count": _RESPONSE_COUNT,
@@ -553,12 +554,14 @@ def _validate_trial(trial: object) -> dict[str, object]:
         raise ValueError("fallback count is invalid")
     if isinstance(trial["response_count"], bool) or trial["response_count"] != _RESPONSE_COUNT:
         raise ValueError("trial response count is invalid")
-    for name in ("response_hash", "transcript_hash", "catalog_hash"):
+    for name in ("runtime_hash", "config_hash", "response_hash", "transcript_hash", "catalog_hash"):
         _validate_hash(trial[name], name)
     if trial["catalog_snapshot_hash"] != trial["catalog_hash"]:
         raise ValueError("trial catalog snapshot provenance is invalid")
     _validate_hash(trial["catalog_snapshot_hash"], "catalog_snapshot_hash")
-    _validate_capture_provenance(trial["capture_provenance"])
+    provenance = _validate_capture_provenance(trial["capture_provenance"])
+    if trial["config_hash"] != provenance["config_hash"]:
+        raise ValueError("trial config fingerprint does not match capture provenance")
     _validate_runtime_platform(trial["platform"])
     return trial
 
@@ -586,7 +589,7 @@ def run_worker(
     init_ms = (clock() - started) * 1000
     _finite(init_ms)
     actual_agent_class = f"{agent.__class__.__module__}:{agent.__class__.__qualname__}"
-    actual_config_hash = hashlib.sha256(repr(getattr(agent, "config", None)).encode("utf-8")).hexdigest()
+    actual_config_hash = config_hash(getattr(agent, "config", None))
     if manifest["agent_class"] != actual_agent_class or manifest["config_hash"] != actual_config_hash:
         raise ValueError("capture manifest agent provenance is invalid")
     catalog = getattr(agent, "catalog", None)
@@ -643,7 +646,8 @@ def run_worker(
         "trace_latencies_ms": trace_latency_values,
         "instrumentation_delta_ms": _latency_summary([wall - trace for wall, trace in zip(latency_values, trace_latency_values, strict=True)]),
         "dense_available": dense_available, "dense_status": dense_status,
-        "fallback_count": fallback_count, "response_hash": _canonical_hash(normalized_responses),
+        "fallback_count": fallback_count, "runtime_hash": runtime_hash(), "config_hash": actual_config_hash,
+        "response_hash": _canonical_hash(normalized_responses),
         "transcript_hash": transcript_hash, "catalog_hash": catalog_hash, "catalog_snapshot_hash": catalog_hash,
         "capture_provenance": _capture_provenance(manifest, manifest_hash), "response_count": _RESPONSE_COUNT,
         "platform": _runtime_platform_data(),
@@ -658,6 +662,8 @@ def aggregate_trials(trials: list[dict[str, object]]) -> dict[str, object]:
     values: defaultdict[str, list[float]] = defaultdict(list)
     combined_latencies: list[float] = []
     response_hashes: set[str] = set()
+    runtime_hashes: set[str] = set()
+    config_hashes: set[str] = set()
     transcript_hashes: set[str] = set()
     catalog_hashes: set[str] = set()
     snapshot_hashes: set[str] = set()
@@ -674,6 +680,8 @@ def aggregate_trials(trials: list[dict[str, object]]) -> dict[str, object]:
         latencies = _validate_latency_values(trial["latencies_ms"], "latencies_ms")
         combined_latencies.extend(latencies)
         response_hash = trial["response_hash"]
+        runtime_hashes.add(trial["runtime_hash"])
+        config_hashes.add(trial["config_hash"])
         transcript_hash = trial["transcript_hash"]
         response_hashes.add(response_hash)
         transcript_hashes.add(transcript_hash)
@@ -685,14 +693,14 @@ def aggregate_trials(trials: list[dict[str, object]]) -> dict[str, object]:
         capture_provenances[_canonical_hash(trial["capture_provenance"])] = trial["capture_provenance"]
         runtime_platforms[_canonical_hash(trial["platform"])] = trial["platform"]
         peak_sources.add(trial["peak_metric_source"])
-    if len(response_hashes) != 1 or len(transcript_hashes) != 1 or len(catalog_hashes) != 1 or len(snapshot_hashes) != 1 or len(capture_provenances) != 1 or len(runtime_platforms) != 1 or len(peak_sources) != 1:
+    if len(response_hashes) != 1 or len(runtime_hashes) != 1 or len(config_hashes) != 1 or len(transcript_hashes) != 1 or len(catalog_hashes) != 1 or len(snapshot_hashes) != 1 or len(capture_provenances) != 1 or len(runtime_platforms) != 1 or len(peak_sources) != 1:
         raise ValueError("trials disagree on input or output hash")
     return {
         "trial_count": len(trials), "init_ms": statistics.median(values["init_ms"]),
         "peak_mib": statistics.median(values["peak_mib"]), "rss_mib": statistics.median(values["rss_mib"]),
         "latency_ms": _latency_summary(combined_latencies), "dense_available": all(dense_values),
         "dense_statuses": sorted(statuses), "fallback_count": fallback_count,
-        "response_hash": response_hashes.pop(), "transcript_hash": transcript_hashes.pop(), "catalog_hash": catalog_hashes.pop(),
+        "runtime_hash": runtime_hashes.pop(), "config_hash": config_hashes.pop(), "response_hash": response_hashes.pop(), "transcript_hash": transcript_hashes.pop(), "catalog_hash": catalog_hashes.pop(),
         "catalog_snapshot_hash": snapshot_hashes.pop(), "capture_provenance": next(iter(capture_provenances.values())),
         "runtime_platform": next(iter(runtime_platforms.values())), "peak_metric_source": peak_sources.pop(),
         "response_count": _RESPONSE_COUNT, "trials": trials,
@@ -704,7 +712,7 @@ def _validate_aggregate_report(report: object) -> dict[str, object]:
         raise TypeError("aggregate report must be an object")
     aggregate_keys = {
         "trial_count", "init_ms", "peak_mib", "rss_mib", "latency_ms", "dense_available",
-        "dense_statuses", "fallback_count", "response_hash", "transcript_hash", "catalog_hash",
+        "dense_statuses", "fallback_count", "runtime_hash", "config_hash", "response_hash", "transcript_hash", "catalog_hash",
         "catalog_snapshot_hash", "capture_provenance", "runtime_platform", "peak_metric_source", "response_count", "trials",
     }
     keys = set(report)
@@ -740,6 +748,8 @@ def _validate_aggregate_report(report: object) -> dict[str, object]:
         comparison = report["comparison"]
         if not isinstance(comparison, dict) or set(comparison) != _COMPARISON_KEYS:
             raise ValueError("aggregate report comparison is invalid")
+        if comparison["comparison_mode"] not in {"equivalent", "resource"}:
+            raise ValueError("aggregate report comparison is invalid")
         if any(not isinstance(comparison[name], bool) for name in _COMPARISON_BOOLEAN_KEYS):
             raise ValueError("aggregate report comparison is invalid")
         expected_reasons = [
@@ -750,7 +760,9 @@ def _validate_aggregate_report(report: object) -> dict[str, object]:
         compatible = all(comparison[name] for name in _COMPARISON_COMPATIBILITY_KEYS)
         if comparison["compatible"] is not compatible:
             raise ValueError("aggregate report comparison is invalid")
-        accepted = compatible and comparison["no_regression"] and comparison["material_gain"] and comparison["safe"]
+        accepted = compatible and comparison["no_regression"] and comparison["safe"] and (
+            comparison["comparison_mode"] == "resource" or comparison["material_gain"]
+        )
         if comparison["accepted"] is not accepted:
             raise ValueError("aggregate report comparison is invalid")
         deltas = comparison["deltas"]
@@ -762,8 +774,11 @@ def _validate_aggregate_report(report: object) -> dict[str, object]:
 
 
 def compare_reports(
-    candidate: dict[str, object], baseline: dict[str, object], *, require_dense: bool = True
+    candidate: dict[str, object], baseline: dict[str, object], *, require_dense: bool = True,
+    comparison_mode: str = "equivalent",
 ) -> dict[str, object]:
+    if comparison_mode not in {"equivalent", "resource"}:
+        raise ValueError("comparison mode is invalid")
     def metrics(report: dict[str, object], *, baseline_mode: bool) -> tuple[float, float, float, float]:
         latency = report.get("latency_ms")
         if not isinstance(latency, dict):
@@ -788,7 +803,7 @@ def compare_reports(
         "same_catalog": candidate["catalog_hash"] == baseline["catalog_hash"],
         "same_catalog_snapshot": candidate["catalog_snapshot_hash"] == baseline["catalog_snapshot_hash"],
         "same_transcript": candidate["transcript_hash"] == baseline["transcript_hash"],
-        "same_output": candidate["response_hash"] == baseline["response_hash"],
+        "same_output": comparison_mode == "resource" or candidate["response_hash"] == baseline["response_hash"],
         "same_trial_count": candidate["trial_count"] == baseline["trial_count"],
     }
     compatible = all(compatibility.values())
@@ -800,7 +815,8 @@ def compare_reports(
     safe = cand_max < 1500 and candidate.get("fallback_count") == 0 and (
         not require_dense or candidate.get("dense_available") is True
     )
-    return {"accepted": bool(compatible and no_regression and material_gain and safe), "compatible": compatible,
+    accepted = compatible and no_regression and safe and (comparison_mode == "resource" or material_gain)
+    return {"comparison_mode": comparison_mode, "accepted": bool(accepted), "compatible": compatible,
             **compatibility, "reasons": reasons, "no_regression": no_regression, "material_gain": material_gain, "safe": safe,
             "deltas": {"p95_pct": (cand_p95 / base_p95 - 1) * 100, "init_pct": (cand_init / base_init - 1) * 100, "peak_pct": (cand_peak / base_peak - 1) * 100}}
 
@@ -988,6 +1004,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--cwd-mode", choices=("root", "outside"), default="outside")
     parser.add_argument("--output")
     parser.add_argument("--compare")
+    parser.add_argument("--comparison-mode", choices=("equivalent", "resource"), default="equivalent")
     parser.add_argument("--allow-dense-unavailable", action="store_true")
     parser.add_argument("--worker-timeout-seconds", type=float, default=3600)
     args = parser.parse_args(raw_args)
@@ -999,10 +1016,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         allowed = {"--worker", "--catalog", "--transcript"}
         required = {"--transcript"}
     else:
-        allowed = {"--catalog", "--transcript", "--trials", "--cwd-mode", "--output", "--compare", "--allow-dense-unavailable", "--worker-timeout-seconds"}
+        allowed = {"--catalog", "--transcript", "--trials", "--cwd-mode", "--output", "--compare", "--comparison-mode", "--allow-dense-unavailable", "--worker-timeout-seconds"}
         required = {"--transcript", "--output"}
     invalid = provided - allowed
     missing = required - provided
+    if not args.compare and args.comparison_mode != "equivalent":
+        parser.error("comparison mode requires --compare")
     if invalid:
         parser.error(f"options are incompatible with this mode: {', '.join(sorted(invalid))}")
     if missing:
@@ -1030,7 +1049,8 @@ def main(argv: list[str] | None = None) -> None:
     )
     if args.compare:
         report["comparison"] = compare_reports(
-            report, baseline, require_dense=not args.allow_dense_unavailable
+            report, baseline, require_dense=not args.allow_dense_unavailable,
+            comparison_mode=args.comparison_mode,
         )
     write_report(args.output, report)
     latency = report["latency_ms"]

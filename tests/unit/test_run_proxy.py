@@ -587,6 +587,40 @@ def test_run_proxy_successful_normal_report_is_exclusive(tmp_path: Path, monkeyp
         run_proxy(args)
 
 
+def test_normal_proxy_report_binds_shared_runtime_and_config_fingerprints(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from compasscart.config import RuntimeConfig
+    from tools.run_proxy import run_proxy
+    from tools.runtime_fingerprint import config_hash
+
+    _patch_small_proxy_run(monkeypatch, invalid_count=0)
+    monkeypatch.setattr("tools.run_proxy.runtime_hash", lambda: "a" * 64)
+    monkeypatch.setattr("tools.run_proxy.config_hash", config_hash)
+    monkeypatch.setattr("tools.run_proxy._load_agent", lambda spec: lambda catalog: SimpleNamespace(config=RuntimeConfig()))
+    monkeypatch.setattr("tools.run_proxy._config_hash", lambda agent: config_hash(agent.config))
+    args = _run_args(tmp_path, audit_label=None)
+
+    run_proxy(args)
+
+    report = json.loads(args.output.read_text(encoding="utf-8"))
+    assert report["runtime_hash"] == "a" * 64
+    assert report["config_hash"] == config_hash(RuntimeConfig())
+
+
+def test_audit_report_schema_does_not_include_runtime_hash(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from tools.run_proxy import run_proxy
+
+    _patch_small_proxy_run(monkeypatch, invalid_count=0)
+    monkeypatch.setattr("tools.run_proxy.runtime_hash", lambda: "a" * 64)
+    args = _run_args(tmp_path, audit_label="baseline")
+
+    run_proxy(args)
+
+    payload = json.loads(args.output.read_text(encoding="utf-8"))
+    assert "runtime_hash" not in payload
+
+
 def test_run_proxy_successful_audit_uses_reservation_and_releases_lock(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

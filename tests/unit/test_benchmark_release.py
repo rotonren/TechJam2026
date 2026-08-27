@@ -20,6 +20,7 @@ def _trial(**overrides: object) -> dict[str, object]:
         "peak_metric_source": "windows_peak_wset", "latencies_ms": [2.0] * 800,
         "trace_latencies_ms": [1.0] * 800, "instrumentation_delta_ms": {"count": 800, "p50": 1.0, "p95": 1.0, "max": 1.0},
         "dense_available": True, "dense_status": "available", "fallback_count": 0,
+        "runtime_hash": "f" * 64, "config_hash": "d" * 64,
         "response_hash": "a" * 64, "transcript_hash": "b" * 64, "catalog_hash": "c" * 64,
         "catalog_snapshot_hash": "c" * 64,
         "capture_provenance": {
@@ -796,6 +797,12 @@ def test_aggregate_trials_rejects_inexact_schema_and_catalog_disagreement() -> N
         bench.aggregate_trials([{**valid, "instrumentation_delta_ms": {"count": 800, "p50": 0, "p95": 0, "max": 0}}])
 
 
+def test_worker_trial_accepts_runtime_and_config_fingerprints() -> None:
+    trial = _full_trial()
+
+    assert bench._validate_trial(trial) == trial
+
+
 def test_compare_reports_requires_catalog_provenance_and_exact_boundaries() -> None:
     baseline = _parent_report(init_ms=100, peak_mib=100, latency_ms=100)
     candidate = _parent_report(init_ms=95, peak_mib=105, latency_ms=105)
@@ -805,6 +812,27 @@ def test_compare_reports_requires_catalog_provenance_and_exact_boundaries() -> N
     assert bench.compare_reports(_parent_report(init_ms=95, peak_mib=100, latency_ms=1500), baseline)["accepted"] is False
     with pytest.raises(ValueError):
         bench.compare_reports({**candidate, "fallback_count": True}, baseline)
+
+
+def test_resource_comparison_allows_changed_output_without_relaxing_resource_limits() -> None:
+    baseline = _parent_report(init_ms=100, peak_mib=100, latency_ms=100)
+    candidate = _parent_report(init_ms=105, peak_mib=105, latency_ms=105, response_hash="d" * 64)
+
+    assert bench.compare_reports(candidate, baseline)["accepted"] is False
+    comparison = bench.compare_reports(candidate, baseline, comparison_mode="resource")
+    assert comparison["accepted"] is True
+    assert comparison["same_output"] is True
+    assert comparison["material_gain"] is False
+
+
+def test_resource_comparison_rejects_fallback_or_dense_unavailability() -> None:
+    baseline = _parent_report(init_ms=100, peak_mib=100, latency_ms=100)
+
+    fallback = _parent_report(init_ms=100, peak_mib=100, latency_ms=100, response_hash="d" * 64, fallback_count=1)
+    unavailable = _parent_report(init_ms=100, peak_mib=100, latency_ms=100, response_hash="d" * 64, dense_available=False, dense_status="unavailable")
+
+    assert bench.compare_reports(fallback, baseline, comparison_mode="resource")["accepted"] is False
+    assert bench.compare_reports(unavailable, baseline, comparison_mode="resource")["accepted"] is False
 
 
 def test_compare_reports_returns_structured_compatibility_mismatches() -> None:
@@ -843,12 +871,13 @@ def test_compare_reports_returns_structured_compatibility_mismatches() -> None:
             ["peak_metric_source_mismatch"],
         ),
         (
-            _parent_report(
-                init_ms=95, peak_mib=100, latency_ms=90,
-                capture_provenance={
-                    **_trial()["capture_provenance"], "config_hash": "f" * 64,
-                },
-            ),
+                _parent_report(
+                    init_ms=95, peak_mib=100, latency_ms=90,
+                    capture_provenance={
+                        **_trial()["capture_provenance"], "config_hash": "f" * 64,
+                    },
+                    config_hash="f" * 64,
+                ),
             {"same_capture_provenance"},
             ["capture_provenance_mismatch"],
         ),

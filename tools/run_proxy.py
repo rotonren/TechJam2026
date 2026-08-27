@@ -33,6 +33,7 @@ from evaluator.local_evaluator import (
     normalize_recommendations,
 )
 from tools.run_cv import _latency_summary, selection_score
+from tools.runtime_fingerprint import config_hash, runtime_hash
 
 INITIAL_BUYING = (
     "I'm looking for {category}. A key requirement is: {constraint}.",
@@ -612,7 +613,7 @@ def _git_commit() -> str:
 
 
 def _config_hash(agent: object) -> str:
-    return hashlib.sha256(repr(getattr(agent, "config", None)).encode("utf-8")).hexdigest()
+    return config_hash(getattr(agent, "config", None))
 
 
 def _trace_details(
@@ -882,6 +883,7 @@ def run_proxy(args: argparse.Namespace) -> None:
         invalid_rate = total_invalid_count / max(selected_sample_count, 1)
         report = {
             **metadata,
+            "runtime_hash": runtime_hash(),
             "folds": fold_reports,
             "mean_technical_score": round(statistics.fmean(scores), 6) if scores else 0.0,
             "std_technical_score": round(statistics.pstdev(scores), 6) if scores else 0.0,
