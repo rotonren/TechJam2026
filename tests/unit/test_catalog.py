@@ -17,6 +17,19 @@ def test_catalog_returns_valid_unique_matches(fixture_catalog_path):
     assert all(item.parent_asin in index.valid_ids for item in matches)
 
 
+def test_popular_ids_uses_order_cached_during_catalog_load(fixture_catalog_path):
+    index = CatalogIndex(fixture_catalog_path)
+    expected = index.popular_ids(4)
+
+    class QualityThatCannotBeRead(dict[str, float]):
+        def __getitem__(self, identifier: str) -> float:
+            raise AssertionError(f"popular_ids reread quality for {identifier}")
+
+    index.quality = QualityThatCannotBeRead(index.quality)
+
+    assert index.popular_ids(4) == expected
+
+
 @pytest.mark.parametrize("enable_fts", (True, False))
 def test_catalog_does_not_build_a_duplicate_field_term_index(
     fixture_catalog_path, enable_fts

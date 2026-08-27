@@ -103,6 +103,7 @@ class CatalogIndex:
         self.field_terms: dict[str, tuple[set[str], ...]] = {}
         self.field_masks: dict[str, bytes] = {}
         self.quality: dict[str, float] = {}
+        self._popular_order: tuple[str, ...] = ()
         self._fts_enabled = False
         self._load(enable_fts=enable_fts)
 
@@ -174,6 +175,9 @@ class CatalogIndex:
             self.quality[parent_asin] = 0.7 * (rating / 5.0) + 0.3 * (
                 math.log1p(reviews) / review_scale
             )
+        self._popular_order = tuple(
+            sorted(self.valid_ids, key=lambda item: (-self.quality[item], item))
+        )
 
     @staticmethod
     def _number(value: object) -> float:
@@ -241,9 +245,7 @@ class CatalogIndex:
         return self.products[parent_asin]
 
     def popular_ids(self, limit: int = 10) -> list[str]:
-        return sorted(self.valid_ids, key=lambda item: (-self.quality[item], item))[
-            :limit
-        ]
+        return list(self._popular_order[: max(int(limit), 0)])
 
     def search_lexical(self, plan: RetrievalPlan, *, limit: int) -> list[Candidate]:
         query_terms = terms(plan.query_text)

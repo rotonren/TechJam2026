@@ -1,3 +1,5 @@
+import pytest
+
 from compasscart.catalog import CatalogIndex
 from compasscart.models import Candidate, Constraint, RetrievalPlan, SessionState
 from compasscart.retrieval import HybridRetriever, reciprocal_rank_fusion
@@ -28,6 +30,80 @@ def test_rrf_fuses_and_deduplicates_candidates():
 
     assert set(fused) == {"A", "B", "C"}
     assert fused[0] == "B"
+
+
+def test_retrieval_skips_fallback_when_dense_results_fill_desired_candidates(
+    fixture_catalog_path, monkeypatch
+):
+    class DenseAll:
+        available = True
+
+        def search(self, _text, _limit):
+            return [Candidate(identifier) for identifier in index.valid_ids]
+
+    index = CatalogIndex(fixture_catalog_path)
+    retriever = HybridRetriever(index, DenseAll())
+    plan = RetrievalPlan(
+        route="buying",
+        query_text="",
+        source_weights=(("dense", 1.0),),
+        candidate_limit=4,
+    )
+    monkeypatch.setattr(
+        retriever,
+        "_fallback_ids",
+        lambda _plan: (_ for _ in ()).throw(AssertionError("fallback was called")),
+    )
+
+    candidates = retriever.retrieve(plan)
+
+    assert {candidate.parent_asin for candidate in candidates} == index.valid_ids
+
+
+@pytest.mark.parametrize(
+    ("plan", "exclude_ids", "expected_ids"),
+    (
+        (
+            RetrievalPlan(route="buying", query_text="unmatched query"),
+            (),
+            ("SHOE1", "JACKET1", "DRESS1", "BELT1"),
+        ),
+        (
+            RetrievalPlan(
+                route="buying",
+                query_text="purple shoes",
+                hard_constraints=(_hard_constraint("color", "purple"),),
+            ),
+            (),
+            ("SHOE1", "JACKET1", "DRESS1", "BELT1"),
+        ),
+        (
+            RetrievalPlan(route="buying", query_text="unmatched query"),
+            ("SHOE1", "JACKET1", "DRESS1", "BELT1"),
+            ("SHOE1", "JACKET1", "DRESS1", "BELT1"),
+        ),
+    ),
+    ids=("fallback", "relaxation", "exhausted-exclusion"),
+)
+def test_retrieval_computes_fallback_once_without_changing_result_order(
+    fixture_catalog_path, monkeypatch, plan, exclude_ids, expected_ids
+):
+    index = CatalogIndex(fixture_catalog_path)
+    retriever = HybridRetriever(index)
+    fallback_ids = retriever._fallback_ids
+    calls = 0
+
+    def counted_fallback(current_plan):
+        nonlocal calls
+        calls += 1
+        return fallback_ids(current_plan)
+
+    monkeypatch.setattr(retriever, "_fallback_ids", counted_fallback)
+
+    candidates = retriever.retrieve(plan, exclude_ids=exclude_ids)
+
+    assert calls == 1
+    assert tuple(candidate.parent_asin for candidate in candidates) == expected_ids
 
 
 def test_hybrid_retrieval_uses_attributes_and_returns_catalog_fallbacks(

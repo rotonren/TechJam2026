@@ -74,17 +74,25 @@ class HybridRetriever:
         fused_ids = [item for item in fused_ids if item in self.catalog.valid_ids]
 
         desired = min(10, len(self.catalog.valid_ids), plan.candidate_limit)
-        fallback_ids = self._fallback_ids(plan)
-        for identifier in self._exact_ids(fallback_ids, plan, excluded):
-            if identifier not in fused_ids:
-                fused_ids.append(identifier)
-            if len(fused_ids) >= desired:
-                break
+        fallback_ids: list[str] | None = None
+
+        def fallback() -> list[str]:
+            nonlocal fallback_ids
+            if fallback_ids is None:
+                fallback_ids = self._fallback_ids(plan)
+            return fallback_ids
+
+        if len(fused_ids) < desired:
+            for identifier in self._exact_ids(fallback(), plan, excluded):
+                if identifier not in fused_ids:
+                    fused_ids.append(identifier)
+                if len(fused_ids) >= desired:
+                    break
 
         exact_ids = fused_ids[: plan.candidate_limit]
         relaxed_ids: list[str] = []
         if len(exact_ids) < desired:
-            for identifier in fallback_ids:
+            for identifier in fallback():
                 if (
                     identifier in excluded
                     or identifier in exact_ids
@@ -100,7 +108,7 @@ class HybridRetriever:
         # exclusion set can consume every eligible ID.  Preserve the official
         # valid-ID guarantee as a last resort, after all unshown IDs were tried.
         if not exact_ids and not relaxed_ids and excluded:
-            for identifier in fallback_ids:
+            for identifier in fallback():
                 if identifier not in self.catalog.valid_ids:
                     continue
                 relaxed_ids.append(identifier)
