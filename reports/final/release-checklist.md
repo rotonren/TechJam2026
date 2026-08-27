@@ -2,11 +2,11 @@
 
 ## Candidate Integrity
 
-- [x] Runtime configuration selected only from stratified development folds 1-4.
-- [x] Candidate commit `4c41adf` tagged `compasscart-v2-candidate` before fold 5 was viewed.
-- [x] Sealed fold 5 executed exactly once after the candidate tag; no post-audit code tuning performed.
+- [x] Optimized runtime commit `54b2a62` selected only from stratified development folds 1-4.
+- [x] Candidate metrics and exact runtime/data/evaluator fingerprints recorded in `final-results.json`.
+- [x] Historical v2 fold 5 evidence remains attributed to v2 and is not presented as blind evidence for this candidate.
 - [x] Official evaluator, public labels, contract, and catalog were not modified.
-- [x] Final evidence records candidate commit and configuration hash.
+- [ ] Owner approves the review branch and creates `compasscart-v3-candidate` on the merged commit.
 
 ## Runtime and Reliability
 
@@ -28,6 +28,7 @@
 - [x] Data and model attribution notices are included.
 - [x] Apache-2.0 license text for the redistributed ONNX model is included.
 - [x] Final ZIP size and SHA256 are printed by `python -m tools.package_submission`.
+- [x] Score optimization evidence is included in the deterministic submission allowlist.
 
 ## Submission Materials
 
@@ -35,6 +36,7 @@
 - [x] Architecture report maps implementation evidence to judging concerns.
 - [x] Devpost draft contains problem, innovation, results, feasibility, and team roles.
 - [x] Three-minute demo covers Browsing, Intent Override, and network-disabled operation.
+- [ ] Replace `owner_review` metadata with the merged commit and final candidate tag.
 - [ ] Replace five role placeholders with final member names before portal submission.
 - [ ] Record the final ZIP SHA256 in the submission portal and team handoff sheet.
 - [ ] Capture the demo video and verify audio, terminal readability, and time limit.

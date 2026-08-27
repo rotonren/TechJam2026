@@ -1,8 +1,25 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+from src.compasscart.config import RuntimeConfig
 from tools.analyze_failures import summarize_failures
 from tools.compare_results import compare_results
-from tools.run_cv import _latency_summary, assign_folds, select_samples, selection_score
+from tools.run_cv import (
+    _config_hash,
+    _latency_summary,
+    assign_folds,
+    select_samples,
+    selection_score,
+)
+
+
+def test_config_hash_is_canonical_and_stable():
+    agent = SimpleNamespace(config=RuntimeConfig())
+
+    assert _config_hash(agent) == (
+        "4400c69e62a123979d7cadef7b9384f975b9fda28dd18aa93a8a3758544b65e5"
+    )
 
 
 def _samples() -> list[dict]:

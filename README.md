@@ -46,6 +46,42 @@ $env:COMPASSCART_DISABLE_DENSE = "1"
 Asset corruption, optional dependency failure, or dense inference failure also
 switches to lexical retrieval automatically. Neither path performs network I/O.
 
+## Local Verification and Demo
+
+Install the pinned runtime and development dependencies, then run the release
+audit against the official 50,000-item catalog:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt -r requirements-dev.txt
+$env:PYTHONPATH = "src;."
+.\.venv\Scripts\python.exe -m tools.release_audit --catalog data\catalog.jsonl
+```
+
+The audit verifies the catalog, public-set, evaluator, dependency, and dense
+asset fingerprints; exercises an agent response; and builds the allowlisted
+submission archive. It fails closed if dense retrieval is unavailable. The
+catalog is intentionally not committed; use `tools/download_kit.ps1` to fetch
+the organizer kit when it is absent.
+
+For a terminal demo:
+
+```powershell
+.\.venv\Scripts\python.exe -m tools.demo_chat --catalog data\catalog.jsonl --top 3
+```
+
+For the development-only browser console, provide a random secret of at least
+43 characters and start the local server:
+
+```powershell
+$env:COMPASSCART_DEBUG_TOKEN = "replace-with-a-random-secret-of-at-least-43-characters"
+$env:PYTHONPATH = "src;."
+.\.venv\Scripts\python.exe -m tools.run_debug_server
+```
+
+Open `http://127.0.0.1:8765`. The console binds to localhost by default and is
+excluded from the submission package.
+
 ## Architecture
 
 `CatalogIndex` provides FTS5 BM25, structured attributes, popularity, and a
@@ -62,20 +98,25 @@ Additional rationale is in `reports/final/architecture.md`.
 ## Measured Results
 
 All measurements use the unchanged official evaluator and frozen public data.
-The starter baseline scored `0.106710`. The release candidate is commit
-`4c41adf` (`compasscart-v2-candidate`). Development CV on folds 1-4 scored
-`0.519195 +/- 0.036878` (mean TechnicalScore), with selection score `0.500756`.
-Fold scores were `0.479726`, `0.568101`, `0.541363`, and `0.487589`; no runtime
-fallback occurred. Per-fold P95 response latency ranged from 309 ms to 335 ms
-on the development host.
+The starter baseline scored `0.106710`. The optimized candidate is under owner
+review on branch `codex/release-v3-alignment`; its runtime code is commit
+`54b2a62`, and the proposed post-review tag is `compasscart-v3-candidate`.
 
-The sealed fold 5 was run once after the candidate tag and scored `0.514768`
-with no fallback (HitRate@10 `0.60`, MRR `0.365893`, MTTC `5.75`, P95
-`370.616 ms`). The final official 200-session public evaluation from the same
-tagged candidate scored `0.518309` (HitRate@10 `0.625`, MRR `0.321365`, MTTC
-`5.53`). Scenario HitRate@10 was `0.60` Boundary, `0.65` Browsing, `0.625`
-Buying, and `0.566667` Intent Override. Full evidence is in
+Development CV on folds 1-4 scored `0.662377 +/- 0.036433` (mean
+TechnicalScore), with selection score `0.644160`. Fold scores were `0.670738`,
+`0.705902`, `0.604819`, and `0.668048`; no runtime fallback occurred. The
+maximum fold P95 was `483.890 ms` on the development host.
+
+A fresh Windows dense-runtime reproduction scored `0.660605` on the official
+200-session public evaluator, with HitRate@10 `0.840`, MRR `0.376349`, and MTTC
+`4.615`. Scenario HitRate@10 was `0.90` Boundary, `0.85` Browsing, `0.8625`
+Buying, and `0.733333` Intent Override. Exact dependency versions and data,
+evaluator, and catalog hashes are recorded in
 `reports/final/final-results.json`.
+
+Fold 5 was viewed during the historical v2 release and is not represented as a
+blind audit for this optimized candidate. Version selection used folds 1-4;
+the organizer's private 800-session evaluation remains the true blind test.
 
 The agent reports zero prompt and completion tokens. Official runtime API cost
 is USD 0.00 per session and USD 0.00 for the full 800-session private set.
@@ -87,6 +128,10 @@ a one-time CPU process.
 - Intent Override remains the least stable scenario because terse replacement
   messages may expose only one attribute.
 - Dense quality depends on text metadata; images are intentionally out of scope.
+- Dense ranking boundaries can vary slightly across compatible NumPy, ONNX
+  Runtime, and tokenizer versions. Release evidence records exact versions and
+  input hashes; `tools.release_audit` fails when the runtime silently falls back
+  to lexical retrieval.
 - First initialization loads the catalog and ONNX assets, so cold-start memory
   and latency are higher than steady-state response latency. A full-catalog
   dense smoke measured approximately 504 MiB working set after one response

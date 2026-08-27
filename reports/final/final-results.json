@@ -1,11 +1,14 @@
 {
-  "schema_version": 1,
-  "recorded_at": "2026-08-26T05:43:08+08:00",
+  "schema_version": 2,
+  "recorded_at": "2026-08-26T23:45:03+08:00",
   "candidate": {
-    "tag": "compasscart-v2-candidate",
-    "commit": "4c41adf4982e4f5b907e4bbcd3488aa6e8416777",
-    "runtime_commit": "4c41adf4982e4f5b907e4bbcd3488aa6e8416777",
-    "config_hash": "0b6bcec8230b618c71604d2770b49b83495845d59f9ae452e11a607b7127373c"
+    "status": "owner_review",
+    "proposed_tag": "compasscart-v3-candidate",
+    "tag": null,
+    "review_branch": "codex/release-v3-alignment",
+    "runtime_commit": "54b2a626878a81c997f5299b39193f9741a120f7",
+    "evidence_commit": "b641ff97b0f4d7ae0c2fc7646e250492370231bd",
+    "config_hash": "4400c69e62a123979d7cadef7b9384f975b9fda28dd18aa93a8a3758544b65e5"
   },
   "official_starter_baseline": {
     "sample_count": 200,
@@ -15,49 +18,69 @@
     "recommended_technical_score": 0.10671
   },
   "development_cv": {
-    "folds": [1, 2, 3, 4],
-    "technical_scores": [0.479726, 0.568101, 0.541363, 0.487589],
-    "mean_technical_score": 0.519195,
-    "std_technical_score": 0.036878,
-    "selection_score": 0.500756,
-    "fallback_count": 0
+    "selection_scope": "folds_1_to_4_only",
+    "seed": 2026,
+    "technical_scores": [0.670738, 0.705902, 0.604819, 0.668048],
+    "mean_technical_score": 0.662377,
+    "std_technical_score": 0.036433,
+    "selection_score": 0.64416,
+    "fallback_count": 0,
+    "scenario_hit_rate_at_10": {
+      "boundary": 0.875,
+      "browsing": 0.859375,
+      "buying": 0.890625,
+      "intent_override": 0.708333
+    },
+    "note": "Fold 5 was already viewed during the historical v2 release and is not treated as a blind audit for this candidate."
   },
-  "sealed_audit_fold": {
+  "official_public_evaluation": {
+    "mode": "dense",
+    "sample_count": 200,
+    "evaluated_sessions": 200,
+    "hit_rate_at_10": 0.84,
+    "mrr": 0.376349,
+    "mttc": 4.615,
+    "efficiency": 0.6385,
+    "recommended_technical_score": 0.660605,
+    "scenario_metrics": {
+      "boundary": {"sample_count": 10, "hit_rate_at_10": 0.9, "mrr": 0.392619, "mttc": 5.0},
+      "browsing": {"sample_count": 80, "hit_rate_at_10": 0.85, "mrr": 0.345878, "mttc": 4.6},
+      "buying": {"sample_count": 80, "hit_rate_at_10": 0.8625, "mrr": 0.394132, "mttc": 3.7625},
+      "intent_override": {"sample_count": 30, "hit_rate_at_10": 0.733333, "mrr": 0.404762, "mttc": 6.8}
+    }
+  },
+  "lexical_control_evaluation": {
+    "selection_evidence": false,
+    "sample_count": 200,
+    "hit_rate_at_10": 0.865,
+    "mrr": 0.464843,
+    "mttc": 4.38,
+    "efficiency": 0.662,
+    "recommended_technical_score": 0.704353,
+    "note": "Observed when ONNX Runtime was absent. This public-set control is recorded for operations evidence and was not used to change the default dense runtime."
+  },
+  "historical_v2_audit": {
+    "candidate_tag": "compasscart-v2-candidate",
+    "candidate_commit": "4c41adf4982e4f5b907e4bbcd3488aa6e8416777",
     "fold": 5,
     "run_count": 1,
     "sample_count": 40,
     "hit_rate_at_10": 0.6,
     "mrr": 0.365893,
     "mttc": 5.75,
-    "efficiency": 0.525,
-    "recommended_technical_score": 0.514768,
-    "latency_ms": {
-      "p50": 164.296,
-      "p95": 370.616,
-      "max": 478.382
-    },
-    "fallback_count": 0,
-    "scenario_metrics": {
-      "boundary": {"hit_rate_at_10": 1.0, "mrr": 0.75, "mttc": 1.0},
-      "browsing": {"hit_rate_at_10": 0.5, "mrr": 0.252679, "mttc": 6.4375},
-      "buying": {"hit_rate_at_10": 0.625, "mrr": 0.349554, "mttc": 5.4375},
-      "intent_override": {"hit_rate_at_10": 0.666667, "mrr": 0.583333, "mttc": 6.333333}
-    }
+    "recommended_technical_score": 0.514768
   },
-  "official_public_evaluation": {
-    "sample_count": 200,
-    "evaluated_sessions": 200,
-    "hit_rate_at_10": 0.625,
-    "mrr": 0.321365,
-    "mttc": 5.53,
-    "efficiency": 0.547,
-    "recommended_technical_score": 0.518309,
-    "scenario_metrics": {
-      "boundary": {"sample_count": 10, "hit_rate_at_10": 0.6, "mrr": 0.207778, "mttc": 5.4},
-      "browsing": {"sample_count": 80, "hit_rate_at_10": 0.65, "mrr": 0.282564, "mttc": 5.1625},
-      "buying": {"sample_count": 80, "hit_rate_at_10": 0.625, "mrr": 0.366022, "mttc": 5.175},
-      "intent_override": {"sample_count": 30, "hit_rate_at_10": 0.566667, "mrr": 0.343611, "mttc": 7.5}
-    }
+  "reproducibility": {
+    "python": "3.12.13",
+    "numpy": "2.5.2",
+    "onnxruntime": "1.29.0",
+    "tokenizers": "0.23.1",
+    "dense_available": true,
+    "catalog_rows": 50000,
+    "catalog_jsonl_sha256": "da979b05a68af864cb0dcf9ee6a81c010c7e66a57978ad286c7a2e005fc69a67",
+    "catalog_gzip_sha256": "07fd142631fd6b03e2b4d09988c3eb7d53720e9d57010c79db48eeaada50a8f8",
+    "public_set_canonical_sha256": "857259f7a438e6188ac63e18995b6ff4489bfcfc4a716a798b9a2aa0ee8f7579",
+    "evaluator_canonical_sha256": "79a5ea06f9a1b8c5036f30efa85dc1f36b8f6b06eb8feb8f545dfa767bc45564"
   },
   "usage_and_cost": {
     "prompt_tokens": 0,
@@ -65,10 +88,5 @@
     "total_tokens": 0,
     "runtime_api_cost_usd": 0.0,
     "private_800_session_estimated_api_cost_usd": 0.0
-  },
-  "resource_measurements": {
-    "full_catalog_dense_smoke_working_set_mib_after_one_response": 503.9,
-    "full_catalog_dense_smoke_peak_working_set_mib": 576.3,
-    "note": "Evaluator processes retain additional trace and session state."
   }
 }

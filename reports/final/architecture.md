@@ -54,8 +54,10 @@ The runtime never sends network requests or reads credentials.
 ## Evaluation Discipline
 
 The 200 public sessions are deterministically stratified by scenario and
-difficulty into five folds. Folds 1-4 selected commit `4c41adf` using
-`mean(TechnicalScore) - 0.5 * std(TechnicalScore)` (`0.500756`). The candidate
-was tagged `compasscart-v2-candidate` before fold 5 was viewed; fold 5 was then
-run once without further code tuning. The official evaluator and catalog are
-never modified.
+difficulty. The optimized runtime at commit `54b2a62` was selected only from
+folds 1-4 using `mean(TechnicalScore) - 0.5 * std(TechnicalScore)` (`0.644160`).
+Fold 5 was viewed during the historical v2 release, so it is no longer described
+as a blind audit for this candidate. Final public evaluation is reported only
+after selection; the organizer's private 800-session set remains the true blind
+test. The official evaluator, catalog, public labels, and dense assets are never
+modified, and their release fingerprints are recorded in `final-results.json`.

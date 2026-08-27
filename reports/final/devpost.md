@@ -37,28 +37,32 @@ so "Actually, I need leather" cannot accidentally become a category answer.
 - Conversion-aware questions: the agent values the next turn, not question count.
 - Layered failure containment: advanced components can fail without invalidating
   the Agent contract.
-- Auditable evaluation: four development folds select one tagged candidate;
-  sealed fold 5 is run once with no post-audit tuning.
+- Auditable evaluation: four development folds select one candidate, input and
+  dependency fingerprints are recorded, and the private 800 sessions remain
+  the true blind test.
 
 ## Results
 
-On the unchanged 200-session official public evaluator, the `compasscart-v2`
-candidate achieved:
+On the unchanged 200-session official public evaluator, the optimized
+owner-review candidate achieved:
 
 | Metric | Starter | CompassCart |
 | --- | ---: | ---: |
-| TechnicalScore | 0.106710 | 0.518309 |
-| HitRate@10 | 0.125 | 0.625 |
-| MRR | 0.068034 | 0.321365 |
-| MTTC | 9.81 | 5.53 |
+| TechnicalScore | 0.106710 | 0.660605 |
+| HitRate@10 | 0.125 | 0.840 |
+| MRR | 0.068034 | 0.376349 |
+| MTTC | 9.81 | 4.615 |
 
-Development folds 1-4 averaged `0.519195 +/- 0.036878` (selection score
-`0.500756`), with fold scores `0.479726`, `0.568101`, `0.541363`, and
-`0.487589`. The tagged candidate's once-only sealed fold 5 scored `0.514768`
-with zero runtime fallback and P95 latency `370.616 ms`. The final public
-metrics are recorded in `final-results.json`. Estimated API cost for the
-800-session private set is USD 0.00. Scenario HitRate@10 was `0.60` Boundary,
-`0.65` Browsing, `0.625` Buying, and `0.566667` Intent Override.
+Development folds 1-4 averaged `0.662377 +/- 0.036433` (selection score
+`0.644160`), with fold scores `0.670738`, `0.705902`, `0.604819`, and
+`0.668048`. All four folds completed without runtime fallback; maximum P95 was
+`483.890 ms`. Exact public metrics and reproducibility fingerprints are in
+`final-results.json`. Estimated API cost for the 800-session private set is USD
+0.00. Scenario HitRate@10 was `0.90` Boundary, `0.85` Browsing, `0.8625`
+Buying, and `0.733333` Intent Override.
+
+Fold 5 was already viewed during the historical v2 release and was not used as
+a blind selection gate for this optimized candidate.
 
 ## Challenges
 

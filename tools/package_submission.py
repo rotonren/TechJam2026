@@ -30,6 +30,7 @@ OPTIONAL_REPORTS = (
     "reports/final/devpost.md",
     "reports/final/final-results.json",
     "reports/final/release-checklist.md",
+    "reports/final/score-optimization-results.md",
 )
 TEXT_SUFFIXES = {".json", ".md", ".py", ".txt"}
 SECRET_PATTERN = re.compile(

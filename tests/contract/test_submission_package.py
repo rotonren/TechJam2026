@@ -22,6 +22,7 @@ REQUIRED_ENTRIES = {
     "reports/final/devpost.md",
     "reports/final/final-results.json",
     "reports/final/release-checklist.md",
+    "reports/final/score-optimization-results.md",
     "src/compasscart/agent.py",
 }
 
