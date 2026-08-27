@@ -85,3 +85,13 @@ their individual limits, but both aggregate gates failed. At `0.05`, mean
 changed by `-0.012049`, selection by `-0.013219`, and Browsing HitRate@10 by
 `-0.020249`; Boundary was unchanged. Both candidates had zero fallback and
 invalid responses. The consensus bonus was restored to `0.0`.
+
+### S3 Fusion Weight
+
+The predeclared fusion weight `0.15` was rejected on representative
+development folds against P0 before any stress, resource, audit, or public
+run. Mean TechnicalScore changed by `-0.005177`, selection by `-0.004748`,
+and Boundary lost one hit. Intent Override HitRate@10 improved by `+0.008299`,
+while Buying and Browsing changed by `-0.006240` and `-0.009345`. Fallback
+and invalid-response counts remained zero. The fusion weight was restored to
+`0.10`.
