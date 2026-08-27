@@ -34,6 +34,12 @@ _PREFERENCE_RESET_RE = re.compile(
 _CONTINUATION_RE = re.compile(
     r"\b(?:show me more|more options|different choices)\b", re.IGNORECASE
 )
+_CONTINUATION_ONLY_RE = re.compile(
+    r"(?:please\s+)?(?:(?:could|can|would)\s+you\s+)?(?:please\s+)?"
+    r"(?:show me more(?: options)?|more options|different choices)"
+    r"(?:\s*,?\s*(?:please|thanks|thank you))?[.!?]?",
+    re.IGNORECASE,
+)
 _ATTRIBUTE_SLOT = (
     r"(?:category|material|color|size|style|brand|budget|feature(?:s)?|"
     r"use[ _-]?case|other)"
@@ -52,8 +58,20 @@ _NO_ADDITIONAL_REPLY = (
 _NO_ADDITIONAL_REPLY_RE = re.compile(
     _NO_ADDITIONAL_REPLY + r"[.!?]?", re.IGNORECASE
 )
+_NO_PREFERENCE_ONLY_RE = re.compile(
+    r"(?:"
+    r"(?:(?:i\s+)?(?:don['’]?t|do not)\s+have\s+(?:an?\s+)?|"
+    r"(?:i\s+have\s+)?no\s+)preference(?:\s+for\s+"
+    + _ATTRIBUTE_SLOT
+    + r")?(?:[;,]?\s*(?:please\s+)?use\s+your\s+judgment)?|"
+    r"(?:doesn['’]?t|does not) matter|use your judgment)"
+    r"[.!?]?",
+    re.IGNORECASE,
+)
 _CONTROL_ONLY_RE = re.compile(
-    r"(?:show me more(?: options)?|more options|different choices|search|thanks|thank you|"
+    r"(?:"
+    + _CONTINUATION_ONLY_RE.pattern
+    + r"|search|thanks|thank you|"
     r"please narrow this down by asking one concrete question|"
     r"i need another direction;\s*ask about a specific preference|"
     r"keep searching and ask me for one useful detail|"
@@ -62,7 +80,7 @@ _CONTROL_ONLY_RE = re.compile(
     r"any " + _ATTRIBUTE_SLOT + r" is fine|"
     r"i(?:'|’)m flexible about " + _ATTRIBUTE_SLOT + r"|"
     r"those options are not quite right yet[.!?]\s*ask me about one specific attribute|"
-    r"here are the closest matches i found(?: these are close alternatives after relaxing .*)?|"
+    r"here are the closest matches i found(?:[.!?]\s*these are close alternatives after relaxing .*)?|"
     r"what type of product are you looking for|do you have a material preference|"
     r"which color would you prefer|what size or fit should i prioritize|"
     r"which style do you prefer|do you have a preferred brand|"
@@ -310,27 +328,20 @@ class MessageParser:
         is_override = bool(_OVERRIDE_RE.search(text))
         replace_preferences = bool(_PREFERENCE_RESET_RE.search(text))
         is_continuation = bool(_CONTINUATION_RE.search(text))
-        is_control_only = bool(_CONTROL_ONLY_RE.fullmatch(text))
+        is_control_only = bool(
+            _CONTROL_ONLY_RE.fullmatch(text) or _NO_PREFERENCE_ONLY_RE.fullmatch(text)
+        )
+        is_no_preference = bool(_NO_PREFERENCE_RE.search(text))
         is_no_additional = bool(_NO_ADDITIONAL_REPLY_RE.fullmatch(text))
         if is_override:
             expected_attribute = None
 
         if is_control_only:
             attribute = (
-                expected_attribute or self._mentioned_attribute(text)
-                if _NO_PREFERENCE_RE.search(text) or is_no_additional
+                self._mentioned_attribute(text) or expected_attribute
+                if is_no_preference or is_no_additional
                 else None
             )
-            return ParseResult(
-                no_preference_attribute=attribute,
-                is_override=is_override,
-                is_continuation=is_continuation,
-                replace_preferences=replace_preferences,
-                has_substantive_evidence=False,
-            )
-
-        if _NO_PREFERENCE_RE.search(text):
-            attribute = expected_attribute or self._mentioned_attribute(text)
             return ParseResult(
                 no_preference_attribute=attribute,
                 is_override=is_override,
@@ -373,6 +384,11 @@ class MessageParser:
             constraints=tuple(self._deduplicate(extracted)),
             route_hint=route_hint,
             is_override=is_override,
+            no_preference_attribute=(
+                self._mentioned_attribute(text) or expected_attribute
+                if is_no_preference
+                else None
+            ),
             is_continuation=is_continuation,
             replace_preferences=replace_preferences,
             has_substantive_evidence=not is_control_only,

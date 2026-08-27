@@ -206,6 +206,38 @@ def test_pending_feature_does_not_treat_control_only_text_as_evidence(message):
     assert message not in Agent._query_text(message, state)
 
 
+@pytest.mark.parametrize(
+    "message",
+    ("Show me more, please.", "Could you show me more?"),
+)
+def test_pending_feature_ignores_polite_continuation_wrappers(message):
+    store = SessionStore(MessageParser({"feature": ("waterproof",)}))
+    state = store.reset("s1", {})
+    state.pending_attribute = "feature"
+
+    state = store.update("s1", message, 1, expected_attribute="feature")
+
+    assert state.continuation_requested is True
+    assert state.query_history == []
+    assert state.active_constraints() == []
+
+
+def test_mixed_no_preference_keeps_attribute_signal_and_raw_query_history():
+    store = SessionStore(MessageParser())
+    store.reset("s1", {})
+    store.update("s1", "I need red hiking boots", 1)
+
+    message = "I have no preference for color, but I need waterproof hiking boots."
+    state = store.update("s1", message, 2, expected_attribute="feature")
+
+    assert "color" in state.no_preference_attributes
+    assert {(item.attribute, item.value) for item in state.active_constraints()} >= {
+        ("feature", "waterproof"),
+        ("category", "boots"),
+    }
+    assert message in state.query_history
+
+
 def test_goal_override_replaces_prior_hard_constraints_and_question_state():
     store = SessionStore(MessageParser())
     state = store.reset("s1", {"preference_tags": ["comfort"]})

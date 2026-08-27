@@ -1,6 +1,8 @@
 import pytest
 
+from compasscart.models import Candidate, QuestionDecision
 from compasscart.parser import MessageParser
+from compasscart.response import ResponseBuilder
 
 
 def test_parser_marks_override_and_new_constraints():
@@ -246,6 +248,21 @@ def test_complete_control_reply_templates_are_non_substantive(message):
     assert result.route_hint != "buying"
 
 
+def test_relaxed_response_builder_output_is_a_non_substantive_control_message():
+    response = ResponseBuilder({"A"}, ["A"]).build(
+        [Candidate("A", relaxed=True, violations=("budget<=80",))],
+        QuestionDecision(None),
+        top_k=1,
+    )
+
+    result = MessageParser({"feature": ("waterproof",)}).parse(
+        str(response["message"]), turn=2, expected_attribute="feature"
+    )
+
+    assert result.constraints == ()
+    assert result.has_substantive_evidence is False
+
+
 @pytest.mark.parametrize(
     "message",
     (
@@ -277,6 +294,46 @@ def test_control_words_in_a_shopping_request_remain_substantive(message):
     result = MessageParser().parse(message, turn=2)
 
     assert result.has_substantive_evidence is True
+
+
+@pytest.mark.parametrize(
+    "message",
+    ("Show me more, please.", "Could you show me more?"),
+)
+def test_polite_continuation_wrappers_are_non_substantive(message):
+    result = MessageParser({"feature": ("waterproof",)}).parse(
+        message, turn=2, expected_attribute="feature"
+    )
+
+    assert result.is_continuation is True
+    assert result.constraints == ()
+    assert result.has_substantive_evidence is False
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_attribute", "no_preference_attribute"),
+    (
+        ("No preference, but I need waterproof hiking boots.", "feature", "feature"),
+        (
+            "I have no preference for color, but I need waterproof hiking boots.",
+            "feature",
+            "color",
+        ),
+    ),
+)
+def test_mixed_no_preference_retains_shopping_evidence(
+    message, expected_attribute, no_preference_attribute
+):
+    result = MessageParser().parse(
+        message, turn=2, expected_attribute=expected_attribute
+    )
+
+    assert result.no_preference_attribute == no_preference_attribute
+    assert result.has_substantive_evidence is True
+    assert result.route_hint == "buying"
+    assert {("feature", "waterproof"), ("category", "boots")} <= {
+        (item.attribute, item.value) for item in result.constraints
+    }
 
 
 def test_semantic_fixed_term_is_not_inferred_as_brand_without_brand_cue():
