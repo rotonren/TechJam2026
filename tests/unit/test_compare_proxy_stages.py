@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import statistics
 from copy import deepcopy
 from pathlib import Path
@@ -24,7 +25,7 @@ def _report(*, suite: str = "representative", runtime: str = "a" * 64, config: s
         efficiency = round(max(0, min(1, (11 - mttc) / 10)), 6)
         score = round(.5 * hit_rate + .3 * mrr + .2 * efficiency, 6)
         scenario_metrics = {name: {"sample_count": 1, "hit_rate_at_10": float(sessions[index]["hit"]), "mrr": sessions[index]["reciprocal_rank"], "mttc": float(sessions[index]["first_hit_turn"] or 11)} for index, name in enumerate(scenarios)}
-        folds.append({"fold": fold, "sample_count": 4, "aggregate": {"sample_count": 4, "hit_rate_at_10": round(hit_rate, 6), "mrr": round(mrr, 6), "mttc": round(mttc, 6), "efficiency": efficiency, "recommended_technical_score": score, "scenario_metrics": scenario_metrics, "invalid_response_count": 0}, "latency_ms": {"count": 1, "p50": 1.0, "p95": 1.0, "max": 1.0}, "fallback_count": 0, "route_distribution": {}, "sessions": sessions})
+        folds.append({"fold": fold, "sample_count": 4, "aggregate": {"sample_count": 4, "hit_rate_at_10": round(hit_rate, 6), "mrr": round(mrr, 6), "mttc": round(mttc, 6), "efficiency": efficiency, "recommended_technical_score": score, "reported_token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}, "scenario_metrics": scenario_metrics, "invalid_response_count": 0}, "latency_ms": {"count": 1, "p50": 1.0, "p95": 1.0, "max": 1.0}, "fallback_count": 0, "route_distribution": {}, "sessions": sessions})
     score = folds[0]["aggregate"]["recommended_technical_score"]
     return {"created_at": "2026-08-27T00:00:00+00:00", "commit": "commit", "config_hash": config, "runtime_hash": runtime, "manifest_hash": "c" * 64, "dataset_hash": "d" * 64, "suite": suite, "fallback_count": 0, "invalid_response_count": 0, "folds": folds, "mean_technical_score": score, "std_technical_score": 0.0, "selection_score": score, "api_cost_usd": 0.0}
 
@@ -94,6 +95,46 @@ def test_development_requires_selection_threshold_and_writes_aggregate_only_rece
     assert "sample_id" not in json.dumps(payload)
 
 
+def test_development_receipt_publishes_canonical_bytes_exclusively_and_cleans_temp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tools import compare_proxy_stages
+
+    candidate = _report(all_hits=True)
+    result = compare_proxy_stages.compare_development(_report(), candidate, stage="S3")
+    destination = tmp_path / "receipt.json"
+    compare_proxy_stages.write_development_receipt(destination, candidate, stage="S3", result=result)
+
+    expected = json.dumps(
+        compare_proxy_stages._receipt_payload(candidate, stage="S3", result=result),
+        sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ).encode("utf-8") + b"\n"
+    assert destination.read_bytes() == expected
+    with pytest.raises(FileExistsError):
+        compare_proxy_stages.write_development_receipt(destination, candidate, stage="S3", result=result)
+
+    failing = tmp_path / "failing.json"
+    monkeypatch.setattr(compare_proxy_stages.os, "link", lambda *_args: (_ for _ in ()).throw(OSError("no link")))
+    with pytest.raises(RuntimeError, match="hardlink"):
+        compare_proxy_stages.write_development_receipt(failing, candidate, stage="S3", result=result)
+    assert not failing.exists()
+    assert not list(tmp_path.glob(".failing.json.*.tmp"))
+
+
+def test_compare_cli_preflights_existing_output_before_reading_reports(tmp_path: Path) -> None:
+    from tools import compare_proxy_stages
+
+    output = tmp_path / "result.json"
+    output.write_text("existing", encoding="utf-8")
+
+    with pytest.raises(FileExistsError):
+        compare_proxy_stages.main([
+            "--phase", "development", "--parent-dev", str(tmp_path / "missing-parent.json"),
+            "--candidate-dev", str(tmp_path / "missing-candidate.json"), "--stage", "S3",
+            "--output", str(output),
+        ])
+
+
 def test_development_rejects_provenance_and_scoring_stage_cannot_use_correctness_tolerance() -> None:
     from tools.compare_proxy_stages import compare_development
 
@@ -134,6 +175,51 @@ def test_metrics_accepts_real_p0_six_decimal_scenario_aggregates() -> None:
     report = json.loads(Path("var/balanced-hardening/proxy-v1/dev-p0.json").read_text(encoding="utf-8"))
 
     assert _metrics(report)["suite"] == "representative"
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda report: report.update({"unexpected": True}),
+        lambda report: report["folds"][0].update({"unexpected": True}),
+        lambda report: report["folds"][0]["aggregate"].update({"unexpected": True}),
+        lambda report: report["folds"][0]["aggregate"]["scenario_metrics"]["buying"].update({"unexpected": True}),
+        lambda report: report["folds"][0]["sessions"][0].update({"target": "secret"}),
+        lambda report: report["folds"][0]["latency_ms"].update({"unexpected": True}),
+        lambda report: report["folds"][0]["aggregate"]["reported_token_usage"].update({"unexpected": True}),
+        lambda report: report["folds"][0].update({"route_distribution": {"buying": "one"}}),
+    ],
+)
+def test_metrics_rejects_unexpected_or_malformed_normal_report_schema(mutate) -> None:
+    from tools.compare_proxy_stages import _metrics
+
+    report = _report()
+    mutate(report)
+
+    with pytest.raises((TypeError, ValueError), match="schema|sessions|latency|usage|route"):
+        _metrics(report)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda report: report.pop("api_cost_usd"),
+        lambda report: report["folds"][0].pop("sessions"),
+        lambda report: report["folds"][0]["aggregate"].pop("reported_token_usage"),
+        lambda report: report["folds"][0]["aggregate"]["scenario_metrics"]["buying"].pop("mrr"),
+        lambda report: report["folds"][0]["sessions"][0].pop("best_rank"),
+        lambda report: report["folds"][0]["latency_ms"].pop("p95"),
+        lambda report: report["folds"][0]["aggregate"]["reported_token_usage"].pop("total_tokens"),
+    ],
+)
+def test_metrics_rejects_missing_normal_report_schema_fields(mutate) -> None:
+    from tools.compare_proxy_stages import _metrics
+
+    report = _report()
+    mutate(report)
+
+    with pytest.raises((TypeError, ValueError), match="schema|sessions|latency|usage|metrics"):
+        _metrics(report)
 
 
 def test_technical_score_uses_unrounded_efficiency_before_six_decimal_output() -> None:
@@ -185,6 +271,21 @@ def test_complete_rejects_resource_fingerprint_stub(tmp_path: Path) -> None:
 
     assert outcome["accepted"] is False
     assert "resource_report_rejected" in outcome["failure_codes"]
+
+
+def test_resource_baseline_is_anchored_to_repo_root_outside_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tools import compare_proxy_stages
+
+    report = _resource_report()
+    original_cwd = Path.cwd()
+    os.chdir(tmp_path)
+    try:
+        assert compare_proxy_stages._resource_is_accepted(report) is True
+    finally:
+        os.chdir(original_cwd)
+
 
 
 @pytest.mark.parametrize("field", ["policy", "deltas", "failure_codes"])

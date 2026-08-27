@@ -311,7 +311,7 @@ def _run_args(tmp_path: Path, *, audit_label: str | None) -> SimpleNamespace:
         suite="representative",
         folds=None,
         audit_label=audit_label,
-        agent="test:Agent",
+        agent="agent:Agent",
         output=(proxy_root / "audit" / f"{audit_label}.json") if audit_label else tmp_path / "report.json",
     )
 
@@ -606,6 +606,46 @@ def test_normal_proxy_report_binds_shared_runtime_and_config_fingerprints(
     report = json.loads(args.output.read_text(encoding="utf-8"))
     assert report["runtime_hash"] == "a" * 64
     assert report["config_hash"] == config_hash(RuntimeConfig())
+
+
+def test_normal_proxy_rejects_custom_agent_before_evaluation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tools import run_proxy
+
+    _patch_small_proxy_run(monkeypatch, invalid_count=0)
+    args = _run_args(tmp_path, audit_label=None)
+    args.agent = "custom:Agent"
+    monkeypatch.setattr(
+        run_proxy, "evaluate_proxy", lambda *_args, **_kwargs: pytest.fail("must not evaluate")
+    )
+
+    with pytest.raises(ValueError, match="default agent"):
+        run_proxy.run_proxy(args)
+
+
+def test_normal_proxy_rejects_runtime_or_fold_config_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tools import run_proxy
+
+    _patch_small_proxy_run(monkeypatch, invalid_count=0)
+    args = _run_args(tmp_path, audit_label=None)
+    hashes = iter(["a" * 64, "b" * 64])
+    monkeypatch.setattr(run_proxy, "runtime_hash", lambda: next(hashes))
+
+    with pytest.raises(ValueError, match="runtime.*changed"):
+        run_proxy.run_proxy(args)
+    assert not args.output.exists()
+
+    args.output = tmp_path / "config-drift.json"
+    monkeypatch.setattr(run_proxy, "runtime_hash", lambda: "a" * 64)
+    configs = iter(["a" * 64, "b" * 64])
+    monkeypatch.setattr(run_proxy, "_config_hash", lambda _agent: next(configs))
+
+    with pytest.raises(ValueError, match="config.*changed"):
+        run_proxy.run_proxy(args)
+    assert not args.output.exists()
 
 
 def test_audit_report_schema_does_not_include_runtime_hash(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

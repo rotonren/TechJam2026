@@ -5,8 +5,10 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import re
 import statistics
+import tempfile
 from dataclasses import asdict, dataclass
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
@@ -21,7 +23,28 @@ _HASH_RE: Final = __import__("re").compile(r"^[0-9a-f]{64}$")
 _GIT_SHA_RE: Final = re.compile(r"^[0-9a-f]{7,40}$")
 _SCENARIOS: Final = frozenset({"buying", "browsing", "intent_override", "boundary"})
 _PRIMARY_SCENARIOS: Final = ("buying", "browsing", "intent_override")
-_R0_BASELINE: Final = Path("var/balanced-hardening/benchmark-r0-wall-v2.json")
+_REPO_ROOT: Final = Path(__file__).resolve().parents[1]
+_R0_BASELINE: Final = _REPO_ROOT / "var" / "balanced-hardening" / "benchmark-r0-wall-v2.json"
+_NORMAL_TOP_LEVEL_KEYS: Final = frozenset({
+    "created_at", "commit", "config_hash", "manifest_hash", "dataset_hash", "suite",
+    "fallback_count", "invalid_response_count", "folds", "mean_technical_score",
+    "std_technical_score", "selection_score", "api_cost_usd",
+})
+_NORMAL_FOLD_KEYS: Final = frozenset({
+    "fold", "sample_count", "aggregate", "latency_ms", "fallback_count",
+    "route_distribution", "sessions",
+})
+_NORMAL_AGGREGATE_KEYS: Final = frozenset({
+    "sample_count", "hit_rate_at_10", "mrr", "mttc", "efficiency",
+    "recommended_technical_score", "reported_token_usage", "scenario_metrics",
+    "invalid_response_count",
+})
+_NORMAL_SUMMARY_KEYS: Final = frozenset({"sample_count", "hit_rate_at_10", "mrr", "mttc"})
+_NORMAL_SESSION_KEYS: Final = frozenset({
+    "sample_id", "scenario_type", "hit", "first_hit_turn", "best_rank", "reciprocal_rank",
+})
+_NORMAL_LATENCY_KEYS: Final = frozenset({"count", "p50", "p95", "max"})
+_NORMAL_USAGE_KEYS: Final = frozenset({"prompt_tokens", "completion_tokens", "total_tokens"})
 
 
 @dataclass(frozen=True)
@@ -69,6 +92,39 @@ def _read(path: str | Path) -> dict[str, object]:
     return report
 
 
+def _canonical_json_bytes(payload: dict[str, object]) -> bytes:
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8") + b"\n"
+
+
+def _reject_existing_destination(destination: Path) -> None:
+    if os.path.lexists(destination):
+        raise FileExistsError(f"comparison output already exists: {destination}")
+
+
+def _publish_exclusive(destination: Path, payload: dict[str, object]) -> None:
+    encoded = _canonical_json_bytes(payload)
+    _reject_existing_destination(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent,
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        _reject_existing_destination(destination)
+        try:
+            os.link(temporary, destination)
+        except FileExistsError:
+            raise
+        except OSError as error:
+            raise RuntimeError("exclusive comparison publication requires hardlink support") from error
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def _six(value: float) -> float:
     return round(value, 6)
 
@@ -113,7 +169,65 @@ def _validate_summary(actual: object, expected: dict[str, float | int | None], n
             _same_six(actual[key], value if isinstance(value, float) else None, name)
 
 
+def _nonnegative_int(value: object, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{name} is invalid")
+    return value
+
+
+def _validate_normal_schema(report: dict[str, object]) -> None:
+    keys = set(report)
+    if keys not in {_NORMAL_TOP_LEVEL_KEYS, _NORMAL_TOP_LEVEL_KEYS | {"runtime_hash"}}:
+        raise ValueError("normal report schema is invalid")
+    if not isinstance(report["created_at"], str) or not report["created_at"]:
+        raise ValueError("normal report schema is invalid")
+    _number(report["api_cost_usd"])
+
+
+def _validate_fold_schema(fold: object) -> dict[str, object]:
+    if not isinstance(fold, dict) or set(fold) != _NORMAL_FOLD_KEYS:
+        raise ValueError("fold schema is invalid")
+    latency = fold["latency_ms"]
+    if not isinstance(latency, dict) or set(latency) != _NORMAL_LATENCY_KEYS:
+        raise ValueError("latency schema is invalid")
+    count = _nonnegative_int(latency["count"], "latency count")
+    for name in ("p50", "p95", "max"):
+        value = latency[name]
+        if count == 0:
+            if value is not None:
+                raise ValueError("latency schema is invalid")
+        elif _number(value) < 0:
+            raise ValueError("latency schema is invalid")
+    routes = fold["route_distribution"]
+    if not isinstance(routes, dict) or any(
+        not isinstance(route, str) or not route or _nonnegative_int(value, "route count") != value
+        for route, value in routes.items()
+    ):
+        raise ValueError("route schema is invalid")
+    aggregate = fold["aggregate"]
+    if not isinstance(aggregate, dict) or set(aggregate) != _NORMAL_AGGREGATE_KEYS:
+        raise ValueError("aggregate schema is invalid")
+    usage = aggregate["reported_token_usage"]
+    if not isinstance(usage, dict) or set(usage) != _NORMAL_USAGE_KEYS:
+        raise ValueError("usage schema is invalid")
+    prompt, completion, total = (
+        _nonnegative_int(usage["prompt_tokens"], "usage"),
+        _nonnegative_int(usage["completion_tokens"], "usage"),
+        _nonnegative_int(usage["total_tokens"], "usage"),
+    )
+    if total != prompt + completion:
+        raise ValueError("usage schema is invalid")
+    scenarios = aggregate["scenario_metrics"]
+    if not isinstance(scenarios, dict) or set(scenarios) != _SCENARIOS or any(
+        not isinstance(metric, dict) or set(metric) != _NORMAL_SUMMARY_KEYS
+        for metric in scenarios.values()
+    ):
+        raise ValueError("scenario metrics schema is invalid")
+    return fold
+
+
 def _metrics(report: dict[str, object]) -> dict[str, object]:
+    _validate_normal_schema(report)
     suite = report.get("suite")
     if suite not in {"representative", "stress"}:
         raise ValueError("suite is invalid")
@@ -139,8 +253,7 @@ def _metrics(report: dict[str, object]) -> dict[str, object]:
     scores: dict[object, float] = {}
     fallback = invalid = 0
     for fold in folds:
-        if not isinstance(fold, dict) or {"fold", "sample_count", "aggregate", "latency_ms", "fallback_count", "route_distribution", "sessions"} - set(fold):
-            raise ValueError("fold schema is invalid")
+        fold = _validate_fold_schema(fold)
         fold_id = fold["fold"]
         if fold_id not in expected_folds or fold_id in by_fold:
             raise ValueError("folds are invalid")
@@ -162,7 +275,7 @@ def _metrics(report: dict[str, object]) -> dict[str, object]:
             raise ValueError("sessions are invalid")
         typed_sessions: list[dict[str, object]] = []
         for session in sessions:
-            if not isinstance(session, dict) or not isinstance(session.get("sample_id"), str) or not session["sample_id"]:
+            if not isinstance(session, dict) or set(session) != _NORMAL_SESSION_KEYS or not isinstance(session.get("sample_id"), str) or not session["sample_id"]:
                 raise ValueError("sessions are invalid")
             scenario = session.get("scenario_type")
             if scenario not in _SCENARIOS or not isinstance(session.get("hit"), bool):
@@ -324,8 +437,10 @@ def _receipt_payload(candidate_dev: dict[str, object], *, stage: str, result: di
 
 
 def write_development_receipt(destination: str | Path, candidate_dev: dict[str, object], *, stage: str, result: dict[str, object]) -> None:
+    destination = Path(destination)
+    _reject_existing_destination(destination)
     receipt = _receipt_payload(candidate_dev, stage=stage, result=result)
-    Path(destination).write_text(json.dumps(receipt, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n", encoding="utf-8")
+    _publish_exclusive(destination, receipt)
 
 
 def _load_receipt(path: str | Path, candidate: dict[str, object], stage: str, result: dict[str, object]) -> dict[str, object]:
@@ -385,6 +500,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--stage", required=True)
     parser.add_argument("--output", required=True)
     args = parser.parse_args(argv)
+    output = Path(args.output)
+    _reject_existing_destination(output)
     parent_dev, candidate_dev = _read(args.parent_dev), _read(args.candidate_dev)
     if args.phase == "development":
         result = compare_development(parent_dev, candidate_dev, stage=args.stage)
@@ -394,7 +511,7 @@ def main(argv: list[str] | None = None) -> None:
         if not all(required):
             parser.error("complete phase requires stress, resource, and development receipt inputs")
         result = compare_complete(parent_dev, candidate_dev, _read(args.parent_stress), _read(args.candidate_stress), _read(args.resource_report), args.development_receipt, stage=args.stage)
-        Path(args.output).write_text(json.dumps(result, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n", encoding="utf-8")
+        _publish_exclusive(output, result)
     if not result["accepted"]:
         raise SystemExit(1)
 

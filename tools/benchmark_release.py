@@ -570,6 +570,7 @@ def run_worker(
     catalog_path: str | Path, transcript_path: str | Path, *, agent_class: type | None = None,
     clock: Callable[[], float] = time.perf_counter, catalog_hasher: Callable[[str | Path], str] = sha256_file,
 ) -> dict[str, object]:
+    execution_runtime_hash = runtime_hash()
     raw = Path(transcript_path).read_bytes()
     transcript_hash = hashlib.sha256(raw).hexdigest()
     try:
@@ -634,6 +635,10 @@ def run_worker(
         raise ValueError("trace count does not match transcript")
     if catalog_hasher(catalog_path) != catalog_hash:
         raise ValueError("catalog changed during worker replay")
+    if config_hash(getattr(agent, "config", None)) != actual_config_hash:
+        raise ValueError("agent config changed during worker replay")
+    if runtime_hash() != execution_runtime_hash:
+        raise ValueError("runtime changed during worker replay")
     dense = getattr(agent, "dense", None)
     dense_available = bool(getattr(dense, "available", False))
     dense_status = getattr(dense, "status", "available" if dense_available else "unavailable")
@@ -646,7 +651,7 @@ def run_worker(
         "trace_latencies_ms": trace_latency_values,
         "instrumentation_delta_ms": _latency_summary([wall - trace for wall, trace in zip(latency_values, trace_latency_values, strict=True)]),
         "dense_available": dense_available, "dense_status": dense_status,
-        "fallback_count": fallback_count, "runtime_hash": runtime_hash(), "config_hash": actual_config_hash,
+        "fallback_count": fallback_count, "runtime_hash": execution_runtime_hash, "config_hash": actual_config_hash,
         "response_hash": _canonical_hash(normalized_responses),
         "transcript_hash": transcript_hash, "catalog_hash": catalog_hash, "catalog_snapshot_hash": catalog_hash,
         "capture_provenance": _capture_provenance(manifest, manifest_hash), "response_count": _RESPONSE_COUNT,
@@ -951,6 +956,7 @@ def run_parent(
     if isinstance(worker_timeout_seconds, bool) or not isinstance(worker_timeout_seconds, (int, float)) or not math.isfinite(worker_timeout_seconds) or worker_timeout_seconds <= 0:
         raise ValueError("worker timeout must be positive")
     root = _repo_root()
+    execution_runtime_hash = runtime_hash()
     catalog = Path(catalog_path).resolve()
     transcript = Path(transcript_path).resolve()
     catalog_hash_before = sha256_file(catalog)
@@ -993,6 +999,10 @@ def run_parent(
                 raise ValueError("worker catalog snapshot provenance mismatch")
             if parsed["capture_provenance"] != expected_provenance:
                 raise ValueError("worker capture provenance mismatch")
+            if parsed["runtime_hash"] != execution_runtime_hash:
+                raise ValueError("worker runtime does not match benchmark execution start")
+            if runtime_hash() != execution_runtime_hash:
+                raise ValueError("runtime changed during benchmark")
             result_trials.append(parsed)
     catalog_hash_after = sha256_file(catalog)
     transcript_hash_after = sha256_file(transcript)
@@ -1000,6 +1010,8 @@ def run_parent(
         raise ValueError("catalog changed during benchmark")
     if transcript_hash_after != transcript_hash_before:
         raise ValueError("transcript changed during benchmark")
+    if runtime_hash() != execution_runtime_hash:
+        raise ValueError("runtime changed during benchmark")
     report = aggregate_trials(result_trials)
     report.update({"cwd_mode": cwd_mode, "platform": _platform_data()})
     return _validate_aggregate_report(report)

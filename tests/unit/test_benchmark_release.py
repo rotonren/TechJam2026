@@ -393,6 +393,48 @@ def test_run_worker_attests_candidate_config_without_requiring_frozen_capture_co
     assert result["capture_provenance"]["config_hash"] == "a" * 64
 
 
+def test_run_worker_records_pre_execution_runtime_and_rejects_runtime_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    transcript = tmp_path / "transcript.jsonl"
+    catalog = tmp_path / "catalog.jsonl"
+    transcript.write_text("".join(json.dumps(row) + "\n" for row in _rows()), encoding="utf-8")
+    catalog.write_text("catalog", encoding="utf-8")
+    _write_manifest(
+        transcript, catalog, agent_class=f"{_WorkerAgent.__module__}:{_WorkerAgent.__qualname__}",
+        config_hash=hashlib.sha256(repr(None).encode("utf-8")).hexdigest(),
+    )
+    hashes = iter(["a" * 64, "b" * 64])
+    monkeypatch.setattr(bench, "runtime_hash", lambda: next(hashes))
+
+    with pytest.raises(ValueError, match="runtime changed"):
+        bench.run_worker(catalog, transcript, agent_class=_WorkerAgent)
+
+
+def test_run_parent_rejects_worker_runtime_that_differs_from_execution_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    transcript = tmp_path / "transcript.jsonl"
+    catalog = tmp_path / "catalog.jsonl"
+    transcript.write_text("".join(json.dumps(row) + "\n" for row in _rows()), encoding="utf-8")
+    catalog.write_text("catalog", encoding="utf-8")
+    manifest = _write_manifest(transcript, catalog)
+    catalog_hash = hashlib.sha256(catalog.read_bytes()).hexdigest()
+    worker = _full_trial(
+        transcript_hash=hashlib.sha256(transcript.read_bytes()).hexdigest(), catalog_hash=catalog_hash,
+        catalog_snapshot_hash=catalog_hash, runtime_hash="b" * 64,
+        capture_provenance=bench._capture_provenance(
+            manifest, hashlib.sha256(Path(f"{transcript}.manifest.json").read_bytes()).hexdigest(),
+        ),
+    )
+    monkeypatch.setattr(bench, "runtime_hash", lambda: "a" * 64)
+    monkeypatch.setattr(bench.subprocess, "run", lambda *_args, **_kwargs: type("Done", (), {"stdout": json.dumps(worker), "stderr": "", "returncode": 0})())
+    monkeypatch.setattr(bench, "_platform_data", lambda: _parent_report()["platform"])
+
+    with pytest.raises(ValueError, match="worker runtime"):
+        bench.run_parent(catalog, transcript, trials=1)
+
+
 def test_aggregate_trials_uses_medians_latency_summary_and_matching_hashes() -> None:
     report = bench.aggregate_trials([
         _trial(init_ms=10, peak_mib=100, rss_mib=80, latencies_ms=[1] * 800),
@@ -1059,6 +1101,7 @@ def test_run_parent_uses_one_private_catalog_snapshot_for_all_workers(tmp_path: 
 
     monkeypatch.setattr(bench.subprocess, "run", fake_run)
     monkeypatch.setattr(bench, "_platform_data", lambda: _parent_report()["platform"])
+    monkeypatch.setattr(bench, "runtime_hash", lambda: worker["runtime_hash"])
     report = bench.run_parent(catalog, transcript, trials=2)
 
     assert report["catalog_hash"] == catalog_hash
@@ -1081,6 +1124,7 @@ def test_run_parent_rejects_worker_runtime_platform_that_disagrees_with_parent(t
     )
     monkeypatch.setattr(bench.subprocess, "run", lambda *_args, **_kwargs: type("Done", (), {"stdout": json.dumps(trial), "stderr": "", "returncode": 0})())
     monkeypatch.setattr(bench, "_platform_data", lambda: {**_parent_report()["platform"], "os": "Linux"})
+    monkeypatch.setattr(bench, "runtime_hash", lambda: trial["runtime_hash"])
 
     with pytest.raises(ValueError, match="runtime platform"):
         bench.run_parent(catalog, transcript, trials=1)
@@ -1209,6 +1253,7 @@ def test_run_parent_builds_isolated_child_command_and_parses_single_json(tmp_pat
 
     monkeypatch.setattr(bench.subprocess, "run", fake_run)
     monkeypatch.setattr(bench, "_platform_data", lambda: _parent_report()["platform"])
+    monkeypatch.setattr(bench, "runtime_hash", lambda: worker["runtime_hash"])
     monkeypatch.setenv("PYTHONPATH", "hostile-parent-path")
     monkeypatch.setenv("COMPASSCART_DISABLE_DENSE", "1")
     report = bench.run_parent(catalog, transcript, trials=2, cwd_mode="outside")

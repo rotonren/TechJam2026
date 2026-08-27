@@ -798,14 +798,18 @@ def run_proxy(args: argparse.Namespace) -> None:
     proxy_root = Path(args.proxy_root)
     output = Path(args.output)
     audit_lock: _AuditLockOwnership | None = None
+    execution_runtime_hash: str | None = None
     try:
         if args.audit_label is not None:
             audit_lock = _reserve_audit_output(proxy_root, args.audit_label, output)
             _preflight_audit_publish(audit_lock, output)
         else:
+            if args.agent != "agent:Agent":
+                raise ValueError("normal proxy evidence requires the default agent:Agent")
             if _is_within(output.resolve(), (proxy_root.resolve() / "audit").resolve()):
                 raise ValueError("non-audit reports cannot target the sealed audit directory")
             _reject_existing_destination(output)
+            execution_runtime_hash = runtime_hash()
         verified = _load_verified_proxy_suite(proxy_root, args.suite)
         rows = verified.rows
         selections = select_proxy_rows(rows, args.suite, args.folds, args.audit_label)
@@ -822,7 +826,10 @@ def run_proxy(args: argparse.Namespace) -> None:
             agent: object | None = None
             try:
                 agent = agent_class(args.catalog)
-                config_hash = config_hash or _config_hash(agent)
+                fold_config_hash = _config_hash(agent)
+                if config_hash and fold_config_hash != config_hash:
+                    raise ValueError("agent config changed between folds")
+                config_hash = config_hash or fold_config_hash
                 call_evidence: list[_CallEvidence] = []
                 result = evaluate_proxy(
                     agent, selected_rows, catalog_ids, categories, products,
@@ -832,6 +839,8 @@ def run_proxy(args: argparse.Namespace) -> None:
                 if not isinstance(sessions, list):
                     raise ValueError("proxy evaluator did not return sessions")  # noqa: TRY004
                 latency, fallback_count, routes = _trace_details(agent, call_evidence)
+                if _config_hash(agent) != fold_config_hash:
+                    raise ValueError("agent config changed during fold")
                 invalid_count = int(result["invalid_response_count"])
                 total_fallback_count += fallback_count
                 total_invalid_count += invalid_count
@@ -883,13 +892,15 @@ def run_proxy(args: argparse.Namespace) -> None:
         invalid_rate = total_invalid_count / max(selected_sample_count, 1)
         report = {
             **metadata,
-            "runtime_hash": runtime_hash(),
+            "runtime_hash": execution_runtime_hash,
             "folds": fold_reports,
             "mean_technical_score": round(statistics.fmean(scores), 6) if scores else 0.0,
             "std_technical_score": round(statistics.pstdev(scores), 6) if scores else 0.0,
             "selection_score": selection_score(scores, 0.0, invalid_rate),
             "api_cost_usd": 0.0,
         }
+        if runtime_hash() != execution_runtime_hash:
+            raise ValueError("runtime changed during normal proxy evidence execution")
         _write_normal_report(output, report)
         print(json.dumps({key: value for key, value in report.items() if key != "folds"}, sort_keys=True))
         if total_fallback_count or total_invalid_count:
