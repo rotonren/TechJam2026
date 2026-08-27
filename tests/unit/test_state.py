@@ -264,6 +264,50 @@ def test_mixed_no_preference_keeps_attribute_signal_and_raw_query_history():
     assert message in state.query_history
 
 
+def test_mixed_no_preference_rejects_its_explicit_attribute_only():
+    store = SessionStore(MessageParser())
+    store.reset("s1", {})
+    store.update("s1", "I need red cotton boots", 1)
+
+    state = store.update(
+        "s1",
+        "I have no preference for color, but material should be leather.",
+        2,
+        expected_attribute="feature",
+    )
+
+    assert "color" in state.no_preference_attributes
+    assert "material" not in state.no_preference_attributes
+    assert ("color", "red") not in {
+        (item.attribute, item.value) for item in state.active_constraints()
+    }
+    assert ("material", "leather") in {
+        (item.attribute, item.value) for item in state.active_constraints()
+    }
+
+
+@pytest.mark.parametrize(
+    "message",
+    (
+        "Any feature is fine, thanks.",
+        "I'm flexible about feature, thanks.",
+        "I don't have an additional preference for feature, thanks.",
+        "Nothing more to add about feature, thanks.",
+        "I don't have any preference for feature.",
+    ),
+)
+def test_pending_feature_ignores_all_wrapped_preference_reply_families(message):
+    store = SessionStore(MessageParser({"feature": ("waterproof",)}))
+    state = store.reset("s1", {})
+    state.pending_attribute = "feature"
+
+    state = store.update("s1", message, 1, expected_attribute="feature")
+
+    assert "feature" in state.no_preference_attributes
+    assert state.query_history == []
+    assert state.active_constraints() == []
+
+
 def test_goal_override_replaces_prior_hard_constraints_and_question_state():
     store = SessionStore(MessageParser())
     state = store.reset("s1", {"preference_tags": ["comfort"]})

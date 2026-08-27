@@ -360,6 +360,40 @@ def test_mixed_no_preference_retains_shopping_evidence(
     }
 
 
+def test_mixed_no_preference_uses_its_own_explicit_attribute_cue():
+    result = MessageParser().parse(
+        "I have no preference for color, but material should be leather.",
+        turn=2,
+        expected_attribute="feature",
+    )
+
+    assert result.no_preference_attribute == "color"
+    assert ("material", "leather") in {
+        (item.attribute, item.value) for item in result.constraints
+    }
+    assert result.has_substantive_evidence is True
+
+
+@pytest.mark.parametrize(
+    "message",
+    (
+        "Any feature is fine, thanks.",
+        "I'm flexible about feature, thanks.",
+        "I don't have an additional preference for feature, thanks.",
+        "Nothing more to add about feature, thanks.",
+        "I don't have any preference for feature.",
+    ),
+)
+def test_all_preference_reply_families_accept_benign_wrappers(message):
+    result = MessageParser({"feature": ("waterproof",)}).parse(
+        message, turn=2, expected_attribute="feature"
+    )
+
+    assert result.constraints == ()
+    assert result.no_preference_attribute == "feature"
+    assert result.has_substantive_evidence is False
+
+
 def test_semantic_fixed_term_is_not_inferred_as_brand_without_brand_cue():
     parser = MessageParser(
         {"brand": ("Waterproof",), "category": ("Jackets",)}
