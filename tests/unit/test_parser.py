@@ -375,6 +375,32 @@ def test_mixed_no_preference_uses_its_own_explicit_attribute_cue():
 
 
 @pytest.mark.parametrize(
+    ("message", "no_preference_attribute"),
+    (
+        (
+            "I don't have an additional preference for feature, but material should be leather.",
+            "feature",
+        ),
+        (
+            "I have no preference for color, but material should be leather.",
+            "color",
+        ),
+    ),
+)
+def test_mixed_no_preference_never_becomes_a_pending_soft_answer(
+    message, no_preference_attribute
+):
+    result = MessageParser().parse(message, turn=2, expected_attribute="feature")
+
+    assert result.no_preference_attribute == no_preference_attribute
+    assert result.has_substantive_evidence is True
+    assert ("material", "leather") in {
+        (item.attribute, item.value) for item in result.constraints
+    }
+    assert all(item.attribute != "feature" for item in result.constraints)
+
+
+@pytest.mark.parametrize(
     "message",
     (
         "Any feature is fine, thanks.",

@@ -404,6 +404,7 @@ class MessageParser:
         extracted.extend(categories)
         if (
             expected_attribute
+            and not is_no_preference
             and not any(
                 item.attribute == normalize_value(expected_attribute)
                 for item in extracted

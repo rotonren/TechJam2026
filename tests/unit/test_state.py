@@ -268,10 +268,14 @@ def test_mixed_no_preference_rejects_its_explicit_attribute_only():
     store = SessionStore(MessageParser())
     store.reset("s1", {})
     store.update("s1", "I need red cotton boots", 1)
+    state = store.get("s1")
+    assert state is not None
+    state.pending_attribute = "feature"
 
+    message = "I have no preference for color, but material should be leather."
     state = store.update(
         "s1",
-        "I have no preference for color, but material should be leather.",
+        message,
         2,
         expected_attribute="feature",
     )
@@ -284,6 +288,26 @@ def test_mixed_no_preference_rejects_its_explicit_attribute_only():
     assert ("material", "leather") in {
         (item.attribute, item.value) for item in state.active_constraints()
     }
+    assert not any(item.attribute == "feature" for item in state.active_constraints())
+    assert message in state.query_history
+
+
+def test_mixed_no_preference_for_pending_feature_keeps_material_evidence_only():
+    store = SessionStore(MessageParser())
+    state = store.reset("s1", {})
+    state.pending_attribute = "feature"
+
+    message = (
+        "I don't have an additional preference for feature, but material should be leather."
+    )
+    state = store.update("s1", message, 1, expected_attribute="feature")
+
+    assert "feature" in state.no_preference_attributes
+    assert ("material", "leather") in {
+        (item.attribute, item.value) for item in state.active_constraints()
+    }
+    assert not any(item.attribute == "feature" for item in state.active_constraints())
+    assert message in state.query_history
 
 
 @pytest.mark.parametrize(
