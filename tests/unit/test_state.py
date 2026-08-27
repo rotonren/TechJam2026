@@ -208,7 +208,12 @@ def test_pending_feature_does_not_treat_control_only_text_as_evidence(message):
 
 @pytest.mark.parametrize(
     "message",
-    ("Show me more, please.", "Could you show me more?"),
+    (
+        "Show me more, please.",
+        "Could you show me more?",
+        "Please, show me more.",
+        "Could you, please show me more?",
+    ),
 )
 def test_pending_feature_ignores_polite_continuation_wrappers(message):
     store = SessionStore(MessageParser({"feature": ("waterproof",)}))
@@ -218,6 +223,27 @@ def test_pending_feature_ignores_polite_continuation_wrappers(message):
     state = store.update("s1", message, 1, expected_attribute="feature")
 
     assert state.continuation_requested is True
+    assert state.query_history == []
+    assert state.active_constraints() == []
+
+
+@pytest.mark.parametrize(
+    "message",
+    (
+        "No preference, thanks.",
+        "No preference please.",
+        "I don't have a preference for feature, thank you.",
+        "Thanks, no preference please.",
+    ),
+)
+def test_pending_feature_ignores_polite_no_preference_wrappers(message):
+    store = SessionStore(MessageParser({"feature": ("waterproof",)}))
+    state = store.reset("s1", {})
+    state.pending_attribute = "feature"
+
+    state = store.update("s1", message, 1, expected_attribute="feature")
+
+    assert "feature" in state.no_preference_attributes
     assert state.query_history == []
     assert state.active_constraints() == []
 

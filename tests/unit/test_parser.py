@@ -298,7 +298,12 @@ def test_control_words_in_a_shopping_request_remain_substantive(message):
 
 @pytest.mark.parametrize(
     "message",
-    ("Show me more, please.", "Could you show me more?"),
+    (
+        "Show me more, please.",
+        "Could you show me more?",
+        "Please, show me more.",
+        "Could you, please show me more?",
+    ),
 )
 def test_polite_continuation_wrappers_are_non_substantive(message):
     result = MessageParser({"feature": ("waterproof",)}).parse(
@@ -307,6 +312,25 @@ def test_polite_continuation_wrappers_are_non_substantive(message):
 
     assert result.is_continuation is True
     assert result.constraints == ()
+    assert result.has_substantive_evidence is False
+
+
+@pytest.mark.parametrize(
+    "message",
+    (
+        "No preference, thanks.",
+        "No preference please.",
+        "I don't have a preference for feature, thank you.",
+        "Thanks, no preference please.",
+    ),
+)
+def test_polite_no_preference_wrappers_are_non_substantive(message):
+    result = MessageParser({"feature": ("waterproof",)}).parse(
+        message, turn=2, expected_attribute="feature"
+    )
+
+    assert result.constraints == ()
+    assert result.no_preference_attribute == "feature"
     assert result.has_substantive_evidence is False
 
 

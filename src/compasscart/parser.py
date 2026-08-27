@@ -35,7 +35,8 @@ _CONTINUATION_RE = re.compile(
     r"\b(?:show me more|more options|different choices)\b", re.IGNORECASE
 )
 _CONTINUATION_ONLY_RE = re.compile(
-    r"(?:please\s+)?(?:(?:could|can|would)\s+you\s+)?(?:please\s+)?"
+    r"(?:please(?:\s*,\s*|\s+))?"
+    r"(?:(?:could|can|would)\s+you(?:\s*,\s*|\s+)?)?(?:please\s+)?"
     r"(?:show me more(?: options)?|more options|different choices)"
     r"(?:\s*,?\s*(?:please|thanks|thank you))?[.!?]?",
     re.IGNORECASE,
@@ -59,12 +60,14 @@ _NO_ADDITIONAL_REPLY_RE = re.compile(
     _NO_ADDITIONAL_REPLY + r"[.!?]?", re.IGNORECASE
 )
 _NO_PREFERENCE_ONLY_RE = re.compile(
+    r"(?:(?:please|thanks|thank you)(?:\s*,\s*|\s+))*"
     r"(?:"
     r"(?:(?:i\s+)?(?:don['’]?t|do not)\s+have\s+(?:an?\s+)?|"
     r"(?:i\s+have\s+)?no\s+)preference(?:\s+for\s+"
     + _ATTRIBUTE_SLOT
     + r")?(?:[;,]?\s*(?:please\s+)?use\s+your\s+judgment)?|"
     r"(?:doesn['’]?t|does not) matter|use your judgment)"
+    r"(?:\s*,?\s*(?:please|thanks|thank you))*"
     r"[.!?]?",
     re.IGNORECASE,
 )
