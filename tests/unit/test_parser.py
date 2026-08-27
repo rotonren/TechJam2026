@@ -398,6 +398,39 @@ def test_pending_goal_clause_keeps_only_unrecognized_suffix_as_soft_evidence():
     ]
 
 
+@pytest.mark.parametrize("message", ("I need handbags", "shopping for handbags"))
+def test_pending_goal_uses_dynamic_category_head_not_just_fixed_categories(message):
+    result = MessageParser({"category": ("Handbags",)}).parse(
+        message, turn=2, expected_attribute="size"
+    )
+
+    assert [(item.attribute, item.value, item.is_hard) for item in result.constraints] == [
+        ("category", "handbags", True)
+    ]
+
+
+def test_pending_goal_prefers_full_dynamic_category_head_over_overlapping_attribute():
+    result = MessageParser(
+        {"category": ("Hiking Boots",), "use_case": ("Hiking",)}
+    ).parse("I need hiking boots", turn=2, expected_attribute="size")
+
+    assert [(item.attribute, item.value, item.is_hard) for item in result.constraints] == [
+        ("category", "hiking boots", True)
+    ]
+
+
+def test_pending_goal_allows_recognized_attributes_after_the_category_head():
+    result = MessageParser({"category": ("Boots",)}).parse(
+        "I need boots in blue leather", turn=2, expected_attribute="size"
+    )
+
+    assert [(item.attribute, item.value, item.is_hard) for item in result.constraints] == [
+        ("category", "boots", True),
+        ("color", "blue", True),
+        ("material", "leather", True),
+    ]
+
+
 @pytest.mark.parametrize(
     ("message", "expected_attribute", "vocabulary", "expected"),
     (

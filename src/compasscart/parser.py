@@ -157,6 +157,7 @@ _EXPECTED_FILLER_TERMS = {
     "i",
     "id",
     "im",
+    "in",
     "is",
     "it",
     "just",
@@ -373,7 +374,9 @@ class MessageParser:
             )
         covered.extend(
             (goal_start, category_start)
-            for goal_start, category_start, _ in self._goal_category_head_spans(text)
+            for goal_start, category_start, _, _ in self._goal_category_head_spans(
+                text
+            )
         )
         for pattern in (_BUDGET_BETWEEN_RE, _BUDGET_DIRECTION_RE, _BUDGET_DEFAULT_RE):
             covered.extend(match.span() for match in pattern.finditer(text))
@@ -678,7 +681,7 @@ class MessageParser:
                 attribute == "category"
                 and self._is_category_goal_span(text, start, end)
             )
-            or self._is_before_goal_category_head(text, start, end)
+            or self._is_in_confirmed_goal_clause(text, start, end)
         )
 
     @staticmethod
@@ -700,43 +703,64 @@ class MessageParser:
             )
         )
 
-    @staticmethod
     def _overlaps_goal_category_head_for_other_attribute(
-        attribute: str, text: str, start: int, end: int
+        self, attribute: str, text: str, start: int, end: int
     ) -> bool:
         return attribute != "category" and any(
             start < head_end and head_start < end
-            for _, head_start, head_end in MessageParser._goal_category_head_spans(
-                text
-            )
+            for _, head_start, head_end, _ in self._goal_category_head_spans(text)
         )
 
     @staticmethod
     def _has_category_goal_phrase(text: str) -> bool:
         return bool(_GOAL_CATEGORY_RE.search(text))
 
-    @staticmethod
-    def _is_category_goal_span(text: str, start: int, end: int) -> bool:
+    def _is_category_goal_span(self, text: str, start: int, end: int) -> bool:
         return any(
             category_start <= start and end <= category_end
-            for _, category_start, category_end in MessageParser._goal_category_head_spans(
+            for _, category_start, category_end, _ in self._goal_category_head_spans(
                 text
             )
         )
 
-    @staticmethod
-    def _is_before_goal_category_head(text: str, start: int, end: int) -> bool:
+    def _is_before_goal_category_head(self, text: str, start: int, end: int) -> bool:
+        return self._is_in_confirmed_goal_clause(text, start, end)
+
+    def _is_in_confirmed_goal_clause(self, text: str, start: int, end: int) -> bool:
         return any(
-            goal_start <= start and end <= category_start
-            for goal_start, category_start, _ in MessageParser._goal_category_head_spans(
-                text
-            )
+            goal_start <= start and end <= goal_end
+            for goal_start, _, _, goal_end in self._goal_category_head_spans(text)
         )
 
-    @staticmethod
-    def _goal_category_head_spans(text: str) -> tuple[tuple[int, int, int], ...]:
-        heads: list[tuple[int, int, int]] = []
+    def _goal_category_head_spans(
+        self, text: str
+    ) -> tuple[tuple[int, int, int, int], ...]:
+        heads: list[tuple[int, int, int, int]] = []
         for match in _GOAL_CATEGORY_RE.finditer(text):
+            goal_start, goal_end = match.span()
+            candidates = [
+                (start, end)
+                for start, end, attribute, value in self._raw_vocabulary_matches(text)
+                if attribute == "category"
+                and goal_start <= start
+                and end <= goal_end
+                and self._alias_allowed(
+                    attribute,
+                    value,
+                    text,
+                    start,
+                    end,
+                    (),
+                    (),
+                    None,
+                )
+            ]
+            if candidates:
+                head_start, head_end = max(
+                    candidates, key=lambda span: (span[1] - span[0], span[0])
+                )
+                heads.append((goal_start, head_start, head_end, goal_end))
+                continue
             category_start, _ = match.span("category")
             known = [
                 (token.start() + category_start, token.end() + category_start)
@@ -745,7 +769,7 @@ class MessageParser:
             ]
             if known:
                 head_start, head_end = known[-1]
-                heads.append((match.start(), head_start, head_end))
+                heads.append((goal_start, head_start, head_end, goal_end))
         return tuple(heads)
 
     @staticmethod
