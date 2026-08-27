@@ -46,6 +46,26 @@ $env:COMPASSCART_DISABLE_DENSE = "1"
 Asset corruption, optional dependency failure, or dense inference failure also
 switches to lexical retrieval automatically. Neither path performs network I/O.
 
+The runtime resolves its bundled dense assets from the installed package rather
+than the process working directory. It can therefore be imported from an
+arbitrary CWD after extracting the submission ZIP; pass the catalog path
+provided by the harness when the catalog lives outside that extraction.
+
+### Release Benchmark (Non-competition)
+
+The release benchmark is an engineering validation tool, not a competition
+runtime dependency. It additionally requires `psutil` for process-memory
+measurement and uses the development-only frozen transcript and catalog:
+
+```powershell
+.\.venv\Scripts\python.exe -m tools.benchmark_release `
+  --catalog data/catalog.jsonl `
+  --transcript var/balanced-hardening/benchmark-transcript.jsonl `
+  --trials 3 --cwd-mode outside `
+  --output var/balanced-hardening/benchmark-p0.json `
+  --compare var/balanced-hardening/benchmark-r0-wall-v2.json
+```
+
 ## Architecture
 
 `CatalogIndex` provides FTS5 BM25, structured attributes, popularity, and a
@@ -91,8 +111,8 @@ a one-time CPU process.
   and latency are higher than steady-state response latency. A full-catalog
   dense smoke measured approximately 504 MiB working set after one response
   (576 MiB peak); evaluator processes retain additional trace/session state.
-- The default catalog path is relative to the process working directory; pass a
-  path to `Agent(...)` when the harness uses a different layout.
+- The catalog is organizer-provided and is not included in the submission ZIP;
+  pass its path to `Agent(...)` when the harness uses a different layout.
 
 ## Team Responsibilities
 
