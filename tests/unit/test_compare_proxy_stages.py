@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import statistics
 from copy import deepcopy
 from pathlib import Path
 
@@ -44,6 +45,34 @@ def _resource_report(runtime: str = "a" * 64, config: str = "b" * 64) -> dict[st
         "baseline_sha256": hashlib.sha256(baseline_path.read_bytes()).hexdigest(),
     }
     return candidate
+
+
+def _rebuild(report: dict[str, object]) -> None:
+    from tools.run_cv import selection_score
+    from tools.run_proxy import metric_summary
+
+    scores = []
+    invalid = 0
+    for fold in report["folds"]:
+        sessions = fold["sessions"]
+        overall = metric_summary(sessions)
+        efficiency = round(max(0.0, min(1.0, (11.0 - float(overall["mttc"])) / 10.0)), 6)
+        score = round(.5 * overall["hit_rate_at_10"] + .3 * overall["mrr"] + .2 * efficiency, 6)
+        scenarios = {name: metric_summary([item for item in sessions if item["scenario_type"] == name]) for name in ("buying", "browsing", "intent_override", "boundary")}
+        fold["aggregate"].update({**overall, "efficiency": efficiency, "recommended_technical_score": score, "scenario_metrics": scenarios})
+        scores.append(score)
+        invalid += fold["aggregate"]["invalid_response_count"]
+    report["invalid_response_count"] = invalid
+    report["fallback_count"] = sum(fold["fallback_count"] for fold in report["folds"])
+    report["mean_technical_score"] = round(statistics.fmean(scores), 6)
+    report["std_technical_score"] = round(statistics.pstdev(scores), 6)
+    report["selection_score"] = selection_score(scores, 0.0, invalid / sum(fold["sample_count"] for fold in report["folds"]))
+
+
+def _make_miss(report: dict[str, object], scenario: str, *, fold_index: int = 0) -> None:
+    session = next(item for item in report["folds"][fold_index]["sessions"] if item["scenario_type"] == scenario)
+    session.update({"hit": False, "first_hit_turn": None, "best_rank": None, "reciprocal_rank": 0.0})
+    _rebuild(report)
 
 
 def test_development_requires_selection_threshold_and_writes_aggregate_only_receipt(tmp_path: Path) -> None:
@@ -105,6 +134,12 @@ def test_metrics_accepts_real_p0_six_decimal_scenario_aggregates() -> None:
     report = json.loads(Path("var/balanced-hardening/proxy-v1/dev-p0.json").read_text(encoding="utf-8"))
 
     assert _metrics(report)["suite"] == "representative"
+
+
+def test_technical_score_uses_unrounded_efficiency_before_six_decimal_output() -> None:
+    from tools.compare_proxy_stages import _technical_score
+
+    assert _technical_score(0.696517, 0.310539, 5.893035) == 0.54356
 
 
 def test_metrics_recomputes_scores_and_rejects_forged_top_level_aggregate() -> None:
@@ -179,3 +214,188 @@ def test_development_rejects_candidate_missing_runtime_hash() -> None:
     candidate.pop("runtime_hash")
 
     assert compare_development(_report(), candidate, stage="S3")["accepted"] is False
+
+
+def test_development_rejects_samples_moved_between_folds() -> None:
+    from tools.compare_proxy_stages import compare_development
+
+    parent, candidate = _report(all_hits=True), _report(all_hits=True)
+    candidate["folds"][0]["sessions"][0]["sample_id"], candidate["folds"][1]["sessions"][0]["sample_id"] = (
+        candidate["folds"][1]["sessions"][0]["sample_id"],
+        candidate["folds"][0]["sessions"][0]["sample_id"],
+    )
+
+    outcome = compare_development(parent, candidate, stage="S3")
+
+    assert outcome["accepted"] is False
+    assert "development_fold_sample_set_mismatch" in outcome["failure_codes"]
+
+
+def test_development_rejects_sample_scenario_relabeling() -> None:
+    from tools.compare_proxy_stages import compare_development
+
+    parent, candidate = _report(all_hits=True), _report(all_hits=True)
+    candidate["folds"][0]["sessions"][0]["scenario_type"], candidate["folds"][0]["sessions"][1]["scenario_type"] = (
+        candidate["folds"][0]["sessions"][1]["scenario_type"],
+        candidate["folds"][0]["sessions"][0]["scenario_type"],
+    )
+
+    outcome = compare_development(parent, candidate, stage="S3")
+
+    assert outcome["accepted"] is False
+    assert "development_sample_scenario_mismatch" in outcome["failure_codes"]
+
+
+def test_metrics_rejects_hit_at_rank_eleven() -> None:
+    from tools.compare_proxy_stages import _metrics
+
+    report = _report(all_hits=True)
+    report["folds"][0]["sessions"][0].update({"best_rank": 11, "reciprocal_rank": 1 / 11})
+
+    with pytest.raises(ValueError, match="sessions"):
+        _metrics(report)
+
+
+def test_six_decimal_aggregate_validation_rejects_one_unit_difference() -> None:
+    from tools.compare_proxy_stages import _same_six
+
+    with pytest.raises(ValueError, match="aggregate"):
+        _same_six(0.500001, 0.5, "aggregate")
+
+
+def test_compare_stress_and_compare_stage_helpers_apply_the_same_gates() -> None:
+    from tools.compare_proxy_stages import compare_stage, compare_stress
+
+    parent, candidate = _report(suite="stress"), _report(suite="stress")
+
+    assert compare_stress(parent, candidate)["accepted"] is True
+    result = compare_stage(_report(), _report(all_hits=True), parent, candidate, stage="S3")
+    assert result["accepted"] is True
+
+
+@pytest.mark.parametrize("commit", [None, "not-a-sha", "a" * 41])
+def test_complete_rejects_legacy_parent_without_matching_recorded_git_commit(
+    tmp_path: Path, commit: object
+) -> None:
+    from tools.compare_proxy_stages import (
+        compare_complete,
+        compare_development,
+        write_development_receipt,
+    )
+
+    parent_dev, candidate_dev = _report(), _report(all_hits=True)
+    parent_stress = _report(suite="stress")
+    parent_dev.pop("runtime_hash")
+    parent_stress.pop("runtime_hash")
+    parent_dev["commit"] = commit
+    parent_stress["commit"] = commit
+    receipt = tmp_path / "receipt.json"
+    development = compare_development(parent_dev, candidate_dev, stage="S3")
+    write_development_receipt(receipt, candidate_dev, stage="S3", result=development)
+
+    outcome = compare_complete(parent_dev, candidate_dev, parent_stress, _report(suite="stress"), _resource_report(), receipt, stage="S3", current_runtime_hash="a" * 64, current_config_hash="b" * 64)
+
+    assert outcome["accepted"] is False
+    assert "parent_source_identity_mismatch" in outcome["failure_codes"]
+
+
+@pytest.mark.parametrize(
+    ("mutate", "failure_code"),
+    [
+        (lambda report: report.update({"manifest_hash": "e" * 64}), "development_manifest_hash_mismatch"),
+        (lambda report: report["folds"][0]["sessions"][0].update({"sample_id": "new-id"}), "development_sample_set_mismatch"),
+        (lambda report: report["folds"][0]["sessions"].__setitem__(0, {**report["folds"][0]["sessions"][0], "scenario_type": "browsing"}), "development_sample_scenario_mismatch"),
+    ],
+)
+def test_development_provenance_matrix(mutate, failure_code: str) -> None:
+    from tools.compare_proxy_stages import compare_development
+
+    candidate = _report(all_hits=True)
+    mutate(candidate)
+    if candidate["suite"] == "representative":
+        _rebuild(candidate)
+
+    outcome = compare_development(_report(all_hits=True), candidate, stage="S3")
+
+    assert failure_code in outcome["failure_codes"]
+
+
+def test_development_rejects_valid_stress_suite_as_mismatched_provenance() -> None:
+    from tools.compare_proxy_stages import compare_development
+
+    outcome = compare_development(_report(all_hits=True), _report(suite="stress", all_hits=True), stage="S3")
+
+    assert "development_suite_mismatch" in outcome["failure_codes"]
+
+
+@pytest.mark.parametrize("scenario", ["buying", "browsing", "intent_override", "boundary"])
+def test_development_scenario_and_boundary_gate_matrix(scenario: str) -> None:
+    from tools.compare_proxy_stages import compare_development
+
+    parent, candidate = _report(all_hits=True), _report(all_hits=True)
+    _make_miss(candidate, scenario)
+
+    outcome = compare_development(parent, candidate, stage="S3")
+
+    expected = "development_boundary_regression" if scenario == "boundary" else f"development_{scenario}_regression"
+    assert expected in outcome["failure_codes"]
+
+
+def test_development_fold_fallback_and_invalid_gate_matrix() -> None:
+    from tools.compare_proxy_stages import compare_development
+
+    parent, fold_regression = _report(all_hits=True), _report(all_hits=True)
+    _make_miss(fold_regression, "buying", fold_index=0)
+    assert "development_fold_regression" in compare_development(parent, fold_regression, stage="S3")["failure_codes"]
+    runtime_invalid = _report(all_hits=True)
+    runtime_invalid["folds"][0]["fallback_count"] = 1
+    runtime_invalid["folds"][0]["aggregate"]["invalid_response_count"] = 1
+    _rebuild(runtime_invalid)
+    assert "candidate_runtime_invalid" in compare_development(parent, runtime_invalid, stage="S3")["failure_codes"]
+
+
+@pytest.mark.parametrize("scenario", ["buying", "browsing", "intent_override", "boundary"])
+def test_stress_scenario_and_boundary_gate_matrix(scenario: str) -> None:
+    from tools.compare_proxy_stages import compare_stress
+
+    parent, candidate = _report(suite="stress", all_hits=True), _report(suite="stress", all_hits=True)
+    _make_miss(candidate, scenario)
+
+    outcome = compare_stress(parent, candidate)
+
+    expected = "stress_boundary_regression" if scenario == "boundary" else f"stress_{scenario}_regression"
+    assert expected in outcome["failure_codes"]
+
+
+def test_stress_overall_fallback_and_invalid_gate_matrix() -> None:
+    from tools.compare_proxy_stages import compare_stress
+
+    parent, candidate = _report(suite="stress", all_hits=True), _report(suite="stress", all_hits=True)
+    _make_miss(candidate, "buying")
+    assert "stress_mean_regression" in compare_stress(parent, candidate)["failure_codes"]
+    candidate = _report(suite="stress", all_hits=True)
+    candidate["folds"][0]["fallback_count"] = 1
+    candidate["folds"][0]["aggregate"]["invalid_response_count"] = 1
+    _rebuild(candidate)
+    assert "candidate_runtime_invalid" in compare_stress(parent, candidate)["failure_codes"]
+
+
+def test_complete_accepts_legacy_parent_with_same_valid_commit(tmp_path: Path) -> None:
+    from tools.compare_proxy_stages import (
+        compare_complete,
+        compare_development,
+        write_development_receipt,
+    )
+
+    parent_dev, candidate_dev = _report(), _report(all_hits=True)
+    parent_stress = _report(suite="stress")
+    for report in (parent_dev, parent_stress):
+        report.pop("runtime_hash")
+        report["commit"] = "ac36def"
+    receipt = tmp_path / "receipt.json"
+    development = compare_development(parent_dev, candidate_dev, stage="S3")
+    write_development_receipt(receipt, candidate_dev, stage="S3", result=development)
+
+    outcome = compare_complete(parent_dev, candidate_dev, parent_stress, _report(suite="stress"), _resource_report(), receipt, stage="S3", current_runtime_hash="a" * 64, current_config_hash="b" * 64)
+
+    assert outcome["accepted"] is True

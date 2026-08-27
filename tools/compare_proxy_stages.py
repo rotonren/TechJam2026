@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import math
+import re
 import statistics
 from dataclasses import asdict, dataclass
 from decimal import ROUND_HALF_UP, Decimal
@@ -17,6 +18,7 @@ from tools.run_cv import selection_score
 from tools.runtime_fingerprint import config_hash, runtime_hash
 
 _HASH_RE: Final = __import__("re").compile(r"^[0-9a-f]{64}$")
+_GIT_SHA_RE: Final = re.compile(r"^[0-9a-f]{7,40}$")
 _SCENARIOS: Final = frozenset({"buying", "browsing", "intent_override", "boundary"})
 _PRIMARY_SCENARIOS: Final = ("buying", "browsing", "intent_override")
 _R0_BASELINE: Final = Path("var/balanced-hardening/benchmark-r0-wall-v2.json")
@@ -75,7 +77,7 @@ def _same_six(actual: object, expected: float | None, name: str) -> None:
     if expected is None:
         if actual is not None:
             raise ValueError(f"{name} is inconsistent")
-    elif abs(_units(_number(actual)) - _units(expected)) > 1:
+    elif _units(_number(actual)) != _units(expected):
         raise ValueError(f"{name} is inconsistent")
 
 
@@ -93,6 +95,11 @@ def _summary(sessions: list[dict[str, object]]) -> dict[str, float | int | None]
         for session in sessions
     )
     return {"sample_count": len(sessions), "hit_rate_at_10": _six(hit_rate), "mrr": _six(mrr), "mttc": _six(mttc)}
+
+
+def _technical_score(hit_rate: float, mrr: float, mttc: float) -> float:
+    efficiency = max(0.0, min(1.0, (11.0 - mttc) / 10.0))
+    return _six(0.50 * hit_rate + 0.30 * mrr + 0.20 * efficiency)
 
 
 def _validate_summary(actual: object, expected: dict[str, float | int | None], name: str) -> None:
@@ -123,7 +130,9 @@ def _metrics(report: dict[str, object]) -> dict[str, object]:
         raise ValueError("folds are invalid")
     expected_folds = {1, 2, 3, 4} if suite == "representative" else {None}
     by_fold: dict[object, dict[str, object]] = {}
+    fold_sample_ids: dict[object, frozenset[str]] = {}
     sample_ids: set[str] = set()
+    sample_scenarios: dict[str, str] = {}
     scenario_set: set[str] = set()
     scenario_sessions: dict[str, list[dict[str, object]]] = {name: [] for name in _SCENARIOS}
     boundary_hits = 0
@@ -160,7 +169,7 @@ def _metrics(report: dict[str, object]) -> dict[str, object]:
                 raise ValueError("sessions are invalid")
             first_hit_turn, best_rank, reciprocal_rank = session.get("first_hit_turn"), session.get("best_rank"), session.get("reciprocal_rank")
             if session["hit"]:
-                if (isinstance(first_hit_turn, bool) or not isinstance(first_hit_turn, int) or not 1 <= first_hit_turn <= 10 or isinstance(best_rank, bool) or not isinstance(best_rank, int) or best_rank < 1):
+                if (isinstance(first_hit_turn, bool) or not isinstance(first_hit_turn, int) or not 1 <= first_hit_turn <= 10 or isinstance(best_rank, bool) or not isinstance(best_rank, int) or not 1 <= best_rank <= 10):
                     raise ValueError("sessions are invalid")
                 if _six(_number(reciprocal_rank)) != _six(1 / best_rank):
                     raise ValueError("sessions are invalid")
@@ -169,6 +178,7 @@ def _metrics(report: dict[str, object]) -> dict[str, object]:
             if session["sample_id"] in sample_ids:
                 raise ValueError("duplicate sample IDs")
             sample_ids.add(session["sample_id"])
+            sample_scenarios[session["sample_id"]] = scenario
             scenario_set.add(scenario)
             typed_sessions.append(session)
             scenario_sessions[scenario].append(session)
@@ -180,12 +190,13 @@ def _metrics(report: dict[str, object]) -> dict[str, object]:
             _validate_summary(metric, _summary([item for item in typed_sessions if item["scenario_type"] == scenario]), "scenario metrics")
         overall = _summary(typed_sessions)
         _validate_summary({key: aggregate.get(key) for key in overall}, overall, "fold aggregate")
-        efficiency = _six(max(0.0, min(1.0, (11.0 - float(overall["mttc"])) / 10.0)))
-        technical = _six(0.50 * float(overall["hit_rate_at_10"]) + 0.30 * float(overall["mrr"]) + 0.20 * efficiency)
-        _same_six(aggregate.get("efficiency"), efficiency, "fold aggregate")
+        raw_efficiency = max(0.0, min(1.0, (11.0 - float(overall["mttc"])) / 10.0))
+        technical = _technical_score(float(overall["hit_rate_at_10"]), float(overall["mrr"]), float(overall["mttc"]))
+        _same_six(aggregate.get("efficiency"), _six(raw_efficiency), "fold aggregate")
         _same_six(aggregate.get("recommended_technical_score"), technical, "fold aggregate")
         scores[fold_id] = _six(_number(aggregate["recommended_technical_score"]))
         by_fold[fold_id] = fold
+        fold_sample_ids[fold_id] = frozenset(item["sample_id"] for item in typed_sessions)
     if set(by_fold) != expected_folds or scenario_set != _SCENARIOS:
         raise ValueError("fold or scenario set is invalid")
     mean = _six(statistics.fmean(scores.values()))
@@ -197,7 +208,7 @@ def _metrics(report: dict[str, object]) -> dict[str, object]:
         raise ValueError("selection score is inconsistent")
     if fallback != report["fallback_count"] or invalid != report["invalid_response_count"]:
         raise ValueError("aggregate counts are inconsistent")
-    return {"suite": suite, "runtime_hash": report.get("runtime_hash"), "config_hash": report["config_hash"], "manifest_hash": report["manifest_hash"], "dataset_hash": report["dataset_hash"], "commit": report.get("commit"), "selection": selection, "mean": mean, "scores": scores, "scenario_rates": {name: _summary(items)["hit_rate_at_10"] for name, items in scenario_sessions.items()}, "boundary_hits": boundary_hits, "fallback": fallback, "invalid": invalid, "sample_ids": frozenset(sample_ids)}
+    return {"suite": suite, "runtime_hash": report.get("runtime_hash"), "config_hash": report["config_hash"], "manifest_hash": report["manifest_hash"], "dataset_hash": report["dataset_hash"], "commit": report.get("commit"), "selection": selection, "mean": mean, "scores": scores, "scenario_rates": {name: _summary(items)["hit_rate_at_10"] for name, items in scenario_sessions.items()}, "boundary_hits": boundary_hits, "fallback": fallback, "invalid": invalid, "sample_ids": frozenset(sample_ids), "fold_sample_ids": fold_sample_ids, "sample_scenarios": sample_scenarios}
 
 
 def _result(deltas: dict[str, float], failures: list[str]) -> dict[str, object]:
@@ -211,6 +222,10 @@ def _same_provenance(parent: dict[str, object], candidate: dict[str, object], *,
             failures.append(f"{prefix}_{name}_mismatch")
     if parent["sample_ids"] != candidate["sample_ids"]:
         failures.append(f"{prefix}_sample_set_mismatch")
+    if parent["fold_sample_ids"] != candidate["fold_sample_ids"]:
+        failures.append(f"{prefix}_fold_sample_set_mismatch")
+    if parent["sample_scenarios"] != candidate["sample_scenarios"]:
+        failures.append(f"{prefix}_sample_scenario_mismatch")
     return failures
 
 
@@ -225,11 +240,12 @@ def compare_development(parent_dev: dict[str, object], candidate_dev: dict[str, 
         failures.append("development_selection_regression")
     if _units(deltas["mean"]) < _units(policy.minimum_mean_delta):
         failures.append("development_mean_regression")
-    for fold_id, parent_score in parent["scores"].items():
-        delta = candidate["scores"][fold_id] - parent_score
-        deltas[f"fold_{fold_id}"] = delta
-        if _units(delta) < -_units(policy.maximum_fold_decline):
-            failures.append("development_fold_regression")
+    if set(parent["scores"]) == set(candidate["scores"]):
+        for fold_id, parent_score in parent["scores"].items():
+            delta = candidate["scores"][fold_id] - parent_score
+            deltas[f"fold_{fold_id}"] = delta
+            if _units(delta) < -_units(policy.maximum_fold_decline):
+                failures.append("development_fold_regression")
     for scenario in _PRIMARY_SCENARIOS:
         delta = candidate["scenario_rates"][scenario] - parent["scenario_rates"][scenario]
         deltas[f"{scenario}_hit_rate"] = delta
@@ -241,6 +257,32 @@ def compare_development(parent_dev: dict[str, object], candidate_dev: dict[str, 
     if candidate["fallback"] or candidate["invalid"]:
         failures.append("candidate_runtime_invalid")
     return _result(deltas, failures)
+
+
+def compare_stress(parent_stress: dict[str, object], candidate_stress: dict[str, object], *, stage: str = "S3") -> dict[str, object]:
+    policy = _policy(stage)
+    parent, candidate = _metrics(parent_stress), _metrics(candidate_stress)
+    failures = _same_provenance(parent, candidate, prefix="stress")
+    deltas: dict[str, float] = {"stress_mean": candidate["mean"] - parent["mean"]}
+    if _units(deltas["stress_mean"]) < -_units(policy.maximum_stress_decline):
+        failures.append("stress_mean_regression")
+    for scenario in _PRIMARY_SCENARIOS:
+        delta = candidate["scenario_rates"][scenario] - parent["scenario_rates"][scenario]
+        deltas[f"stress_{scenario}_hit_rate"] = delta
+        if _units(delta) < -_units(policy.maximum_stress_scenario_decline):
+            failures.append(f"stress_{scenario}_regression")
+    deltas["stress_boundary_hits"] = candidate["boundary_hits"] - parent["boundary_hits"]
+    if deltas["stress_boundary_hits"] < 0:
+        failures.append("stress_boundary_regression")
+    if candidate["fallback"] or candidate["invalid"]:
+        failures.append("candidate_runtime_invalid")
+    return _result(deltas, failures)
+
+
+def compare_stage(parent_dev: dict[str, object], candidate_dev: dict[str, object], parent_stress: dict[str, object], candidate_stress: dict[str, object], *, stage: str) -> dict[str, object]:
+    development = compare_development(parent_dev, candidate_dev, stage=stage)
+    stress = compare_stress(parent_stress, candidate_stress, stage=stage)
+    return _result({**development["deltas"], **stress["deltas"]}, [*development["failure_codes"], *stress["failure_codes"]])
 
 
 def _receipt_payload(candidate_dev: dict[str, object], *, stage: str, result: dict[str, object]) -> dict[str, object]:
@@ -282,14 +324,14 @@ def _resource_is_accepted(resource_report: object) -> bool:
 
 def compare_complete(parent_dev: dict[str, object], candidate_dev: dict[str, object], parent_stress: dict[str, object], candidate_stress: dict[str, object], resource_report: dict[str, object], development_receipt: str | Path, *, stage: str, current_runtime_hash: str | None = None, current_config_hash: str | None = None) -> dict[str, object]:
     development = compare_development(parent_dev, candidate_dev, stage=stage)
+    stress = compare_stress(parent_stress, candidate_stress, stage=stage)
     receipt = _load_receipt(development_receipt, candidate_dev, stage, development)
     parent_development, candidate_development = _metrics(parent_dev), _metrics(candidate_dev)
     parent, candidate = _metrics(parent_stress), _metrics(candidate_stress)
-    failures = list(development["failure_codes"])
-    failures.extend(_same_provenance(parent, candidate, prefix="stress"))
+    failures = [*development["failure_codes"], *stress["failure_codes"]]
     legacy_parent = not parent["runtime_hash"] and not parent_development["runtime_hash"]
     parent_identity_matches = parent["config_hash"] == parent_development["config_hash"] and (
-        (legacy_parent and parent["commit"] == parent_development["commit"])
+        (legacy_parent and isinstance(parent["commit"], str) and _GIT_SHA_RE.fullmatch(parent["commit"]) is not None and parent["commit"] == parent_development["commit"])
         or (not legacy_parent and parent["runtime_hash"] == parent_development["runtime_hash"])
     )
     if not parent_identity_matches:
@@ -302,22 +344,7 @@ def compare_complete(parent_dev: dict[str, object], candidate_dev: dict[str, obj
         failures.append("candidate_config_identity_mismatch")
     if not _resource_is_accepted(resource_report):
         failures.append("resource_report_rejected")
-    deltas = dict(development["deltas"])
-    overall = candidate["mean"] - parent["mean"]
-    deltas["stress_mean"] = overall
-    if _units(overall) < -_units(_policy(stage).maximum_stress_decline):
-        failures.append("stress_mean_regression")
-    for scenario in _PRIMARY_SCENARIOS:
-        delta = candidate["scenario_rates"][scenario] - parent["scenario_rates"][scenario]
-        deltas[f"stress_{scenario}_hit_rate"] = delta
-        if _units(delta) < -_units(_policy(stage).maximum_stress_scenario_decline):
-            failures.append(f"stress_{scenario}_regression")
-    deltas["stress_boundary_hits"] = candidate["boundary_hits"] - parent["boundary_hits"]
-    if deltas["stress_boundary_hits"] < 0:
-        failures.append("stress_boundary_regression")
-    if candidate["fallback"] or candidate["invalid"]:
-        failures.append("candidate_runtime_invalid")
-    return _result(deltas, failures)
+    return _result({**development["deltas"], **stress["deltas"]}, failures)
 
 
 def main(argv: list[str] | None = None) -> None:
