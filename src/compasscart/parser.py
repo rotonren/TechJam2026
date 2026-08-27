@@ -163,7 +163,6 @@ _EXPECTED_FILLER_TERMS = {
     "is",
     "it",
     "just",
-    "lining",
     "like",
     "me",
     "my",
@@ -299,7 +298,7 @@ class MessageParser:
                 no_preference_attribute=pending_attribute,
                 is_override=is_override,
                 is_continuation=is_continuation,
-                replace_preferences=replace_preferences,
+                replace_preferences=False,
             )
 
         # Continuation commands are control input, not answers to a pending
@@ -391,6 +390,12 @@ class MessageParser:
             for goal_start, category_start, _, _ in self._goal_category_head_spans(
                 text
             )
+        )
+        covered.extend(self._goal_modifier_spans(text))
+        covered.extend(
+            self._negative_goal_span(text, match)
+            for match in _GOAL_CATEGORY_RE.finditer(text)
+            if self._is_negative_goal_match(text, match)
         )
         for pattern in (_BUDGET_BETWEEN_RE, _BUDGET_DIRECTION_RE, _BUDGET_DEFAULT_RE):
             covered.extend(match.span() for match in pattern.finditer(text))
@@ -760,8 +765,32 @@ class MessageParser:
 
     @staticmethod
     def _is_negative_goal_match(text: str, match: re.Match[str]) -> bool:
-        prefix = text[: match.start()]
-        return bool(re.search(r"\b(?:don['’]?t|do\s+not)\s*$", prefix))
+        return MessageParser._negative_goal_prefix(text, match) is not None
+
+    @staticmethod
+    def _negative_goal_span(text: str, match: re.Match[str]) -> tuple[int, int]:
+        prefix = MessageParser._negative_goal_prefix(text, match)
+        return (prefix[0], match.end()) if prefix else match.span()
+
+    @staticmethod
+    def _negative_goal_prefix(
+        text: str, match: re.Match[str]
+    ) -> tuple[int, int] | None:
+        window_start = max(0, match.start() - 32)
+        prefix = text[window_start : match.start()]
+        negative = re.search(
+            r"\b(?:"
+            r"(?:i(?:'m| am)\s+)?not\s+|"
+            r"never\s+|"
+            r"no\s+longer\s+|"
+            r"don['’]?t(?:\s+really)?\s+|"
+            r"do\s+not(?:\s+really)?\s+"
+            r")$",
+            prefix,
+        )
+        if negative is None:
+            return None
+        return (window_start + negative.start(), window_start + negative.end())
 
     def _is_in_negative_goal_clause(self, text: str, start: int, end: int) -> bool:
         return any(
@@ -786,6 +815,23 @@ class MessageParser:
         return any(
             goal_start <= start and end <= goal_end
             for goal_start, _, _, goal_end in self._goal_category_head_spans(text)
+        ) or self._is_in_explicit_category_clause(text, start, end)
+
+    @staticmethod
+    def _is_in_explicit_category_clause(text: str, start: int, end: int) -> bool:
+        return any(
+            match.start() <= start and end <= match.end()
+            for match in _EXPLICIT_CATEGORY_RE.finditer(text)
+        )
+
+    def _goal_modifier_spans(self, text: str) -> tuple[tuple[int, int], ...]:
+        return tuple(
+            match.span()
+            for match in re.finditer(
+                r"\b(?:with|that\s+has|but\s+with)\s+waterproof\s+lining\b",
+                text,
+            )
+            if self._is_in_confirmed_goal_clause(text, match.start(), match.end())
         )
 
     def _goal_category_head_spans(

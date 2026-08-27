@@ -478,6 +478,73 @@ def test_override_no_preference_retains_the_pending_attribute():
     assert result.constraints == ()
 
 
+@pytest.mark.parametrize(
+    "message",
+    (
+        "I'm not looking for boots",
+        "I never want boots",
+        "I no longer want boots",
+        "I don't really want boots",
+    ),
+)
+def test_pending_bounded_negative_goal_phrases_do_not_create_category_or_soft_size(message):
+    result = MessageParser({"category": ("Boots",)}).parse(
+        message, turn=2, expected_attribute="size"
+    )
+
+    assert result.is_goal_replacement is False
+    assert result.constraints == ()
+
+
+def test_no_preference_override_does_not_replace_preferences():
+    result = MessageParser().parse(
+        "I've changed my mind, no preference", turn=2, expected_attribute="size"
+    )
+
+    assert result.is_override is True
+    assert result.no_preference_attribute == "size"
+    assert result.replace_preferences is False
+
+
+@pytest.mark.parametrize("expected_attribute", ("feature", "other"))
+def test_lining_remains_soft_text_when_it_is_the_pending_answer(expected_attribute):
+    result = MessageParser().parse("lining", turn=2, expected_attribute=expected_attribute)
+
+    assert [(item.attribute, item.value, item.is_hard) for item in result.constraints] == [
+        (expected_attribute, "lining", False)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("message", "vocabulary", "expected"),
+    (
+        (
+            "category: boots with waterproof lining",
+            {"category": ("Boots",), "feature": ("Waterproof",)},
+            [("category", "boots", True), ("feature", "waterproof", True)],
+        ),
+        (
+            "category: boots in blue leather",
+            {"category": ("Boots",)},
+            [
+                ("category", "boots", True),
+                ("color", "blue", True),
+                ("material", "leather", True),
+            ],
+        ),
+    ),
+)
+def test_explicit_category_replacement_allows_same_line_attributes(
+    message, vocabulary, expected
+):
+    result = MessageParser(vocabulary).parse(
+        message, turn=2, expected_attribute="size"
+    )
+
+    assert result.is_goal_replacement is True
+    assert [(item.attribute, item.value, item.is_hard) for item in result.constraints] == expected
+
+
 def test_parse_caches_raw_candidates_and_goal_heads_once(monkeypatch):
     parser = MessageParser({"category": ("Hiking Boots",), "use_case": ("Hiking",)})
     raw_calls = 0
