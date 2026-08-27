@@ -406,6 +406,19 @@ def test_pending_attribute_is_an_explicit_cue_for_dynamic_catalog_aliases():
     ]
 
 
+def test_pending_size_question_accepts_bare_known_numeric_size_as_hard():
+    parser = MessageParser({"size": ("10",)})
+
+    assert parser.supports("size", "10") is True
+
+    result = parser.parse("10", turn=2, expected_attribute="size")
+
+    assert [
+        (item.attribute, item.value, item.confidence, item.is_hard, item.source)
+        for item in result.constraints
+    ] == [("size", "10", 1.0, True, "clarification")]
+
+
 def test_dynamic_catalog_aliases_accept_explicit_label_punctuation():
     parser = MessageParser(
         {"brand": ("Acme Fashion",), "style": ("Sneaker",)}
@@ -474,3 +487,66 @@ def test_amazon_root_taxonomy_variants_are_not_hard_categories(taxonomy):
         item.attribute == "category" and item.is_hard
         for item in result.constraints
     )
+
+
+@pytest.mark.parametrize(
+    ("attribute", "value", "expected"),
+    (
+        (" color ", " GRAY ", True),
+        ("color", "grey", False),
+        ("material", "COTTON", True),
+        ("brand", " Acme Fashion ", True),
+        ("category", "dress", True),
+        ("budget", "$79.5", True),
+        ("budget", "79.50", False),
+        ("budget", "79.500", False),
+        ("budget", "not a number", False),
+        ("unknown", "blue", False),
+        ("color", "ultraviolet", False),
+        ("color", "", False),
+    ),
+)
+def test_parser_reports_normalized_attribute_value_support(
+    attribute, value, expected
+):
+    parser = MessageParser(
+        {"brand": ("Acme Fashion",), "category": ("Dresses",)}
+    )
+
+    assert parser.supports(attribute, value) is expected
+
+
+@pytest.mark.parametrize(
+    ("attribute", "value"),
+    (
+        ("color", "gray"),
+        ("material", "cotton"),
+        ("brand", "Acme Fashion"),
+        ("category", "dress"),
+        ("budget", "$79.5"),
+    ),
+)
+def test_reported_support_is_consumable_as_a_clarification(attribute, value):
+    parser = MessageParser(
+        {"brand": ("Acme Fashion",), "category": ("Dresses",)}
+    )
+
+    assert parser.supports(attribute, value) is True
+    parsed = parser.parse(value, turn=2, expected_attribute=attribute)
+    assert any(item.attribute == attribute for item in parsed.constraints)
+
+
+def test_parser_support_check_is_side_effect_free():
+    parser = MessageParser({"brand": ("Acme Fashion",)})
+    before = parser.parse(
+        "brand: Acme Fashion in blue", turn=2, expected_attribute="brand"
+    )
+
+    assert parser.supports("brand", "Acme Fashion") is True
+    assert parser.supports("brand", "Unlisted Brand") is False
+
+    after = parser.parse(
+        "brand: Acme Fashion in blue", turn=2, expected_attribute="brand"
+    )
+    assert after == before
+    assert parser.supports("brand", "Unlisted Brand") is False

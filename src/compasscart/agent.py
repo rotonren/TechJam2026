@@ -53,7 +53,13 @@ class CompassCartAgent:
             mmr_lambda=self.config.mmr_lambda,
             adaptive_browsing_mmr=self.config.adaptive_browsing_mmr,
         )
-        self.question_policy = QuestionPolicy(self.catalog.attributes)
+        self.question_policy = QuestionPolicy(
+            self.catalog.attributes,
+            parser_support=self.parser.supports,
+            retrieval_support=lambda attribute, value: bool(
+                self.catalog.attribute_ids(attribute, value)
+            ),
+        )
         self.response_builder = ResponseBuilder(
             self.catalog.valid_ids,
             self.catalog.popular_ids(self.config.max_recommendations),
@@ -151,7 +157,7 @@ class CompassCartAgent:
             ranked = candidates
 
         if not user_message.strip():
-            question = QuestionDecision("category")
+            question = QuestionDecision("category" if turn < 10 else None)
         else:
             try:
                 question = self.question_policy.choose(ranked, state)

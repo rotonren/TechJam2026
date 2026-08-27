@@ -257,6 +257,39 @@ class MessageParser:
                     lookup.setdefault(alias, value)
             self._phrase_lookup[attribute] = lookup
 
+    def supports(self, attribute: object, value: object) -> bool:
+        """Return whether a candidate value can be parsed for an attribute."""
+        normalized_attribute = normalize_value(attribute).replace(" ", "_")
+        normalized_value = normalize_value(value)
+        if not normalized_attribute or not normalized_value:
+            return False
+        if normalized_attribute == "budget":
+            parsed = self.parse(
+                normalized_value, turn=1, expected_attribute=normalized_attribute
+            )
+            return any(
+                item.attribute == normalized_attribute for item in parsed.constraints
+            )
+
+        lookup = self._phrase_lookup.get(normalized_attribute)
+        recognized = (
+            lookup is not None and tuple(terms(normalized_value)) in lookup
+        )
+        if not recognized and normalized_attribute == "category":
+            normalized_category = normalize_category_value(normalized_value)
+            recognized = normalized_category in {
+                normalize_category_value(item) for item in _KNOWN_CATEGORIES
+            }
+        if not recognized:
+            return False
+
+        parsed = self.parse(
+            normalized_value, turn=1, expected_attribute=normalized_attribute
+        )
+        return any(
+            item.attribute == normalized_attribute for item in parsed.constraints
+        )
+
     def parse(
         self,
         message: str,
@@ -601,7 +634,9 @@ class MessageParser:
         if attribute == "brand":
             return True
         if attribute == "size":
-            return bool(re.search(r"\b(?:size|sized|wear|in)\b", clause))
+            return explicit_cue or bool(
+                re.search(r"\b(?:size|sized|wear|in)\b", clause)
+            )
         if attribute == "style":
             return True
         if attribute == "feature":

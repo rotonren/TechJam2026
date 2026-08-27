@@ -54,10 +54,49 @@ def test_agent_requires_reset(fixture_catalog_path):
         agent.respond("missing", "shoes", 1, 10)
 
 
-def test_agent_question_policy_reuses_catalog_attribute_lookup(fixture_catalog_path):
+def test_agent_question_policy_wires_catalog_and_parser_support(fixture_catalog_path):
     agent = Agent(fixture_catalog_path)
 
     assert agent.question_policy.attribute_lookup is agent.catalog.attributes
+    assert agent.question_policy.parser_support("material", "cotton") is True
+    assert agent.question_policy.retrieval_support("material", "cotton") is True
+    assert agent.question_policy.retrieval_support("material", "unobtainium") is False
+
+
+def test_agent_applies_bare_catalog_size_answer_as_a_hard_clarification(
+    fixture_catalog_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("COMPASSCART_DISABLE_DENSE", "1")
+    agent = Agent(fixture_catalog_path)
+    decisions = iter(
+        (QuestionDecision("size", 0.2), QuestionDecision(None))
+    )
+    monkeypatch.setattr(
+        agent.question_policy,
+        "choose",
+        lambda *_args: next(decisions),
+    )
+    agent.reset("size-clarification", {})
+
+    question = agent.respond(
+        "size-clarification", "I need running shoes", turn=1, top_k=1
+    )
+    response = agent.respond(
+        "size-clarification", "10 wide", turn=2, top_k=1
+    )
+
+    state = agent.sessions.get("size-clarification")
+    assert question["ask_attribute"] == "size"
+    assert state is not None
+    assert [
+        (item.value, item.is_hard, item.source)
+        for item in state.active_constraints()
+        if item.attribute == "size"
+    ] == [("10 wide", True, "clarification")]
+    assert [
+        item["parent_asin"] for item in response["recommendations"]
+    ] == ["SHOE1"]
 
 
 def test_empty_message_returns_safe_recommendations(fixture_catalog_path):
@@ -67,6 +106,18 @@ def test_empty_message_returns_safe_recommendations(fixture_catalog_path):
     response = agent.respond("s1", "", 1, 10)
 
     assert response["ask_attribute"] == "category"
+    assert response["recommendations"]
+
+
+def test_empty_message_on_last_turn_returns_recommendations_without_question(
+    fixture_catalog_path,
+):
+    agent = Agent(fixture_catalog_path)
+    agent.reset("last-empty", {})
+
+    response = agent.respond("last-empty", "", 10, 10)
+
+    assert response["ask_attribute"] is None
     assert response["recommendations"]
 
 
