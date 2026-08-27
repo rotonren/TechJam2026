@@ -238,7 +238,7 @@ def test_fusion_reorders_exact_candidates_without_promoting_relaxed(
     assert experiment[-1].relaxed is True
 
 
-@pytest.mark.parametrize("fusion_weight", [-0.01, 0.05, 0.11, 0.16, True])
+@pytest.mark.parametrize("fusion_weight", [-0.01, 0.05, 0.11, 0.16])
 def test_ranker_rejects_out_of_range_fusion_weight(
     fixture_catalog_path, fusion_weight
 ):
@@ -269,6 +269,20 @@ def test_ranker_rejects_non_predeclared_feature_values(
         ConstraintRanker(
             CatalogIndex(fixture_catalog_path), **{argument: value}
         )
+
+
+@pytest.mark.parametrize(
+    "argument",
+    (
+        "fusion_weight",
+        "attribute_weight",
+        "consensus_bonus",
+        "boundary_bonus",
+    ),
+)
+def test_ranker_rejects_false_as_a_numeric_weight(fixture_catalog_path, argument):
+    with pytest.raises((TypeError, ValueError), match=argument):
+        ConstraintRanker(CatalogIndex(fixture_catalog_path), **{argument: False})
 
 
 @pytest.mark.parametrize("value", (True, 0.0, 1.0, float("nan")))

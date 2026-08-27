@@ -20,6 +20,15 @@ class ConstraintRanker:
         mmr_lambda: float = 0.85,
         adaptive_browsing_mmr: bool = False,
     ) -> None:
+        numeric_values = {
+            "fusion_weight": fusion_weight,
+            "attribute_weight": attribute_weight,
+            "consensus_bonus": consensus_bonus,
+            "boundary_bonus": boundary_bonus,
+        }
+        for name, value in numeric_values.items():
+            if isinstance(value, bool):
+                raise TypeError(f"{name} must be numeric, not bool")
         if fusion_weight not in {0.0, 0.10, 0.15}:
             raise ValueError("fusion_weight must be one of 0.0, 0.10, or 0.15")
         if attribute_weight not in {0.0, 0.05, 0.10}:
