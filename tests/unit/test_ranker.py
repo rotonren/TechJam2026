@@ -2,6 +2,7 @@ import pytest
 
 from compasscart.catalog import CatalogIndex
 from compasscart.models import Candidate, Constraint, SessionState
+from compasscart.normalization import terms
 from compasscart.ranker import ConstraintRanker
 
 
@@ -104,20 +105,32 @@ def test_browsing_only_applies_mmr_to_final_top10(fixture_catalog_path):
 def test_diversity_terms_cache_reuses_values_and_evicts_least_recently_used(
     fixture_catalog_path,
 ):
-    ranker = ConstraintRanker(CatalogIndex(fixture_catalog_path))
+    catalog = CatalogIndex(fixture_catalog_path)
+    ranker = ConstraintRanker(catalog)
 
     initial = ranker._diversity_terms("SHOE1")
+    attributes = catalog.attributes["SHOE1"]
+    expected = frozenset(
+        token
+        for field in ("category", "material", "style", "use_case")
+        for value in attributes[field]
+        for token in terms(value)
+    )
+    assert isinstance(initial, frozenset)
+    assert initial == expected
     assert ranker._diversity_terms("SHOE1") is initial
 
     ranker._diversity_terms("DRESS1")
     ranker._diversity_terms("SHOE1")
     assert list(ranker._diversity_cache)[-1] == "SHOE1"
 
-    for index in range(4_096):
+    for index in range(4_094):
         ranker._diversity_terms(f"MISSING{index}")
 
     assert len(ranker._diversity_cache) == 4_096
-    assert "SHOE1" not in ranker._diversity_cache
+    ranker._diversity_terms("OVERFLOW")
+    assert "DRESS1" not in ranker._diversity_cache
+    assert "SHOE1" in ranker._diversity_cache
 
 
 def test_exact_candidates_rank_before_higher_scoring_relaxed_candidates(

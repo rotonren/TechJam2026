@@ -54,6 +54,12 @@ def test_agent_requires_reset(fixture_catalog_path):
         agent.respond("missing", "shoes", 1, 10)
 
 
+def test_agent_question_policy_reuses_catalog_attribute_lookup(fixture_catalog_path):
+    agent = Agent(fixture_catalog_path)
+
+    assert agent.question_policy.attribute_lookup is agent.catalog.attributes
+
+
 def test_empty_message_returns_safe_recommendations(fixture_catalog_path):
     agent = Agent(fixture_catalog_path)
     agent.reset("s1", {})
