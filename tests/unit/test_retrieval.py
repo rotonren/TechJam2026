@@ -1,3 +1,5 @@
+import time
+
 import pytest
 
 from compasscart.catalog import CatalogIndex
@@ -238,6 +240,62 @@ def test_retrieval_filters_dense_candidates_then_appends_relaxed_alternatives(
     assert all(item.violations for item in relaxed)
     assert all(item.relaxed for item in candidates[len(exact) :])
     assert "JACKET1" not in {item.parent_asin for item in exact}
+
+
+def test_expired_deadline_skips_available_dense_backend_and_keeps_candidates(
+    fixture_catalog_path,
+):
+    class CountingDense:
+        available = True
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def search(self, _text, _limit):
+            self.calls += 1
+            return [Candidate("JACKET1")]
+
+    index = CatalogIndex(fixture_catalog_path)
+    dense = CountingDense()
+    diagnostics: list[str] = []
+    candidates = HybridRetriever(index, dense).retrieve(
+        RetrievalPlan(route="browsing", query_text="shoes"),
+        deadline=time.perf_counter() - 1,
+        diagnostics=diagnostics,
+    )
+
+    assert dense.calls == 0
+    assert candidates
+    assert {item.parent_asin for item in candidates} <= index.valid_ids
+    assert diagnostics == ["dense_budget"]
+
+
+@pytest.mark.parametrize("deadline", (None, float("inf")))
+def test_available_dense_backend_runs_without_an_expired_deadline(
+    fixture_catalog_path, deadline
+):
+    class CountingDense:
+        available = True
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def search(self, _text, _limit):
+            self.calls += 1
+            return [Candidate("JACKET1")]
+
+    index = CatalogIndex(fixture_catalog_path)
+    dense = CountingDense()
+    diagnostics: list[str] = []
+
+    HybridRetriever(index, dense).retrieve(
+        RetrievalPlan(route="browsing", query_text="shoes"),
+        deadline=deadline,
+        diagnostics=diagnostics,
+    )
+
+    assert dense.calls == 1
+    assert diagnostics == []
 
 
 def test_retrieval_excludes_requested_ids_before_filling_exact_results(

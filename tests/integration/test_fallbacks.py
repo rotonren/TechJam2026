@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from agent import Agent
+from compasscart.config import RuntimeConfig
 from compasscart.models import Candidate
 
 
@@ -218,3 +219,73 @@ def test_empty_retrieval_uses_constraint_aware_fallback(fixture_catalog_path):
     # alternatives, but no silent over-budget item may be returned as exact.
     assert prices[0] <= 80.0
     assert "relaxing" in response["message"]
+
+
+def test_zero_component_budget_skips_optional_work_without_using_fallbacks(
+    fixture_catalog_path,
+):
+    class CountingDense:
+        available = True
+        status = "ready"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def search(self, _text, _limit):
+            self.calls += 1
+            return []
+
+    agent = Agent(fixture_catalog_path, config=RuntimeConfig(component_timeout_ms=0))
+    dense = CountingDense()
+    agent.dense = dense
+    agent.retriever.dense = dense
+    agent.reset("budget", {})
+
+    response = agent.respond("budget", "show me shoes", 1, 3)
+
+    _assert_valid(response, agent.catalog.valid_ids)
+    trace = agent.traces.records[-1]
+    assert dense.calls == 0
+    assert "dense_budget" in trace["budget_skips"]
+    assert all("budget" not in item for item in trace["fallbacks"])
+
+
+def test_agent_records_no_budget_skip_with_normal_budget(fixture_catalog_path):
+    agent = Agent(fixture_catalog_path, config=RuntimeConfig(component_timeout_ms=800))
+    agent.reset("budget", {})
+
+    response = agent.respond("budget", "show me shoes", 1, 3)
+
+    _assert_valid(response, agent.catalog.valid_ids)
+    assert agent.traces.records[-1]["budget_skips"] == []
+
+
+def test_agent_supports_legacy_retriever_and_ranker_signatures(fixture_catalog_path):
+    agent = Agent(fixture_catalog_path, config=RuntimeConfig(component_timeout_ms=0))
+
+    class LegacyRetriever:
+        calls = 0
+
+        def retrieve(self, _plan, _state):
+            self.calls += 1
+            return [Candidate("SHOE1", product=agent.catalog.product("SHOE1"))]
+
+    class LegacyRanker:
+        calls = 0
+
+        def rank(self, candidates, _state):
+            self.calls += 1
+            return candidates
+
+    retriever = LegacyRetriever()
+    ranker = LegacyRanker()
+    agent.retriever = retriever
+    agent.ranker = ranker
+    agent.reset("legacy", {})
+
+    response = agent.respond("legacy", "show me shoes", 1, 1)
+
+    _assert_valid(response, agent.catalog.valid_ids)
+    assert retriever.calls == 1
+    assert ranker.calls == 1
+    assert agent.traces.records[-1]["budget_skips"] == []

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections import OrderedDict
 
 from .catalog import CatalogIndex
@@ -30,6 +31,8 @@ class ConstraintRanker:
         state: SessionState,
         *,
         top_k: int | None = None,
+        deadline: float | None = None,
+        diagnostics: list[str] | None = None,
     ) -> list[Candidate]:
         if not candidates:
             return []
@@ -87,9 +90,12 @@ class ConstraintRanker:
         scored.sort(key=lambda item: (item.relaxed, -item.score, item.parent_asin))
         limit = len(scored) if top_k is None else min(max(top_k, 0), len(scored))
         if state.route == "browsing" and limit:
-            exact = [item for item in scored if not item.relaxed]
-            relaxed = [item for item in scored if item.relaxed]
-            return (self._diverse_order(exact) + self._diverse_order(relaxed))[:limit]
+            if deadline is None or time.perf_counter() < deadline:
+                exact = [item for item in scored if not item.relaxed]
+                relaxed = [item for item in scored if item.relaxed]
+                return (self._diverse_order(exact) + self._diverse_order(relaxed))[:limit]
+            if diagnostics is not None and "mmr_budget" not in diagnostics:
+                diagnostics.append("mmr_budget")
         return scored[:limit]
 
     def _coverage(self, identifier: str, constraints: list[Constraint]) -> float:

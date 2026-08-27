@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import time
 from collections import defaultdict
 from collections.abc import Collection, Iterable, Mapping, Sequence
 
@@ -46,6 +47,8 @@ class HybridRetriever:
         state: SessionState | None = None,
         *,
         exclude_ids: Collection[str] | None = None,
+        deadline: float | None = None,
+        diagnostics: list[str] | None = None,
     ) -> list[Candidate]:
         # The caller normally supplies the exclusion set explicitly so ordinary
         # refinements can reuse a previous result.  Keep the state-based fallback
@@ -57,7 +60,12 @@ class HybridRetriever:
         lexical = self.catalog.search_lexical(plan, limit=component_limit)
         attribute_ids = self._attribute_candidates(plan, component_limit)
         profile_ids = self._profile_candidates(plan, component_limit)
-        dense = self._dense_candidates(plan.query_text, component_limit)
+        dense: list[Candidate] = []
+        if self.dense is not None and self.dense.available:
+            if deadline is None or time.perf_counter() < deadline:
+                dense = self._dense_candidates(plan.query_text, component_limit)
+            elif diagnostics is not None and "dense_budget" not in diagnostics:
+                diagnostics.append("dense_budget")
 
         rankings = {
             "lexical": self._exact_ids(

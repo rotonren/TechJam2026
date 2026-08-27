@@ -1,3 +1,5 @@
+import time
+
 import pytest
 
 from compasscart.catalog import CatalogIndex
@@ -100,6 +102,49 @@ def test_browsing_only_applies_mmr_to_final_top10(fixture_catalog_path):
 
     assert len(ranked) == 40
     assert ranker.calls < 2_000
+
+
+def test_expired_deadline_skips_browsing_mmr_without_mixing_relaxed_candidates(
+    fixture_catalog_path, monkeypatch
+):
+    index = CatalogIndex(fixture_catalog_path)
+    ranker = ConstraintRanker(index)
+    candidates = [
+        Candidate("JACKET1", product=index.product("JACKET1"), score=10.0, relaxed=True),
+        Candidate("BELT1", product=index.product("BELT1"), score=0.1),
+    ]
+    diagnostics: list[str] = []
+    monkeypatch.setattr(
+        ranker,
+        "_mmr",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("MMR was called")),
+    )
+
+    ranked = ranker.rank(
+        candidates,
+        SessionState("s1", route="browsing"),
+        top_k=2,
+        deadline=time.perf_counter() - 1,
+        diagnostics=diagnostics,
+    )
+
+    assert [item.parent_asin for item in ranked] == ["BELT1", "JACKET1"]
+    assert diagnostics == ["mmr_budget"]
+
+
+def test_expired_deadline_does_not_record_mmr_skip_for_buying(fixture_catalog_path):
+    index = CatalogIndex(fixture_catalog_path)
+    diagnostics: list[str] = []
+
+    ranked = ConstraintRanker(index).rank(
+        _candidates(index, ["DRESS1", "SHOE1"]),
+        SessionState("s1", route="buying"),
+        deadline=time.perf_counter() - 1,
+        diagnostics=diagnostics,
+    )
+
+    assert ranked
+    assert diagnostics == []
 
 
 def test_diversity_terms_cache_reuses_values_and_evicts_least_recently_used(

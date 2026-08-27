@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import time
 from collections import OrderedDict
 from collections.abc import Collection
@@ -80,7 +81,9 @@ class CompassCartAgent:
             raise ValueError("turn must be between 1 and 10")
 
         started = time.perf_counter()
+        deadline = started + max(self.config.component_timeout_ms, 0) / 1_000.0
         fallbacks: list[str] = []
+        budget_skips: list[str] = []
         old_version = state.intent_version
         expected_attribute = state.pending_attribute
         previous_recommendations = set(state.previous_recommendations)
@@ -109,16 +112,18 @@ class CompassCartAgent:
             plan = RetrievalPlan(route="browsing", query_text=query_text)
 
         try:
-            try:
-                candidates = self.retriever.retrieve(
-                    plan, state, exclude_ids=excluded_ids
-                )
-            except TypeError as error:
-                # Preserve compatibility with lightweight test/demonstration
-                # retrievers that still expose the original two-argument call.
-                if "exclude_ids" not in str(error):
-                    raise
-                candidates = self.retriever.retrieve(plan, state)
+            retrieve_keywords = self._supported_keywords(
+                self.retriever.retrieve,
+                ("exclude_ids", "deadline", "diagnostics"),
+            )
+            retrieve_args: dict[str, object] = {}
+            if "exclude_ids" in retrieve_keywords:
+                retrieve_args["exclude_ids"] = excluded_ids
+            if "deadline" in retrieve_keywords:
+                retrieve_args["deadline"] = deadline
+            if "diagnostics" in retrieve_keywords:
+                retrieve_args["diagnostics"] = budget_skips
+            candidates = self.retriever.retrieve(plan, state, **retrieve_args)
         except Exception:  # noqa: BLE001 - popular products are the retrieval fallback.
             fallbacks.append("retriever")
             candidates = self._popular_candidates(plan, excluded_ids)
@@ -128,7 +133,15 @@ class CompassCartAgent:
         state.candidate_count = len(candidates)
 
         try:
-            ranked = self.ranker.rank(candidates, state)
+            rank_keywords = self._supported_keywords(
+                self.ranker.rank, ("deadline", "diagnostics")
+            )
+            rank_args: dict[str, object] = {}
+            if "deadline" in rank_keywords:
+                rank_args["deadline"] = deadline
+            if "diagnostics" in rank_keywords:
+                rank_args["diagnostics"] = budget_skips
+            ranked = self.ranker.rank(candidates, state, **rank_args)
         except Exception:  # noqa: BLE001 - retain deterministic RRF order.
             fallbacks.append("ranker")
             ranked = candidates
@@ -186,10 +199,30 @@ class CompassCartAgent:
                 "ask_attribute": question.ask_attribute,
                 "dense_status": dense_status,
                 "fallbacks": fallbacks,
+                "budget_skips": budget_skips,
                 "elapsed_ms": elapsed_ms,
             }
         )
         return response
+
+    @staticmethod
+    def _supported_keywords(callable_: object, names: tuple[str, ...]) -> set[str]:
+        try:
+            parameters = inspect.signature(callable_).parameters.values()
+        except (TypeError, ValueError):
+            return set(names)
+        if any(item.kind is inspect.Parameter.VAR_KEYWORD for item in parameters):
+            return set(names)
+        return {
+            item.name
+            for item in parameters
+            if item.name in names
+            and item.kind
+            in {
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
+            }
+        }
 
     def _popular_candidates(
         self,
