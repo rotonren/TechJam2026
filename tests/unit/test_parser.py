@@ -226,38 +226,100 @@ def test_budget_phrase_is_not_inferred_as_catalog_category():
     assert ("budget", "50.00") in pairs
 
 
-def test_pending_question_does_not_hide_other_recognized_attributes():
+def test_pending_question_gates_fixed_aliases_to_the_requested_attribute():
     result = MessageParser().parse(
         "Blue leather, please.", turn=2, expected_attribute="color"
     )
 
     assert {(item.attribute, item.value) for item in result.constraints} == {
         ("color", "blue"),
-        ("material", "leather"),
     }
 
 
-def test_pending_question_does_not_relabel_a_known_other_attribute():
+def test_pending_question_suppresses_fixed_aliases_for_another_attribute():
     parser = MessageParser(
         {"category": ("Shoes",), "use_case": ("Running", "Work")}
     )
 
     result = parser.parse("Blue.", turn=2, expected_attribute="use_case")
 
-    assert [(item.attribute, item.value) for item in result.constraints] == [
-        ("color", "blue")
-    ]
+    assert result.constraints == ()
 
 
-def test_pending_question_keeps_recognized_color_and_category_together():
+def test_pending_question_suppresses_fixed_and_dynamic_aliases_for_other_attributes():
     parser = MessageParser({"category": ("Shoes",)})
 
     result = parser.parse("blue shoes", turn=2, expected_attribute="material")
 
-    assert {(item.attribute, item.value) for item in result.constraints} == {
-        ("color", "blue"),
-        ("category", "shoes"),
-    }
+    assert result.constraints == ()
+
+
+def test_pending_style_accepts_matching_dynamic_alias_as_hard_clarification():
+    parser = MessageParser(
+        {
+            "style": ("Adjustable",),
+            "size": ("Adjustable",),
+            "feature": ("Adjustable",),
+        }
+    )
+
+    result = parser.parse("Adjustable", turn=2, expected_attribute="style")
+
+    assert [
+        (item.attribute, item.value, item.is_hard, item.source)
+        for item in result.constraints
+    ] == [("style", "adjustable", True, "clarification")]
+
+
+def test_pending_size_suppresses_category_alias_without_soft_fallback():
+    parser = MessageParser({"category": ("Boots",)})
+
+    result = parser.parse("Boots", turn=2, expected_attribute="size")
+
+    assert result.constraints == ()
+
+
+def test_pending_size_does_not_treat_a_trailing_category_word_as_an_explicit_cue():
+    parser = MessageParser({"category": ("Boots",)})
+
+    result = parser.parse("Boots category", turn=2, expected_attribute="size")
+
+    assert not any(item.attribute == "category" for item in result.constraints)
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_attribute", "vocabulary", "expected"),
+    (
+        ("category: Boots", "size", {}, ("category", "boots")),
+        ("size: Adjustable", "style", {"size": ("Adjustable",)}, ("size", "adjustable")),
+        ("style: Adjustable", "size", {"style": ("Adjustable",)}, ("style", "adjustable")),
+    ),
+)
+def test_explicit_attribute_cues_allow_cross_attribute_aliases_while_pending(
+    message, expected_attribute, vocabulary, expected
+):
+    result = MessageParser(vocabulary).parse(
+        message, turn=2, expected_attribute=expected_attribute
+    )
+
+    assert expected in {(item.attribute, item.value) for item in result.constraints}
+
+
+def test_goal_override_allows_category_replacement_while_pending():
+    result = MessageParser({"category": ("Boots",)}).parse(
+        "Actually, I need boots", turn=2, expected_attribute="size"
+    )
+
+    assert result.is_override is True
+    assert [(item.attribute, item.value) for item in result.constraints] == [
+        ("category", "boots")
+    ]
+
+
+def test_no_preference_without_pending_attribute_does_not_reject_mentioned_attribute():
+    result = MessageParser().parse("No preference for color", turn=2)
+
+    assert result.no_preference_attribute is None
 
 
 def test_catalog_vocabulary_keeps_or_grouping_separate_from_other_attributes():

@@ -55,7 +55,10 @@ def test_no_preference_is_recorded_and_not_added_as_constraint():
     state.asked_attributes.append("size")
 
     state = store.update(
-        "s1", "I don't have a preference for size; please use your judgment.", 2
+        "s1",
+        "I don't have a preference for size; please use your judgment.",
+        2,
+        expected_attribute="size",
     )
 
     assert "size" in state.no_preference_attributes
