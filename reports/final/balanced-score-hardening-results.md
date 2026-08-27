@@ -74,3 +74,14 @@ Intent Override, folds, and mean. At `0.10`, mean changed by `-0.042808`,
 selection by `-0.044305`, and Boundary again lost two hits; Buying, Browsing,
 Intent Override, every fold, and mean all regressed. Both candidates had zero
 fallback and invalid responses. The attribute weight was restored to `0.0`.
+
+### S3 Consensus Bonus
+
+Both predeclared consensus-bonus values were rejected on representative
+development folds against P0 before any stress, resource, audit, or public
+run. At `0.025`, mean TechnicalScore changed by `-0.004240` and selection by
+`-0.004726`; Boundary was unchanged and all scenario declines remained within
+their individual limits, but both aggregate gates failed. At `0.05`, mean
+changed by `-0.012049`, selection by `-0.013219`, and Browsing HitRate@10 by
+`-0.020249`; Boundary was unchanged. Both candidates had zero fallback and
+invalid responses. The consensus bonus was restored to `0.0`.

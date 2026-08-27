@@ -32,7 +32,7 @@ class RuntimeConfig:
     )
     rank_fusion_weight: float = 0.10
     rank_attribute_weight: float = 0.0
-    rank_consensus_bonus: float = 0.05
+    rank_consensus_bonus: float = 0.0
     rank_boundary_bonus: float = 0.0
     mmr_lambda: float = 0.85
     adaptive_browsing_mmr: bool = False
