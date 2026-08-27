@@ -44,19 +44,31 @@ class OnnxDenseBackend:
         scales: np.ndarray,
         failure_limit: int = 3,
     ) -> None:
-        if vectors.ndim != 2 or len(product_ids) != vectors.shape[0]:
+        if (
+            product_ids.dtype.kind != "U"
+            or product_ids.ndim != 1
+            or product_ids.size == 0
+        ):
+            raise ValueError(
+                "product IDs must be a non-empty one-dimensional Unicode array"
+            )
+        if vectors.dtype != np.int8:
+            raise ValueError("dense vectors must use int8 dtype")
+        if vectors.ndim != 2 or vectors.shape[0] == 0 or vectors.shape[1] == 0:
+            raise ValueError("dense vectors must be a non-empty two-dimensional array")
+        if len(product_ids) != vectors.shape[0]:
             raise ValueError("dense IDs and vectors have incompatible shapes")
+        if scales.dtype != np.float32:
+            raise ValueError("dense vector scales must use float32 dtype")
         if scales.shape != (vectors.shape[0],):
             raise ValueError("dense vector scales have an incompatible shape")
-        if product_ids.dtype.kind != "U":
-            raise ValueError("dense product IDs must use a Unicode dtype")
         if failure_limit < 1:
             raise ValueError("dense failure limit must be positive")
         self.session = session
         self.tokenizer = tokenizer
         self.product_ids = product_ids
-        self.vectors = vectors.astype(np.int8, copy=False)
-        self.scales = scales.astype(np.float32, copy=False)
+        self.vectors = vectors
+        self.scales = scales
         self._input_names = {item.name for item in session.get_inputs()}
         self._available = True
         self._failure_limit = failure_limit

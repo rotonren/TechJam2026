@@ -3,13 +3,18 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import sys
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_SRC_ROOT = PROJECT_ROOT / "src"
+if str(_SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SRC_ROOT))
+
 from compasscart.integrity import sha256_file
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ASSET_FILES = (
     "assets/SHA256SUMS",
     "assets/model/model.int8.onnx",

@@ -30,6 +30,24 @@ REQUIRED_ENTRIES = {
 }
 
 
+def test_package_module_imports_from_repository_root_without_pythonpath():
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+
+    completed = subprocess.run(
+        [sys.executable, "-c", "import tools.package_submission"],
+        cwd=Path(__file__).resolve().parents[2],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "ModuleNotFoundError" not in completed.stderr
+
+
 @pytest.fixture()
 def submission_zip(tmp_path: Path) -> Path:
     destination = tmp_path / "compasscart-submission.zip"

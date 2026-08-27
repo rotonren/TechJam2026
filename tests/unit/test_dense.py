@@ -235,6 +235,84 @@ def test_dense_backend_rejects_non_unicode_product_ids():
         )
 
 
+@pytest.mark.parametrize(
+    ("product_ids", "vectors", "scales", "message"),
+    (
+        (
+            np.array([["A"]]),
+            np.array([[127]], dtype=np.int8),
+            np.array([1.0], dtype=np.float32),
+            "product IDs must be a non-empty one-dimensional Unicode array",
+        ),
+        (
+            np.array([], dtype="U1"),
+            np.empty((0, 1), dtype=np.int8),
+            np.array([], dtype=np.float32),
+            "product IDs must be a non-empty one-dimensional Unicode array",
+        ),
+        (
+            np.array(["A"]),
+            np.array([[127]], dtype=np.int16),
+            np.array([1.0], dtype=np.float32),
+            "dense vectors must use int8 dtype",
+        ),
+        (
+            np.array(["A"]),
+            np.array([127], dtype=np.int8),
+            np.array([1.0], dtype=np.float32),
+            "dense vectors must be a non-empty two-dimensional array",
+        ),
+        (
+            np.array(["A"]),
+            np.empty((1, 0), dtype=np.int8),
+            np.array([1.0], dtype=np.float32),
+            "dense vectors must be a non-empty two-dimensional array",
+        ),
+        (
+            np.array(["A"]),
+            np.array([[127]], dtype=np.int8),
+            np.array([1.0], dtype=np.float64),
+            "dense vector scales must use float32 dtype",
+        ),
+        (
+            np.array(["A"]),
+            np.array([[127]], dtype=np.int8),
+            np.array([[1.0]], dtype=np.float32),
+            "dense vector scales have an incompatible shape",
+        ),
+    ),
+)
+def test_dense_backend_rejects_invalid_mmap_array_shapes_and_dtypes(
+    product_ids, vectors, scales, message
+):
+    with pytest.raises(ValueError, match=message):
+        OnnxDenseBackend(
+            _Session(),
+            _Tokenizer(),
+            product_ids=product_ids,
+            vectors=vectors,
+            scales=scales,
+        )
+
+
+def test_dense_backend_keeps_valid_array_instances_without_casting():
+    product_ids = np.array(["A"])
+    vectors = np.array([[127]], dtype=np.int8)
+    scales = np.array([1.0], dtype=np.float32)
+
+    backend = OnnxDenseBackend(
+        _Session(),
+        _Tokenizer(),
+        product_ids=product_ids,
+        vectors=vectors,
+        scales=scales,
+    )
+
+    assert backend.product_ids is product_ids
+    assert backend.vectors is vectors
+    assert backend.scales is scales
+
+
 def test_inference_exception_is_tolerated_until_failure_limit():
     class BrokenSession(_Session):
         def run(self, _outputs, _inputs):
