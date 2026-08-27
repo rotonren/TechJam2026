@@ -1,3 +1,4 @@
+from compasscart import question_policy
 from compasscart.models import Candidate, Constraint, SessionState
 from compasscart.question_policy import QuestionPolicy
 
@@ -37,6 +38,43 @@ def test_policy_chooses_attribute_with_largest_expected_top10_gain():
 
     assert decision.ask_attribute == "material"
     assert decision.utility > 0
+
+
+def test_policy_reuses_catalog_attributes_without_extracting_products(monkeypatch):
+    candidates = [
+        Candidate(parent_asin=f"P{index:02d}", product={}, score=12.0 - index)
+        for index in range(12)
+    ]
+    lookup = {
+        candidate.parent_asin: {
+            "material": ("cotton",) if index < 6 else ("leather",)
+        }
+        for index, candidate in enumerate(candidates)
+    }
+
+    def should_not_extract(product):
+        raise AssertionError("catalog attributes should be reused")
+
+    monkeypatch.setattr(question_policy, "extract_attributes", should_not_extract)
+
+    decision = QuestionPolicy(lookup).choose(candidates, SessionState("s1", turn=2))
+
+    assert decision.ask_attribute == "material"
+
+
+def test_policy_falls_back_to_product_extraction_when_catalog_id_is_missing():
+    candidates = [
+        _candidate(
+            f"P{index:02d}",
+            12.0 - index,
+            material="cotton" if index < 6 else "leather",
+        )
+        for index in range(12)
+    ]
+
+    decision = QuestionPolicy({}).choose(candidates, SessionState("s1", turn=2))
+
+    assert decision.ask_attribute == "material"
 
 
 def test_policy_never_repeats_or_asks_rejected_attribute():

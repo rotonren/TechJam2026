@@ -28,6 +28,9 @@ _RESPONSE_LIKELIHOOD = {
 
 
 class QuestionPolicy:
+    def __init__(self, attribute_lookup=None) -> None:
+        self.attribute_lookup = attribute_lookup
+
     def choose(
         self, candidates: list[Candidate], state: SessionState
     ) -> QuestionDecision:
@@ -37,9 +40,7 @@ class QuestionPolicy:
             return QuestionDecision(None)
 
         probabilities = self._probabilities(candidates)
-        candidate_attributes = [
-            extract_attributes(candidate.product) for candidate in candidates
-        ]
+        candidate_attributes = [self._attributes(candidate) for candidate in candidates]
         blocked = set(state.asked_attributes) | state.no_preference_attributes
         # An attribute explicitly constrained by the user is already answered;
         # asking for it again would contradict the turn's hard semantics (for
@@ -67,6 +68,13 @@ class QuestionPolicy:
             return QuestionDecision(attribute, utility)
 
         return QuestionDecision(None)
+
+    def _attributes(self, candidate: Candidate) -> dict[str, tuple[str, ...]]:
+        if self.attribute_lookup is not None:
+            attributes = self.attribute_lookup.get(candidate.parent_asin)
+            if attributes is not None:
+                return attributes
+        return extract_attributes(candidate.product)
 
     def _utility(
         self,

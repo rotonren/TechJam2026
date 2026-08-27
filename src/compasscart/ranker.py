@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections import OrderedDict
+
 from .catalog import CatalogIndex
 from .models import Candidate, Constraint, SessionState
 from .normalization import terms
@@ -20,6 +22,7 @@ class ConstraintRanker:
         self.catalog = catalog
         self.fusion_weight = fusion_weight
         self.mmr_lambda = mmr_lambda
+        self._diversity_cache: OrderedDict[str, frozenset[str]] = OrderedDict()
 
     def rank(
         self,
@@ -179,7 +182,11 @@ class ConstraintRanker:
             return 0.0
         return len(left_terms & right_terms) / len(union)
 
-    def _diversity_terms(self, identifier: str) -> set[str]:
+    def _diversity_terms(self, identifier: str) -> frozenset[str]:
+        cached = self._diversity_cache.pop(identifier, None)
+        if cached is not None:
+            self._diversity_cache[identifier] = cached
+            return cached
         attributes = self.catalog.attributes.get(identifier, {})
         values = (
             *attributes.get("category", ()),
@@ -187,4 +194,8 @@ class ConstraintRanker:
             *attributes.get("style", ()),
             *attributes.get("use_case", ()),
         )
-        return {token for value in values for token in terms(value)}
+        result = frozenset(token for value in values for token in terms(value))
+        self._diversity_cache[identifier] = result
+        if len(self._diversity_cache) > 4_096:
+            self._diversity_cache.popitem(last=False)
+        return result

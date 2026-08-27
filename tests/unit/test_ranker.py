@@ -101,6 +101,25 @@ def test_browsing_only_applies_mmr_to_final_top10(fixture_catalog_path):
     assert ranker.calls < 2_000
 
 
+def test_diversity_terms_cache_reuses_values_and_evicts_least_recently_used(
+    fixture_catalog_path,
+):
+    ranker = ConstraintRanker(CatalogIndex(fixture_catalog_path))
+
+    initial = ranker._diversity_terms("SHOE1")
+    assert ranker._diversity_terms("SHOE1") is initial
+
+    ranker._diversity_terms("DRESS1")
+    ranker._diversity_terms("SHOE1")
+    assert list(ranker._diversity_cache)[-1] == "SHOE1"
+
+    for index in range(4_096):
+        ranker._diversity_terms(f"MISSING{index}")
+
+    assert len(ranker._diversity_cache) == 4_096
+    assert "SHOE1" not in ranker._diversity_cache
+
+
 def test_exact_candidates_rank_before_higher_scoring_relaxed_candidates(
     fixture_catalog_path,
 ):

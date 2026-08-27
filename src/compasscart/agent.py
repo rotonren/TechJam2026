@@ -48,7 +48,7 @@ class CompassCartAgent:
             fusion_weight=self.config.rank_fusion_weight,
             mmr_lambda=self.config.mmr_lambda,
         )
-        self.question_policy = QuestionPolicy()
+        self.question_policy = QuestionPolicy(self.catalog.attributes)
         self.response_builder = ResponseBuilder(
             self.catalog.valid_ids,
             self.catalog.popular_ids(self.config.max_recommendations),
