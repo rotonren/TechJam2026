@@ -30,3 +30,18 @@ technical score 0.500563, fallback 0, invalid responses 0, and reported token
 usage 0.
 
 Final audit has not run. Public evaluator and public scoring have not run.
+
+## Rejected Stages
+
+### S1 Clarification Alias Gating
+
+S1 was rejected on representative development folds before any stress,
+resource, audit, or public run. Mean TechnicalScore changed from `0.548439` to
+`0.543191` (`-0.005248`) and selection score changed from `0.543143` to
+`0.538259` (`-0.004884`). Boundary lost two hits and Buying HitRate@10 changed
+by `-0.021841`; Browsing and Intent Override changed by `+0.001558` and
+`+0.012448`. Fallback and invalid-response counts remained zero. The gate
+failure codes were `development_selection_regression`,
+`development_mean_regression`, `development_buying_regression`, and
+`development_boundary_regression`. The S1 production changes were reverted
+and are not parents of later experiments.
