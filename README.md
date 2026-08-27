@@ -25,7 +25,11 @@ Run the official public harness from a participant-kit checkout:
 
 ```powershell
 $env:PYTHONPATH = "src;."
-.\.venv\Scripts\python.exe -m tools.run_agent --output results.json
+.\.venv\Scripts\python.exe -m tools.run_agent `
+  --catalog data/catalog.jsonl `
+  --dataset data/public_set.jsonl `
+  --output results.json `
+  --evidence-output results-evidence.json
 ```
 
 The entry point is `agent.Agent`. It implements `reset(session_id,
@@ -40,7 +44,11 @@ Set `COMPASSCART_DISABLE_DENSE=1` to force the deterministic lexical fallback:
 
 ```powershell
 $env:COMPASSCART_DISABLE_DENSE = "1"
-.\.venv\Scripts\python.exe -m tools.run_agent --output results-lexical.json
+.\.venv\Scripts\python.exe -m tools.run_agent `
+  --catalog data/catalog.jsonl `
+  --dataset data/public_set.jsonl `
+  --output results-lexical.json `
+  --evidence-output results-lexical-evidence.json
 ```
 
 Asset corruption, optional dependency failure, or dense inference failure also
