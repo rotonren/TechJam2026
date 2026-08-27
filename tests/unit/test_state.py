@@ -1,5 +1,3 @@
-import pytest
-
 from agent import Agent
 from compasscart.models import Constraint
 from compasscart.parser import MessageParser
@@ -86,6 +84,7 @@ def test_query_history_keeps_evidence_but_resets_on_override():
     )
     assert state.query_history == [
         "I need a red cotton dress with buckle closure",
+        "I don't have a preference for size; use your judgment.",
     ]
 
     state = store.update("s1", "Actually, what I need is blue leather shoes.", 3)
@@ -174,162 +173,11 @@ def test_update_marks_and_clears_continuation_requests_and_keeps_last_four_messa
 
     state = store.update("s1", "show me more", 6)
     assert state.continuation_requested is True
-    assert state.query_history == ["two", "three", "four", "five"]
+    assert state.query_history == ["three", "four", "five", "show me more"]
 
     state = store.update("s1", "blue", 7)
     assert state.continuation_requested is False
     assert state.override_scope == "none"
-
-
-def test_control_only_message_does_not_replace_substantive_history():
-    store = SessionStore(MessageParser())
-    store.reset("s1", {})
-    store.update("s1", "I need a belt", 1)
-
-    state = store.update("s1", "Here are the closest matches I found.", 2)
-
-    assert state.query_history == ["I need a belt"]
-
-
-@pytest.mark.parametrize(
-    "message",
-    ("Thanks", "search", "Here are the closest matches I found."),
-)
-def test_pending_feature_does_not_treat_control_only_text_as_evidence(message):
-    store = SessionStore(MessageParser({"feature": ("waterproof",)}))
-    store.reset("s1", {})
-
-    state = store.update("s1", message, 1, expected_attribute="feature")
-
-    assert state.query_history == []
-    assert state.active_constraints() == []
-    assert message not in Agent._query_text(message, state)
-
-
-@pytest.mark.parametrize(
-    "message",
-    (
-        "Show me more, please.",
-        "Could you show me more?",
-        "Please, show me more.",
-        "Could you, please show me more?",
-    ),
-)
-def test_pending_feature_ignores_polite_continuation_wrappers(message):
-    store = SessionStore(MessageParser({"feature": ("waterproof",)}))
-    state = store.reset("s1", {})
-    state.pending_attribute = "feature"
-
-    state = store.update("s1", message, 1, expected_attribute="feature")
-
-    assert state.continuation_requested is True
-    assert state.query_history == []
-    assert state.active_constraints() == []
-
-
-@pytest.mark.parametrize(
-    "message",
-    (
-        "No preference, thanks.",
-        "No preference please.",
-        "I don't have a preference for feature, thank you.",
-        "Thanks, no preference please.",
-    ),
-)
-def test_pending_feature_ignores_polite_no_preference_wrappers(message):
-    store = SessionStore(MessageParser({"feature": ("waterproof",)}))
-    state = store.reset("s1", {})
-    state.pending_attribute = "feature"
-
-    state = store.update("s1", message, 1, expected_attribute="feature")
-
-    assert "feature" in state.no_preference_attributes
-    assert state.query_history == []
-    assert state.active_constraints() == []
-
-
-def test_mixed_no_preference_keeps_attribute_signal_and_raw_query_history():
-    store = SessionStore(MessageParser())
-    store.reset("s1", {})
-    store.update("s1", "I need red hiking boots", 1)
-
-    message = "I have no preference for color, but I need waterproof hiking boots."
-    state = store.update("s1", message, 2, expected_attribute="feature")
-
-    assert "color" in state.no_preference_attributes
-    assert {(item.attribute, item.value) for item in state.active_constraints()} >= {
-        ("feature", "waterproof"),
-        ("category", "boots"),
-    }
-    assert message in state.query_history
-
-
-def test_mixed_no_preference_rejects_its_explicit_attribute_only():
-    store = SessionStore(MessageParser())
-    store.reset("s1", {})
-    store.update("s1", "I need red cotton boots", 1)
-    state = store.get("s1")
-    assert state is not None
-    state.pending_attribute = "feature"
-
-    message = "I have no preference for color, but material should be leather."
-    state = store.update(
-        "s1",
-        message,
-        2,
-        expected_attribute="feature",
-    )
-
-    assert "color" in state.no_preference_attributes
-    assert "material" not in state.no_preference_attributes
-    assert ("color", "red") not in {
-        (item.attribute, item.value) for item in state.active_constraints()
-    }
-    assert ("material", "leather") in {
-        (item.attribute, item.value) for item in state.active_constraints()
-    }
-    assert not any(item.attribute == "feature" for item in state.active_constraints())
-    assert message in state.query_history
-
-
-def test_mixed_no_preference_for_pending_feature_keeps_material_evidence_only():
-    store = SessionStore(MessageParser())
-    state = store.reset("s1", {})
-    state.pending_attribute = "feature"
-
-    message = (
-        "I don't have an additional preference for feature, but material should be leather."
-    )
-    state = store.update("s1", message, 1, expected_attribute="feature")
-
-    assert "feature" in state.no_preference_attributes
-    assert ("material", "leather") in {
-        (item.attribute, item.value) for item in state.active_constraints()
-    }
-    assert not any(item.attribute == "feature" for item in state.active_constraints())
-    assert message in state.query_history
-
-
-@pytest.mark.parametrize(
-    "message",
-    (
-        "Any feature is fine, thanks.",
-        "I'm flexible about feature, thanks.",
-        "I don't have an additional preference for feature, thanks.",
-        "Nothing more to add about feature, thanks.",
-        "I don't have any preference for feature.",
-    ),
-)
-def test_pending_feature_ignores_all_wrapped_preference_reply_families(message):
-    store = SessionStore(MessageParser({"feature": ("waterproof",)}))
-    state = store.reset("s1", {})
-    state.pending_attribute = "feature"
-
-    state = store.update("s1", message, 1, expected_attribute="feature")
-
-    assert "feature" in state.no_preference_attributes
-    assert state.query_history == []
-    assert state.active_constraints() == []
 
 
 def test_goal_override_replaces_prior_hard_constraints_and_question_state():

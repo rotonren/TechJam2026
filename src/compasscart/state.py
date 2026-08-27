@@ -91,7 +91,7 @@ class SessionStore:
         for parsed in incoming:
             self._merge_constraint(state, parsed, turn)
 
-        if result.has_substantive_evidence and message.strip():
+        if message.strip():
             state.query_history.append(message.strip())
             state.query_history[:] = state.query_history[-4:]
 

@@ -34,109 +34,9 @@ _PREFERENCE_RESET_RE = re.compile(
 _CONTINUATION_RE = re.compile(
     r"\b(?:show me more|more options|different choices)\b", re.IGNORECASE
 )
-_CONTINUATION_ONLY_RE = re.compile(
-    r"(?:please(?:\s*,\s*|\s+))?"
-    r"(?:(?:could|can|would)\s+you(?:\s*,\s*|\s+)?)?(?:please\s+)?"
-    r"(?:show me more(?: options)?|more options|different choices)"
-    r"(?:\s*,?\s*(?:please|thanks|thank you))?[.!?]?",
-    re.IGNORECASE,
-)
-_ATTRIBUTE_SLOT = (
-    r"(?:category|material|color|size|style|brand|budget|feature(?:s)?|"
-    r"use[ _-]?case|other)"
-)
-_BENIGN_WRAPPER_TOKEN = r"(?:please|thanks|thank you)"
-_BENIGN_PREFIX = r"(?:" + _BENIGN_WRAPPER_TOKEN + r"(?:\s*[,;:!?]\s*|\s+))*"
-_BENIGN_SUFFIX = r"(?:\s*[,;:!?]?\s*" + _BENIGN_WRAPPER_TOKEN + r")*"
-_BASE_NO_PREFERENCE_REPLY = (
-    r"(?:(?:(?:i\s+)?(?:don['’]?t|do not)\s+have\s+(?:(?:an?|any)\s+)?|"
-    r"(?:i\s+have\s+)?no\s+)preference(?:\s+for\s+"
-    + _ATTRIBUTE_SLOT
-    + r")?(?:[;,]?\s*(?:please\s+)?use\s+your\s+judgment)?|"
-    r"(?:doesn['’]?t|does not) matter|use your judgment)"
-)
-_NO_ADDITIONAL_REPLY = (
-    r"(?:i don['’]?t have an additional preference for "
-    + _ATTRIBUTE_SLOT
-    + r"|nothing more to add about "
-    + _ATTRIBUTE_SLOT
-    + r"|i(?:'|’)m flexible on "
-    + _ATTRIBUTE_SLOT
-    + r" beyond that|no other requirement for "
-    + _ATTRIBUTE_SLOT
-    + r" right now)"
-)
-_ANY_ATTRIBUTE_IS_FINE_REPLY = r"any " + _ATTRIBUTE_SLOT + r" is fine"
-_FLEXIBLE_ABOUT_REPLY = r"i(?:'|’)m flexible about " + _ATTRIBUTE_SLOT
-_PREFERENCE_REPLY = (
-    r"(?:"
-    + _BASE_NO_PREFERENCE_REPLY
-    + r"|"
-    + _NO_ADDITIONAL_REPLY
-    + r"|"
-    + _ANY_ATTRIBUTE_IS_FINE_REPLY
-    + r"|"
-    + _FLEXIBLE_ABOUT_REPLY
-    + r")"
-)
-_PREFERENCE_ONLY_RE = re.compile(
-    _BENIGN_PREFIX + _PREFERENCE_REPLY + _BENIGN_SUFFIX + r"[.!?]?",
-    re.IGNORECASE,
-)
-_NO_PREFERENCE_SIGNAL_RE = re.compile(_PREFERENCE_REPLY, re.IGNORECASE)
-_NO_PREFERENCE_ATTRIBUTE_PATTERNS = (
-    re.compile(
-        r"\b(?:(?:i\s+)?(?:don['’]?t|do not)\s+have\s+(?:(?:an?|any)\s+)?|"
-        r"(?:i\s+have\s+)?no\s+)preference\s+for\s+(?P<attribute>"
-        + _ATTRIBUTE_SLOT
-        + r")\b",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"\b(?:i don['’]?t have an additional preference for|"
-        r"nothing more to add about)\s+(?P<attribute>"
-        + _ATTRIBUTE_SLOT
-        + r")\b",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"\bi(?:'|’)m flexible on\s+(?P<attribute>"
-        + _ATTRIBUTE_SLOT
-        + r")\s+beyond that\b",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"\bno other requirement for\s+(?P<attribute>"
-        + _ATTRIBUTE_SLOT
-        + r")\s+right now\b",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"\bany\s+(?P<attribute>" + _ATTRIBUTE_SLOT + r")\s+is\s+fine\b",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"\bi(?:'|’)m flexible about\s+(?P<attribute>"
-        + _ATTRIBUTE_SLOT
-        + r")\b",
-        re.IGNORECASE,
-    ),
-)
-_CONTROL_ONLY_RE = re.compile(
-    r"(?:"
-    + _CONTINUATION_ONLY_RE.pattern
-    + r"|search|thanks|thank you|"
-    r"please narrow this down by asking one concrete question|"
-    r"i need another direction;\s*ask about a specific preference|"
-    r"keep searching and ask me for one useful detail|"
-    r"those options are not quite right yet[.!?]\s*ask me about one specific attribute|"
-    r"here are the closest matches i found(?:[.!?]\s*these are close alternatives after relaxing .*)?|"
-    r"what type of product are you looking for|do you have a material preference|"
-    r"which color would you prefer|what size or fit should i prioritize|"
-    r"which style do you prefer|do you have a preferred brand|"
-    r"what budget should i stay within|which feature matters most to you|"
-    r"what will you mainly use it for|what other detail should i prioritize)"
-    r"[.!?]?",
+_NO_PREFERENCE_RE = re.compile(
+    r"\b(?:don['’]?t|do not|no)\s+(?:have\s+)?(?:an?\s+)?(?:additional\s+)?"
+    r"preference\b|\b(?:doesn['’]?t|does not) matter\b|\buse your judgment\b",
     re.IGNORECASE,
 )
 _BROWSING_RE = re.compile(
@@ -287,7 +187,6 @@ class ParseResult:
     no_preference_attribute: str | None = None
     is_continuation: bool = False
     replace_preferences: bool = False
-    has_substantive_evidence: bool = True
 
 
 class MessageParser:
@@ -367,28 +266,31 @@ class MessageParser:
         del turn  # The parser is stateless; turn-aware behavior belongs to the ledger.
         text = normalize_value(message)
         if not text:
-            return ParseResult(has_substantive_evidence=False)
+            return ParseResult()
         is_override = bool(_OVERRIDE_RE.search(text))
         replace_preferences = bool(_PREFERENCE_RESET_RE.search(text))
         is_continuation = bool(_CONTINUATION_RE.search(text))
-        is_control_only = bool(
-            _CONTROL_ONLY_RE.fullmatch(text) or _PREFERENCE_ONLY_RE.fullmatch(text)
-        )
         if is_override:
             expected_attribute = None
-        is_no_preference, no_preference_attribute = self._no_preference_signal(
-            text, expected_attribute
-        )
 
-        if is_control_only:
+        if _NO_PREFERENCE_RE.search(text):
+            attribute = expected_attribute or self._mentioned_attribute(text)
             return ParseResult(
-                no_preference_attribute=(
-                    no_preference_attribute if is_no_preference else None
-                ),
+                no_preference_attribute=attribute,
                 is_override=is_override,
                 is_continuation=is_continuation,
                 replace_preferences=replace_preferences,
-                has_substantive_evidence=False,
+            )
+
+        # Continuation commands are control input, not answers to a pending
+        # attribute question.  Returning before catalog-vocabulary matching
+        # also prevents noisy aliases such as "show me more" from becoming a
+        # hard feature/use-case constraint.
+        if is_continuation:
+            return ParseResult(
+                is_override=is_override,
+                is_continuation=True,
+                replace_preferences=replace_preferences,
             )
 
         source: ConstraintSource = "clarification" if expected_attribute else "message"
@@ -404,7 +306,6 @@ class MessageParser:
         extracted.extend(categories)
         if (
             expected_attribute
-            and not is_no_preference
             and not any(
                 item.attribute == normalize_value(expected_attribute)
                 for item in extracted
@@ -426,10 +327,8 @@ class MessageParser:
             constraints=tuple(self._deduplicate(extracted)),
             route_hint=route_hint,
             is_override=is_override,
-            no_preference_attribute=no_preference_attribute,
             is_continuation=is_continuation,
             replace_preferences=replace_preferences,
-            has_substantive_evidence=not is_control_only,
         )
 
     def _has_unrecognized_expected_text(
@@ -890,21 +789,22 @@ class MessageParser:
         return [ParsedConstraint("category", " ".join(known), 1.0, True, source)]
 
     @staticmethod
-    def _no_preference_signal(
-        text: str, expected_attribute: str | None
-    ) -> tuple[bool, str | None]:
-        for pattern in _NO_PREFERENCE_ATTRIBUTE_PATTERNS:
-            match = pattern.search(text)
-            if not match:
-                continue
-            attribute = normalize_value(match.group("attribute"))
-            attribute = attribute.replace("-", "_").replace(" ", "_")
-            if attribute == "features":
-                attribute = "feature"
-            return True, attribute
-        if _NO_PREFERENCE_SIGNAL_RE.search(text):
-            return True, expected_attribute
-        return False, None
+    def _mentioned_attribute(text: str) -> str | None:
+        for attribute in (
+            "category",
+            "material",
+            "color",
+            "size",
+            "style",
+            "brand",
+            "budget",
+            "feature",
+            "use_case",
+            "other",
+        ):
+            if re.search(rf"\b{re.escape(attribute.replace('_', ' '))}\b", text):
+                return attribute
+        return None
 
     @staticmethod
     def _deduplicate(items: list[ParsedConstraint]) -> list[ParsedConstraint]:
