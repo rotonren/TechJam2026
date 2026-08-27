@@ -46,7 +46,7 @@ _BROWSING_RE = re.compile(
 )
 _UNCERTAIN_GOAL_PREFIX = (
     r"\bnot(?:\s+[a-z]+){0,3}\s+sure"
-    r"(?:\s+(?:if|whether))?(?:\s+i)?"
+    r"(?:\s+(?:if|whether|that))?(?:\s+i)?"
 )
 _UNCERTAIN_GOAL_RE = re.compile(
     _UNCERTAIN_GOAL_PREFIX

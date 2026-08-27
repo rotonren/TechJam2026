@@ -543,7 +543,9 @@ def test_uncertain_goal_keeps_browsing_route():
     (
         "I'm not sure whether I want boots",
         "not sure I want boots",
+        "not sure that I want boots",
         "not entirely sure whether I want boots",
+        "not absolutely sure that I want boots",
     ),
 )
 def test_pending_uncertain_goal_clauses_keep_category_and_browsing_route(message):
