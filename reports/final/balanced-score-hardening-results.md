@@ -63,3 +63,14 @@ failure codes were `development_selection_regression`,
 `5736a2fb74069f3ea5639b45630c1ac3e33fca0164e51a8cc78de32df3d5ee00`.
 The S2 production changes were reverted and are not parents of later
 experiments.
+
+### S3 Attribute Weight
+
+Both predeclared attribute-weight values were rejected on representative
+development folds against P0 before any stress, resource, audit, or public
+run. At `0.05`, mean TechnicalScore changed by `-0.014804`, selection by
+`-0.015492`, and Boundary lost two hits; the gate also rejected Buying,
+Intent Override, folds, and mean. At `0.10`, mean changed by `-0.042808`,
+selection by `-0.044305`, and Boundary again lost two hits; Buying, Browsing,
+Intent Override, every fold, and mean all regressed. Both candidates had zero
+fallback and invalid responses. The attribute weight was restored to `0.0`.
