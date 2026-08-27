@@ -82,7 +82,8 @@ class HybridRetriever:
                 fallback_ids = self._fallback_ids(plan)
             return fallback_ids
 
-        if len(fused_ids) < desired:
+        exact_limit = min(len(self.catalog.valid_ids), plan.candidate_limit)
+        if len(fused_ids) < exact_limit:
             for identifier in self._exact_ids(fallback(), plan, excluded):
                 if identifier not in fused_ids:
                     fused_ids.append(identifier)

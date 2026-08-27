@@ -60,6 +60,35 @@ def test_retrieval_skips_fallback_when_dense_results_fill_desired_candidates(
     assert {candidate.parent_asin for candidate in candidates} == index.valid_ids
 
 
+def test_retrieval_preserves_extra_exact_fallback_above_desired() -> None:
+    identifiers = [f"P{index:02d}" for index in range(11)]
+
+    class Catalog:
+        def __init__(self) -> None:
+            self.valid_ids = set(identifiers)
+            self.quality = {identifier: 1.0 for identifier in identifiers}
+
+        def search_lexical(self, _plan, *, limit):
+            return [Candidate(identifier) for identifier in identifiers[:limit]][:10]
+
+        def popular_ids(self, _limit):
+            return [identifiers[-1]]
+
+        def product(self, _identifier):
+            return {}
+
+    plan = RetrievalPlan(
+        route="buying",
+        query_text="query",
+        source_weights=(("lexical", 1.0),),
+        candidate_limit=11,
+    )
+
+    candidates = HybridRetriever(Catalog()).retrieve(plan)
+
+    assert [candidate.parent_asin for candidate in candidates] == identifiers
+
+
 @pytest.mark.parametrize(
     ("plan", "exclude_ids", "expected_ids"),
     (
