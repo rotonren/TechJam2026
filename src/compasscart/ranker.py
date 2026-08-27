@@ -14,7 +14,7 @@ class ConstraintRanker:
         mmr_lambda: float = 0.85,
     ) -> None:
         if not 0.0 <= fusion_weight <= 0.30:
-            raise ValueError("fusion_weight must be between 0.0 and 0.10")
+            raise ValueError("fusion_weight must be between 0.0 and 0.30")
         if not 0.0 <= mmr_lambda <= 1.0:
             raise ValueError("mmr_lambda must be between 0.0 and 1.0")
         self.catalog = catalog
