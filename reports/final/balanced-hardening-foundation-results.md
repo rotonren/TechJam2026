@@ -64,9 +64,10 @@ Frozen proxy manifest SHA256:
 | Stress baseline | `921da182404851344ba8d51c37aee9dfd902c20395d6812ef791356aedc10d5f` | `2c8db1634fda0607fc698f3c239b0a3375b30bd08d0252497d727b5a32c67f75` | 0 | 0 | 0.596585 | 0.596585 | 0.000000 |
 | Stress P0 | `109937ce1aea9c84cfc9a407d26c5f449f8dc6381c1422657018702f95114954` | `2c8db1634fda0607fc698f3c239b0a3375b30bd08d0252497d727b5a32c67f75` | 0 | 0 | 0.596585 | 0.596585 | 0.000000 |
 
-The score, manifest, dataset, config, fallback, and invalid-response fields
-are identical to the corresponding frozen development baseline. The only
-non-score record difference is the explicit P0 fold selection field.
+The session recommendations, aggregates, routing, config, manifest, dataset,
+fallback, invalid-response, and score fields are identical to the corresponding
+frozen development baseline. Expected provenance and timing differences are
+limited to `commit`, `created_at`, and per-fold `latency_ms` fields.
 
 The existing audit baseline aggregate was recorded without running or reading
 audit sessions: 394 samples, HitRate@10 `0.637056`, MRR `0.282756`, MTTC
