@@ -515,6 +515,29 @@ def test_pending_structured_negative_goal_with_bounded_adverbs_has_no_category_o
     assert result.constraints == ()
 
 
+@pytest.mark.parametrize(
+    "message",
+    ("I'm not only looking for boots", "I'm not sure if I want boots"),
+)
+def test_pending_non_negative_not_clauses_keep_the_category_goal(message):
+    result = MessageParser({"category": ("Boots",)}).parse(
+        message, turn=2, expected_attribute="size"
+    )
+
+    assert result.is_goal_replacement is True
+    assert [(item.attribute, item.value) for item in result.constraints] == [
+        ("category", "boots")
+    ]
+
+
+def test_uncertain_goal_keeps_browsing_route():
+    result = MessageParser({"category": ("Boots",)}).parse(
+        "I'm not sure if I want boots", turn=2, expected_attribute="size"
+    )
+
+    assert result.route_hint == "browsing"
+
+
 def test_no_preference_override_does_not_replace_preferences():
     result = MessageParser().parse(
         "I've changed my mind, no preference", turn=2, expected_attribute="size"
@@ -572,6 +595,26 @@ def test_unknown_goal_requirement_after_a_category_remains_soft_evidence():
     assert [(item.attribute, item.value, item.is_hard) for item in result.constraints] == [
         ("category", "boots", True),
         ("size", "with a magnetic clasp", False),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_soft"),
+    (
+        ("I need boots with waterproof padding, plus insulation", "plus insulation"),
+        ("I need boots with waterproof padding; also insulation", "also insulation"),
+        ("I need boots with waterproof padding. additionally insulation", "additionally insulation"),
+    ),
+)
+def test_goal_modifier_stops_before_new_requirement_cues(message, expected_soft):
+    result = MessageParser(
+        {"category": ("Boots",), "feature": ("Waterproof",)}
+    ).parse(message, turn=2, expected_attribute="size")
+
+    assert [(item.attribute, item.value, item.is_hard) for item in result.constraints] == [
+        ("category", "boots", True),
+        ("feature", "waterproof", True),
+        ("size", expected_soft, False),
     ]
 
 

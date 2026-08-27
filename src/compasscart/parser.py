@@ -386,7 +386,7 @@ class MessageParser:
                 self._alias_cue_span(attribute, text, start, end) or (start, end)
             )
         covered.extend(
-            (goal_start, category_start)
+            self._goal_control_span(text, goal_start, category_start)
             for goal_start, category_start, _, _ in self._goal_category_head_spans(
                 text
             )
@@ -792,6 +792,9 @@ class MessageParser:
         )
         if negative is None:
             return None
+        words = terms(negative.group(0))
+        if words[:2] == ["not", "only"] or words[:3] == ["not", "sure", "if"]:
+            return None
         return (window_start + negative.start(), window_start + negative.end())
 
     def _is_in_negative_goal_clause(self, text: str, start: int, end: int) -> bool:
@@ -820,6 +823,17 @@ class MessageParser:
         ) or self._is_in_explicit_category_clause(text, start, end)
 
     @staticmethod
+    def _goal_control_span(
+        text: str, goal_start: int, category_start: int
+    ) -> tuple[int, int]:
+        sentence_start = max(
+            text.rfind(".", 0, goal_start),
+            text.rfind("!", 0, goal_start),
+            text.rfind(";", 0, goal_start),
+        ) + 1
+        return (sentence_start, category_start)
+
+    @staticmethod
     def _is_in_explicit_category_clause(text: str, start: int, end: int) -> bool:
         return any(
             match.start() <= start and end <= match.end()
@@ -838,7 +852,10 @@ class MessageParser:
             if connector is None:
                 continue
             span_start = max(0, start - 24) + connector.start()
-            tail = re.search(r"\s+(?=\b(?:and|or|but)\b|[.!;]|$)", text[end:])
+            tail = re.search(
+                r"\s*(?=[,.;]|\b(?:and|or|but|plus|also|additionally)\b|$)",
+                text[end:],
+            )
             span_end = end + tail.start() if tail else len(text)
             spans.append((span_start, span_end))
         return tuple(spans)
