@@ -136,10 +136,16 @@ def test_agent_reports_layout_invalid_without_trying_cwd_assets(
     assert set(response) == {"message", "ask_attribute", "recommendations", "usage"}
 
 
-def test_rank_calibration_defaults_and_agent_wiring_are_neutral(
+def test_rank_calibration_neutral_values_and_agent_wiring_are_neutral(
     fixture_catalog_path: Path,
 ):
-    config = RuntimeConfig()
+    config = RuntimeConfig(
+        rank_fusion_weight=0.10,
+        rank_attribute_weight=0.0,
+        rank_consensus_bonus=0.0,
+        rank_boundary_bonus=0.0,
+        adaptive_browsing_mmr=False,
+    )
     agent = CompassCartAgent(fixture_catalog_path, config=config)
 
     assert config.rank_attribute_weight == 0.0
