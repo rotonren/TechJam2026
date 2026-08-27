@@ -285,10 +285,8 @@ class CompassCartAgent:
 
     @staticmethod
     def _query_text(message: str, state: SessionState) -> str:
+        del message
         evidence = [item.strip() for item in state.query_history[-4:] if item.strip()]
-        current = message.strip()
-        if current and current not in evidence:
-            evidence.append(current)
         values: list[str] = []
         for item in state.active_constraints():
             for value in item.values():

@@ -34,6 +34,18 @@ _PREFERENCE_RESET_RE = re.compile(
 _CONTINUATION_RE = re.compile(
     r"\b(?:show me more|more options|different choices)\b", re.IGNORECASE
 )
+_CONTROL_ONLY_RE = re.compile(
+    r"(?:show me more(?: options)?|more options|different choices|search|thanks|thank you|"
+    r"those options are not quite right yet[.!?]\s*ask me about one specific attribute|"
+    r"here are the closest matches i found(?: these are close alternatives after relaxing .*)?|"
+    r"what type of product are you looking for|do you have a material preference|"
+    r"which color would you prefer|what size or fit should i prioritize|"
+    r"which style do you prefer|do you have a preferred brand|"
+    r"what budget should i stay within|which feature matters most to you|"
+    r"what will you mainly use it for|what other detail should i prioritize)"
+    r"[.!?]?",
+    re.IGNORECASE,
+)
 _NO_PREFERENCE_RE = re.compile(
     r"\b(?:don['’]?t|do not|no)\s+(?:have\s+)?(?:an?\s+)?(?:additional\s+)?"
     r"preference\b|\b(?:doesn['’]?t|does not) matter\b|\buse your judgment\b",
@@ -187,6 +199,7 @@ class ParseResult:
     no_preference_attribute: str | None = None
     is_continuation: bool = False
     replace_preferences: bool = False
+    has_substantive_evidence: bool = True
 
 
 class MessageParser:
@@ -266,10 +279,11 @@ class MessageParser:
         del turn  # The parser is stateless; turn-aware behavior belongs to the ledger.
         text = normalize_value(message)
         if not text:
-            return ParseResult()
+            return ParseResult(has_substantive_evidence=False)
         is_override = bool(_OVERRIDE_RE.search(text))
         replace_preferences = bool(_PREFERENCE_RESET_RE.search(text))
         is_continuation = bool(_CONTINUATION_RE.search(text))
+        is_control_only = bool(_CONTROL_ONLY_RE.fullmatch(text))
         if is_override:
             expected_attribute = None
 
@@ -280,17 +294,19 @@ class MessageParser:
                 is_override=is_override,
                 is_continuation=is_continuation,
                 replace_preferences=replace_preferences,
+                has_substantive_evidence=False,
             )
 
         # Continuation commands are control input, not answers to a pending
         # attribute question.  Returning before catalog-vocabulary matching
         # also prevents noisy aliases such as "show me more" from becoming a
         # hard feature/use-case constraint.
-        if is_continuation:
+        if is_control_only and is_continuation:
             return ParseResult(
                 is_override=is_override,
                 is_continuation=True,
                 replace_preferences=replace_preferences,
+                has_substantive_evidence=False,
             )
 
         source: ConstraintSource = "clarification" if expected_attribute else "message"
@@ -329,6 +345,7 @@ class MessageParser:
             is_override=is_override,
             is_continuation=is_continuation,
             replace_preferences=replace_preferences,
+            has_substantive_evidence=not is_control_only,
         )
 
     def _has_unrecognized_expected_text(

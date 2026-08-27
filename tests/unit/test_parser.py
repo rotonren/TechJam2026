@@ -202,6 +202,31 @@ def test_continuation_command_is_not_assigned_to_pending_attribute():
     assert result.constraints == ()
 
 
+def test_parser_marks_only_control_messages_and_no_preference_as_non_substantive():
+    parser = MessageParser()
+
+    for message in (
+        "show me more",
+        "No preference.",
+        "Thanks",
+        "search",
+        "Those options are not quite right yet. Ask me about one specific attribute.",
+        "Here are the closest matches I found.",
+    ):
+        assert parser.parse(message, turn=2).has_substantive_evidence is False
+
+
+def test_parser_keeps_shopping_evidence_when_request_mentions_more():
+    parser = MessageParser()
+
+    request = parser.parse("show me more waterproof hiking boots", turn=2)
+    unknown = parser.parse("with a magnetic clasp", turn=2)
+
+    assert request.is_continuation is True
+    assert request.has_substantive_evidence is True
+    assert unknown.has_substantive_evidence is True
+
+
 def test_semantic_fixed_term_is_not_inferred_as_brand_without_brand_cue():
     parser = MessageParser(
         {"brand": ("Waterproof",), "category": ("Jackets",)}

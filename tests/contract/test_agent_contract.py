@@ -121,7 +121,7 @@ def test_agent_query_uses_bounded_dialog_evidence():
 
     assert "alloy buckle closure" in query
     assert "black belt" in query
-    assert query.count("current message") == 1
+    assert "current message" not in query
 
 
 def test_agent_query_preserves_all_alternative_constraint_values():

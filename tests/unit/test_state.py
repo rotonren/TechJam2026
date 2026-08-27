@@ -84,7 +84,6 @@ def test_query_history_keeps_evidence_but_resets_on_override():
     )
     assert state.query_history == [
         "I need a red cotton dress with buckle closure",
-        "I don't have a preference for size; use your judgment.",
     ]
 
     state = store.update("s1", "Actually, what I need is blue leather shoes.", 3)
@@ -173,11 +172,21 @@ def test_update_marks_and_clears_continuation_requests_and_keeps_last_four_messa
 
     state = store.update("s1", "show me more", 6)
     assert state.continuation_requested is True
-    assert state.query_history == ["three", "four", "five", "show me more"]
+    assert state.query_history == ["two", "three", "four", "five"]
 
     state = store.update("s1", "blue", 7)
     assert state.continuation_requested is False
     assert state.override_scope == "none"
+
+
+def test_control_only_message_does_not_replace_substantive_history():
+    store = SessionStore(MessageParser())
+    store.reset("s1", {})
+    store.update("s1", "I need a belt", 1)
+
+    state = store.update("s1", "Here are the closest matches I found.", 2)
+
+    assert state.query_history == ["I need a belt"]
 
 
 def test_goal_override_replaces_prior_hard_constraints_and_question_state():
