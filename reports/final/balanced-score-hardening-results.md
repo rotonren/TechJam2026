@@ -29,14 +29,19 @@ available and zero fallback in all three trials. Median P95 was `183.692 ms`
 maximum response time was `529.531 ms`, below the `1.5 s` limit. The repeated
 response hash was deterministic.
 
-## Audit Baseline
+## Final Audit And Public Result
 
-Previously recorded aggregate-only audit baseline: 394 samples, HitRate@10
-0.637056, MRR 0.282756, MTTC 6.139594, efficiency 0.486041, recommended
-technical score 0.500563, fallback 0, invalid responses 0, and reported token
-usage 0.
+The one authorized final sealed audit ran on `c0d444fa` and passed. Its
+aggregate result exactly matched the recorded baseline: 394 samples,
+HitRate@10 `0.637056`, MRR `0.282756`, MTTC `6.139594`, efficiency `0.486041`,
+recommended TechnicalScore `0.500563`, zero fallback, zero invalid responses,
+and zero reported token usage.
 
-Final audit has not run. Public evaluator and public scoring have not run.
+The one final public evaluation scored TechnicalScore `0.660411`, HitRate@10
+`0.840000`, MRR `0.376036`, MTTC `4.620`, and efficiency `0.638000`. It exactly
+matched the previous stable result at `b641ff97`, so every aggregate score
+delta was `0`. The fail-closed evidence recorded 892 attempted responses and
+892 traces with consistent counts and zero fallback.
 
 ## Rejected Stages
 
@@ -134,3 +139,9 @@ hits. Buying, Browsing, and Intent Override HitRate@10 changed by `-0.082683`,
 invalid-response counts remained zero. The S4 production changes were fully
 reverted and are not part of the frozen candidate. S5 was intentionally
 deferred after the user requested an accelerated final delivery.
+
+## Delivery Status
+
+The stable runtime candidate passed 891 automated tests with 7 skipped, all 9
+frozen-input checks, all 51 delivery-contract checks, Ruff lint, the sealed
+audit, and the resource benchmark. macOS verification is pending.

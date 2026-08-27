@@ -82,20 +82,26 @@ Additional rationale is in `reports/final/architecture.md`.
 ## Measured Results
 
 All measurements use the unchanged official evaluator and frozen public data.
-The starter baseline scored `0.106710`. The release candidate is commit
-`4c41adf` (`compasscart-v2-candidate`). Development CV on folds 1-4 scored
-`0.519195 +/- 0.036878` (mean TechnicalScore), with selection score `0.500756`.
-Fold scores were `0.479726`, `0.568101`, `0.541363`, and `0.487589`; no runtime
-fallback occurred. Per-fold P95 response latency ranged from 309 ms to 335 ms
-on the development host.
+The starter baseline scored `0.106710`. The final stable runtime candidate is
+commit `c0d444fa`. Its official 200-sample public evaluation scored `0.660411`
+(HitRate@10 `0.84`, MRR `0.376036`, MTTC `4.62`, efficiency `0.638`). Scenario
+HitRate@10 was `0.90` Boundary, `0.85` Browsing, `0.8625` Buying, and `0.733333`
+Intent Override. The result exactly matches the previous stable measurement at
+`b641ff97`, so the final hardening delta is `0.000000`.
 
-The sealed fold 5 was run once after the candidate tag and scored `0.514768`
-with no fallback (HitRate@10 `0.60`, MRR `0.365893`, MTTC `5.75`, P95
-`370.616 ms`). The final official 200-session public evaluation from the same
-tagged candidate scored `0.518309` (HitRate@10 `0.625`, MRR `0.321365`, MTTC
-`5.53`). Scenario HitRate@10 was `0.60` Boundary, `0.65` Browsing, `0.625`
-Buying, and `0.566667` Intent Override. Full evidence is in
-`reports/final/final-results.json`.
+The one sealed audit scored `0.500563` on 394 representative samples with zero
+fallback and zero invalid responses. The final three-trial resource benchmark
+also passed with Dense available and zero fallback: P95 was `183.692 ms`,
+maximum latency was `529.531 ms`, initialization was `13219.807 ms`, and peak
+working set was `557.008 MiB`. P95 improved `58.070%` against the compatible R0
+benchmark. S1 through S4 were rejected by their development gates and reverted;
+S5 was deferred for accelerated stable delivery. Full aggregate evidence is in
+`reports/final/final-results.json` and
+`reports/final/score-results-c0d444fa-2026-08-27.json`.
+
+The full automated suite passed 891 tests with 7 skipped. All 9 frozen-input
+checks and all 51 delivery-contract checks passed, and Ruff lint passed. macOS
+verification is pending.
 
 The agent reports zero prompt and completion tokens. Official runtime API cost
 is USD 0.00 per session and USD 0.00 for the full 800-session private set.

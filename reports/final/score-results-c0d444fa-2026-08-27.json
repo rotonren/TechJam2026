@@ -4,15 +4,16 @@
   "candidate": {
     "tag": "compasscart-final-stable",
     "commit": "c0d444fa6f53b8b91d8b268f0f7273737eb78cd0",
-    "runtime_commit": "c0d444fa6f53b8b91d8b268f0f7273737eb78cd0",
     "config_hash": "5a4aea6fd43059c4891946500a5d986013e8fd1fd09f62520875a197fe5bc5e5"
   },
-  "official_starter_baseline": {
-    "sample_count": 200,
-    "hit_rate_at_10": 0.125,
-    "mrr": 0.068034,
-    "mttc": 9.81,
-    "recommended_technical_score": 0.10671
+  "comparison": {
+    "previous_stable_commit": "b641ff97b0f4d7ae0c2fc7646e250492370231bd",
+    "technical_score_delta": 0.0,
+    "hit_rate_at_10_delta": 0.0,
+    "mrr_delta": 0.0,
+    "mttc_delta": 0.0,
+    "efficiency_delta": 0.0,
+    "result": "identical"
   },
   "official_public_evaluation": {
     "sample_count": 200,
@@ -46,14 +47,17 @@
         "mrr": 0.404762,
         "mttc": 6.8
       }
-    },
-    "comparison_to_previous_stable": {
-      "commit": "b641ff97b0f4d7ae0c2fc7646e250492370231bd",
-      "technical_score_delta": 0.0,
-      "result": "identical"
     }
   },
-  "sealed_audit_fold": {
+  "public_evidence": {
+    "attempted_response_count": 892,
+    "trace_count": 892,
+    "trace_call_count_consistent": true,
+    "fallback_count": 0,
+    "raw_sha256": "4bf4b246c9ebf0caa591b7a86fc94a4a8da31b025a7f6283684f62945f7b30ed",
+    "evidence_sha256": "c1af687b8b55a6322266b778c59d0197690a746da1bff6f23dfd4c4f19ef6efe"
+  },
+  "sealed_audit": {
     "run_count": 1,
     "sample_count": 394,
     "hit_rate_at_10": 0.637056,
@@ -62,24 +66,20 @@
     "efficiency": 0.486041,
     "recommended_technical_score": 0.500563,
     "fallback_count": 0,
-    "invalid_response_count": 0
+    "invalid_response_count": 0,
+    "sha256": "974997734f359511950265b06fc4a34113291d10d8efcb3dddcdf0d1fdc2f6e6"
   },
-  "public_trace_evidence": {
-    "attempted_response_count": 892,
-    "trace_count": 892,
-    "trace_call_count_consistent": true,
-    "fallback_count": 0
-  },
-  "resource_measurements": {
+  "resource_benchmark": {
     "trial_count": 3,
     "dense_available": true,
     "fallback_count": 0,
-    "p95_response_latency_ms": 183.692,
-    "maximum_response_latency_ms": 529.531,
+    "p95_ms": 183.692,
+    "max_ms": 529.531,
     "initialization_ms": 13219.807,
-    "peak_working_set_mib": 557.008,
+    "peak_mib": 557.008,
     "p95_change_vs_r0_pct": -58.069803,
-    "accepted": true
+    "accepted": true,
+    "sha256": "780f07e30e336f276ca95fc35dcb17a4e73482ba3059b9414cf345c58aa81447"
   },
   "verification": {
     "automated_tests_passed": 891,
@@ -93,10 +93,9 @@
     "prompt_tokens": 0,
     "completion_tokens": 0,
     "total_tokens": 0,
-    "runtime_api_cost_usd": 0.0,
-    "private_800_sample_estimated_api_cost_usd": 0.0
+    "runtime_api_cost_usd": 0.0
   },
-  "selection": {
+  "decision": {
     "accepted_runtime": "stable P0 behavior",
     "rejected_stages": [
       "S1",
@@ -104,6 +103,7 @@
       "S3",
       "S4"
     ],
+    "reason": "Every more complex candidate failed its precommitted development gate and was reverted.",
     "s5": "deferred for accelerated stable delivery"
   }
 }
