@@ -105,3 +105,14 @@ Boundary hits were unchanged. Intent Override HitRate@10 improved by
 `+0.004149`, while Buying and Browsing changed by `-0.012481` and `-0.017134`.
 Fallback and invalid-response counts remained zero. The boundary bonus was
 restored to `0.0`.
+
+### S3 Adaptive Browsing MMR
+
+The predeclared adaptive Browsing MMR candidate was rejected on
+representative development folds against P0 before any stress, resource,
+audit, or public run. Mean TechnicalScore improved by `+0.000474`, selection
+by `+0.000401`, and Boundary gained one hit; scenario HitRate@10 values were
+unchanged. Fallback and invalid-response counts remained zero. The candidate
+failed only the precommitted `+0.003` minimum selection improvement, so the
+feature was restored to `False`. No S3 factor became an accepted scoring
+parent.

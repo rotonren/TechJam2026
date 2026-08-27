@@ -35,7 +35,7 @@ class RuntimeConfig:
     rank_consensus_bonus: float = 0.0
     rank_boundary_bonus: float = 0.0
     mmr_lambda: float = 0.85
-    adaptive_browsing_mmr: bool = True
+    adaptive_browsing_mmr: bool = False
 
     def __post_init__(self) -> None:
         self._validate_choice(
