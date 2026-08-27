@@ -281,6 +281,58 @@ def test_pending_goal_phrase_starts_a_new_goal_without_an_override_word():
     assert state.pending_attribute is None
 
 
+def test_explicit_category_replacement_starts_a_new_goal_while_pending():
+    store = SessionStore(MessageParser({"category": ("Dresses", "Boots")}))
+    store.reset("s1", {})
+    prior = store.update("s1", "I need a red dress", 1)
+    prior.pending_attribute = "size"
+
+    state = store.update("s1", "category: boots", 2, expected_attribute="size")
+
+    assert state.override_scope == "goal"
+    assert {(item.attribute, item.value) for item in state.active_constraints()} == {
+        ("category", "boots")
+    }
+
+
+def test_negative_goal_keeps_the_existing_goal_and_route():
+    store = SessionStore(MessageParser({"category": ("Boots",)}))
+    store.reset("s1", {})
+    prior = store.update("s1", "I need blue shoes", 1)
+    prior.pending_attribute = "size"
+
+    state = store.update(
+        "s1", "I don't want leather boots", 2, expected_attribute="size"
+    )
+
+    assert state.override_scope == "none"
+    assert state.route == "buying"
+    assert {(item.attribute, item.value) for item in state.active_constraints()} >= {
+        ("category", "shoes"),
+        ("color", "blue"),
+        ("material", "leather"),
+    }
+
+
+def test_override_no_preference_rejects_only_the_pending_attribute():
+    store = SessionStore(MessageParser())
+    store.reset("s1", {})
+    prior = store.update("s1", "I need blue shoes", 1)
+    prior.pending_attribute = "size"
+
+    state = store.update(
+        "s1", "Actually, no preference", 2, expected_attribute="size"
+    )
+
+    assert state.override_scope == "attribute"
+    assert state.route == "buying"
+    assert state.no_preference_attributes == {"size"}
+    assert {(item.attribute, item.value) for item in state.active_constraints()} == {
+        ("category", "shoes"),
+        ("color", "blue"),
+    }
+
+
 def test_profile_constraints_are_soft_and_never_override_user_color():
     store = SessionStore(MessageParser())
     state = store.reset(

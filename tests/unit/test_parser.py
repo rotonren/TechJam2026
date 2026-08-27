@@ -431,6 +431,83 @@ def test_pending_goal_allows_recognized_attributes_after_the_category_head():
     ]
 
 
+@pytest.mark.parametrize("message", ("I don't want leather boots", "I do not want leather boots"))
+def test_pending_negative_goal_does_not_start_a_positive_category_replacement(message):
+    result = MessageParser({"category": ("Boots",)}).parse(
+        message, turn=2, expected_attribute="size"
+    )
+
+    assert result.is_goal_replacement is False
+    assert [(item.attribute, item.value, item.operator) for item in result.constraints] == [
+        ("material", "leather", "not_in")
+    ]
+
+
+def test_explicit_category_replacement_is_a_pending_goal_replacement():
+    result = MessageParser({"category": ("Boots",)}).parse(
+        "category: boots", turn=2, expected_attribute="size"
+    )
+
+    assert result.is_goal_replacement is True
+    assert [(item.attribute, item.value) for item in result.constraints] == [
+        ("category", "boots")
+    ]
+
+
+@pytest.mark.parametrize("joiner", ("with", "that has", "but with"))
+def test_pending_goal_clauses_allow_feature_after_the_category_head(joiner):
+    result = MessageParser({"category": ("Boots",), "feature": ("Waterproof",)}).parse(
+        f"I need boots {joiner} waterproof lining",
+        turn=2,
+        expected_attribute="size",
+    )
+
+    assert [(item.attribute, item.value, item.is_hard) for item in result.constraints] == [
+        ("category", "boots", True),
+        ("feature", "waterproof", True),
+    ]
+
+
+def test_override_no_preference_retains_the_pending_attribute():
+    result = MessageParser().parse(
+        "Actually, no preference", turn=2, expected_attribute="size"
+    )
+
+    assert result.is_override is True
+    assert result.no_preference_attribute == "size"
+    assert result.constraints == ()
+
+
+def test_parse_caches_raw_candidates_and_goal_heads_once(monkeypatch):
+    parser = MessageParser({"category": ("Hiking Boots",), "use_case": ("Hiking",)})
+    raw_calls = 0
+    goal_calls = 0
+    scan = parser._scan_raw_vocabulary_matches
+    compute = parser._compute_goal_category_head_spans
+
+    def count_raw(text):
+        nonlocal raw_calls
+        raw_calls += 1
+        return scan(text)
+
+    def count_goal(text):
+        nonlocal goal_calls
+        goal_calls += 1
+        return compute(text)
+
+    monkeypatch.setattr(parser, "_scan_raw_vocabulary_matches", count_raw)
+    monkeypatch.setattr(parser, "_compute_goal_category_head_spans", count_goal)
+
+    result = parser.parse(
+        "I need hiking boots " + "with waterproof lining " * 128,
+        2,
+        "size",
+    )
+
+    assert any(item.attribute == "category" for item in result.constraints)
+    assert (raw_calls, goal_calls) == (1, 1)
+
+
 @pytest.mark.parametrize(
     ("message", "expected_attribute", "vocabulary", "expected"),
     (

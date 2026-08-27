@@ -150,10 +150,12 @@ _EXPECTED_FILLER_TERMS = {
     "and",
     "any",
     "are",
+    "but",
     "can",
     "do",
     "for",
     "have",
+    "has",
     "i",
     "id",
     "im",
@@ -161,6 +163,7 @@ _EXPECTED_FILLER_TERMS = {
     "is",
     "it",
     "just",
+    "lining",
     "like",
     "me",
     "my",
@@ -175,6 +178,7 @@ _EXPECTED_FILLER_TERMS = {
     "want",
     "what",
     "would",
+    "with",
 }
 
 
@@ -279,16 +283,20 @@ class MessageParser:
         text = normalize_value(message)
         if not text:
             return ParseResult()
+        self._parse_cache_text = text
+        self._parse_raw_candidates: list[tuple[int, int, str, str]] | None = None
+        self._parse_goal_heads: tuple[tuple[int, int, int, int], ...] | None = None
         is_override = bool(_OVERRIDE_RE.search(text))
         replace_preferences = bool(_PREFERENCE_RESET_RE.search(text))
         is_continuation = bool(_CONTINUATION_RE.search(text))
         expected_attribute = normalize_value(expected_attribute or "") or None
+        pending_attribute = expected_attribute
         if is_override:
             expected_attribute = None
 
         if _NO_PREFERENCE_RE.search(text):
             return ParseResult(
-                no_preference_attribute=expected_attribute,
+                no_preference_attribute=pending_attribute,
                 is_override=is_override,
                 is_continuation=is_continuation,
                 replace_preferences=replace_preferences,
@@ -319,9 +327,15 @@ class MessageParser:
         is_goal_replacement = bool(
             expected_attribute
             and any(
-                item.attribute == "category" and item.is_hard for item in extracted
+                item.attribute == "category"
+                and item.is_hard
+                and item.operator != "not_in"
+                for item in extracted
             )
-            and self._has_category_goal_phrase(text)
+            and (
+                self._has_positive_category_goal_phrase(text)
+                or self._has_explicit_category_replacement(text)
+            )
         )
         if (
             expected_attribute
@@ -402,12 +416,9 @@ class MessageParser:
         ):
             covered.append(match.span())
 
-        residual_chars = [
-            character
-            if not any(start <= index < end for start, end in covered)
-            else " "
-            for index, character in enumerate(text)
-        ]
+        residual_chars = list(text)
+        for start, end in self._merge_spans(covered):
+            residual_chars[start:end] = " " * (end - start)
         residual_tokens = terms("".join(residual_chars))
         if not any(token not in _EXPECTED_FILLER_TERMS for token in residual_tokens):
             return ""
@@ -430,6 +441,16 @@ class MessageParser:
         }:
             return [ParsedConstraint(attribute, cleaned, 0.6, False, source)]
         return []
+
+    @staticmethod
+    def _merge_spans(spans: list[tuple[int, int]]) -> tuple[tuple[int, int], ...]:
+        merged: list[tuple[int, int]] = []
+        for start, end in sorted(spans):
+            if merged and start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+            else:
+                merged.append((start, end))
+        return tuple(merged)
 
     def _extract_known_values(
         self,
@@ -516,7 +537,11 @@ class MessageParser:
                 expected_attribute,
             )
             and not (
-                attribute == "category" and self._is_negative_value(text, start)
+                attribute == "category"
+                and (
+                    self._is_negative_value(text, start)
+                    or self._is_in_negative_goal_clause(text, start, end)
+                )
             )
             and not self._overlaps_explicit_alias_cue_for_other_attribute(
                 attribute, text, start, end
@@ -547,6 +572,17 @@ class MessageParser:
         return sorted(result, key=lambda item: (item[0], item[1], item[2], item[3]))
 
     def _raw_vocabulary_matches(self, text: str) -> list[tuple[int, int, str, str]]:
+        if (
+            getattr(self, "_parse_cache_text", None) == text
+            and self._parse_raw_candidates is not None
+        ):
+            return self._parse_raw_candidates
+        raw_candidates = self._scan_raw_vocabulary_matches(text)
+        if getattr(self, "_parse_cache_text", None) == text:
+            self._parse_raw_candidates = raw_candidates
+        return raw_candidates
+
+    def _scan_raw_vocabulary_matches(self, text: str) -> list[tuple[int, int, str, str]]:
         match_text = re.sub(r"['’]s\b", "  ", text)
         token_spans = [
             (match.group(0).lower(), match.start(), match.end())
@@ -712,8 +748,28 @@ class MessageParser:
         )
 
     @staticmethod
-    def _has_category_goal_phrase(text: str) -> bool:
-        return bool(_GOAL_CATEGORY_RE.search(text))
+    def _has_positive_category_goal_phrase(text: str) -> bool:
+        return any(
+            not MessageParser._is_negative_goal_match(text, match)
+            for match in _GOAL_CATEGORY_RE.finditer(text)
+        )
+
+    @staticmethod
+    def _has_explicit_category_replacement(text: str) -> bool:
+        return bool(_EXPLICIT_CATEGORY_RE.search(text))
+
+    @staticmethod
+    def _is_negative_goal_match(text: str, match: re.Match[str]) -> bool:
+        prefix = text[: match.start()]
+        return bool(re.search(r"\b(?:don['’]?t|do\s+not)\s*$", prefix))
+
+    def _is_in_negative_goal_clause(self, text: str, start: int, end: int) -> bool:
+        return any(
+            self._is_negative_goal_match(text, match)
+            and match.start() <= start
+            and end <= match.end()
+            for match in _GOAL_CATEGORY_RE.finditer(text)
+        )
 
     def _is_category_goal_span(self, text: str, start: int, end: int) -> bool:
         return any(
@@ -735,9 +791,29 @@ class MessageParser:
     def _goal_category_head_spans(
         self, text: str
     ) -> tuple[tuple[int, int, int, int], ...]:
+        if (
+            getattr(self, "_parse_cache_text", None) == text
+            and self._parse_goal_heads is not None
+        ):
+            return self._parse_goal_heads
+        heads = self._compute_goal_category_head_spans(text)
+        if getattr(self, "_parse_cache_text", None) == text:
+            self._parse_goal_heads = heads
+        return heads
+
+    def _compute_goal_category_head_spans(
+        self, text: str
+    ) -> tuple[tuple[int, int, int, int], ...]:
         heads: list[tuple[int, int, int, int]] = []
         for match in _GOAL_CATEGORY_RE.finditer(text):
             goal_start, goal_end = match.span()
+            if self._is_negative_goal_match(text, match):
+                continue
+            clause_break = re.search(r"[.!;]", text[goal_end:])
+            if clause_break:
+                goal_end += clause_break.start()
+            else:
+                goal_end = len(text)
             candidates = [
                 (start, end)
                 for start, end, attribute, value in self._raw_vocabulary_matches(text)
@@ -967,6 +1043,8 @@ class MessageParser:
         if not known:
             return []
         start, end = match.span("category")
+        if self._is_in_negative_goal_clause(text, start, end):
+            return []
         if not self._pending_alias_allowed(
             "category", text, start, end, expected_attribute
         ):
