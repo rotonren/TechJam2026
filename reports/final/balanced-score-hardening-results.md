@@ -45,3 +45,21 @@ failure codes were `development_selection_regression`,
 `development_mean_regression`, `development_buying_regression`, and
 `development_boundary_regression`. The S1 production changes were reverted
 and are not parents of later experiments.
+
+### S2 Substantive Query History
+
+S2 was rejected on representative development folds against the unchanged P0
+parent before any stress, resource, audit, or public run. Mean TechnicalScore
+changed from `0.548439` to `0.530068` (`-0.018371`) and selection score changed
+from `0.543143` to `0.522261` (`-0.020882`). Boundary lost six hits; Buying,
+Browsing, and Intent Override HitRate@10 changed by `-0.035882`, `-0.048286`,
+and `-0.029046`. Fold deltas were `-0.013158`, `-0.009796`, `-0.023890`, and
+`-0.026642`. Fallback and invalid-response counts remained zero. The gate
+failure codes were `development_selection_regression`,
+`development_mean_regression`, `development_fold_regression`,
+`development_buying_regression`, `development_browsing_regression`,
+`development_intent_override_regression`, and
+`development_boundary_regression`. The scored runtime fingerprint was
+`5736a2fb74069f3ea5639b45630c1ac3e33fca0164e51a8cc78de32df3d5ee00`.
+The S2 production changes were reverted and are not parents of later
+experiments.
