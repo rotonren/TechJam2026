@@ -264,6 +264,23 @@ def test_goal_override_allows_an_attribute_rejected_under_the_old_goal():
     assert "size" not in state.no_preference_attributes
 
 
+def test_pending_goal_phrase_starts_a_new_goal_without_an_override_word():
+    store = SessionStore(MessageParser({"category": ("Dresses", "Boots")}))
+    store.reset("s1", {})
+    prior = store.update("s1", "I need a red dress", 1)
+    prior.asked_attributes.append("size")
+    prior.pending_attribute = "size"
+
+    state = store.update("s1", "I need boots", 2, expected_attribute="size")
+
+    assert state.override_scope == "goal"
+    assert {(item.attribute, item.value) for item in state.active_constraints()} == {
+        ("category", "boots")
+    }
+    assert state.asked_attributes == []
+    assert state.pending_attribute is None
+
+
 def test_profile_constraints_are_soft_and_never_override_user_color():
     store = SessionStore(MessageParser())
     state = store.reset(

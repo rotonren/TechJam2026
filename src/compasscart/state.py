@@ -72,7 +72,9 @@ class SessionStore:
         if result.route_hint is not None:
             state.route_hint = result.route_hint
         incoming = list(result.constraints)
-        if result.is_override and self._is_new_goal(state, incoming):
+        if (result.is_override or result.is_goal_replacement) and self._is_new_goal(
+            state, incoming
+        ):
             state.override_scope = "goal"
             if result.route_hint is None:
                 state.route_hint = None

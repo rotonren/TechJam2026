@@ -295,14 +295,81 @@ def test_pending_size_does_not_treat_a_trailing_category_word_as_an_explicit_cue
         ("style: Adjustable", "size", {"style": ("Adjustable",)}, ("style", "adjustable")),
     ),
 )
-def test_explicit_attribute_cues_allow_cross_attribute_aliases_while_pending(
+def test_explicit_attribute_cues_allow_only_the_cued_cross_attribute_alias_while_pending(
     message, expected_attribute, vocabulary, expected
 ):
     result = MessageParser(vocabulary).parse(
         message, turn=2, expected_attribute=expected_attribute
     )
 
-    assert expected in {(item.attribute, item.value) for item in result.constraints}
+    assert [(item.attribute, item.value) for item in result.constraints] == [expected]
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_attribute", "expected"),
+    (
+        ("size: Adjustable", "style", ("size", "adjustable")),
+        ("style: Adjustable", "size", ("style", "adjustable")),
+    ),
+)
+def test_explicit_cue_excludes_same_span_aliases_for_the_pending_attribute(
+    message, expected_attribute, expected
+):
+    result = MessageParser(
+        {"size": ("Adjustable",), "style": ("Adjustable",)}
+    ).parse(message, turn=2, expected_attribute=expected_attribute)
+
+    assert [(item.attribute, item.value) for item in result.constraints] == [expected]
+
+
+@pytest.mark.parametrize("message", ("I need boots", "I want boots", "looking for boots"))
+def test_pending_goal_phrase_allows_category_replacement_without_override_word(message):
+    result = MessageParser({"category": ("Boots",)}).parse(
+        message, turn=2, expected_attribute="size"
+    )
+
+    assert result.is_override is False
+    assert result.is_goal_replacement is True
+    assert [(item.attribute, item.value) for item in result.constraints] == [
+        ("category", "boots")
+    ]
+
+
+def test_pending_ordinary_category_word_does_not_become_goal_replacement():
+    result = MessageParser({"category": ("Boots",)}).parse(
+        "boots please", turn=2, expected_attribute="size"
+    )
+
+    assert result.is_goal_replacement is False
+    assert result.constraints == ()
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    (
+        ("category: boots", ("category", "boots")),
+        ("color: blue", ("color", "blue")),
+    ),
+)
+def test_explicit_cue_span_does_not_fallback_to_pending_soft_text(message, expected):
+    result = MessageParser({"category": ("Boots",)}).parse(
+        message, turn=2, expected_attribute="size"
+    )
+
+    assert [(item.attribute, item.value, item.is_hard) for item in result.constraints] == [
+        (*expected, True)
+    ]
+
+
+def test_residual_open_text_after_explicit_cue_remains_pending_soft_text():
+    result = MessageParser({"category": ("Boots",)}).parse(
+        "category: boots for snow", turn=2, expected_attribute="size"
+    )
+
+    assert [(item.attribute, item.value, item.is_hard) for item in result.constraints] == [
+        ("category", "boots", True),
+        ("size", "category: boots for snow", False),
+    ]
 
 
 def test_goal_override_allows_category_replacement_while_pending():

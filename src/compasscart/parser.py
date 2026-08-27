@@ -71,6 +71,11 @@ _CATEGORY_RE = re.compile(
     r"(?P<category>[a-z][a-z\s-]{0,48}?)(?=\s*(?:[,.!;]|\b(?:but|with|that)\b|$))",
     re.IGNORECASE,
 )
+_GOAL_CATEGORY_RE = re.compile(
+    r"\b(?:i\s+)?(?:need|want|looking for)\s+(?:an?\s+|some\s+)?"
+    r"(?P<category>[a-z][a-z\s-]{0,48}?)(?=\s*(?:[,.!;]|\b(?:but|with|that)\b|$))",
+    re.IGNORECASE,
+)
 _EXPLICIT_CATEGORY_RE = re.compile(
     r"\bcategory(?:\s+is)?\s*[:=-]\s*"
     r"(?P<category>[a-z][a-z\s-]{0,48}?)(?=\s*(?:[,.!;]|$))",
@@ -189,6 +194,7 @@ class ParseResult:
     constraints: tuple[ParsedConstraint, ...] = ()
     route_hint: RouteHint = None
     is_override: bool = False
+    is_goal_replacement: bool = False
     no_preference_attribute: str | None = None
     is_continuation: bool = False
     replace_preferences: bool = False
@@ -309,6 +315,13 @@ class MessageParser:
         )
         extracted.extend(known)
         extracted.extend(categories)
+        is_goal_replacement = bool(
+            expected_attribute
+            and any(
+                item.attribute == "category" and item.is_hard for item in extracted
+            )
+            and self._has_category_goal_phrase(text)
+        )
         if (
             expected_attribute
             and not any(
@@ -332,6 +345,7 @@ class MessageParser:
             constraints=tuple(self._deduplicate(extracted)),
             route_hint=route_hint,
             is_override=is_override,
+            is_goal_replacement=is_goal_replacement,
             is_continuation=is_continuation,
             replace_preferences=replace_preferences,
         )
@@ -350,15 +364,26 @@ class MessageParser:
         Character spans are used so multi-word catalog aliases and budget
         phrases are removed without changing the original query evidence.
         """
-        covered: list[tuple[int, int]] = [
-            (start, end)
-            for start, end, _, _ in self._raw_vocabulary_matches(text)
-        ]
+        covered: list[tuple[int, int]] = []
+        for start, end, attribute, _ in self._raw_vocabulary_matches(text):
+            covered.append(
+                self._explicit_alias_span(attribute, text, start, end) or (start, end)
+            )
+        covered.extend(match.span() for match in _GOAL_CATEGORY_RE.finditer(text))
         for pattern in (_BUDGET_BETWEEN_RE, _BUDGET_DIRECTION_RE, _BUDGET_DEFAULT_RE):
             covered.extend(match.span() for match in pattern.finditer(text))
         category_match = _EXPLICIT_CATEGORY_RE.search(text) or _CATEGORY_RE.search(text)
         if category_match:
-            covered.append(category_match.span("category"))
+            category_start, _ = category_match.span("category")
+            for token_match in _TOKEN_SPAN_RE.finditer(category_match.group("category")):
+                if token_match.group(0).lower() not in _KNOWN_CATEGORIES:
+                    continue
+                start = category_start + token_match.start()
+                end = category_start + token_match.end()
+                covered.append(
+                    self._explicit_alias_span("category", text, start, end)
+                    or (start, end)
+                )
 
         # The fixed lexical category list is useful even when a lightweight
         # parser was constructed without a catalog vocabulary.
@@ -482,6 +507,9 @@ class MessageParser:
             )
             and not (
                 attribute == "category" and self._is_negative_value(text, start)
+            )
+            and not self._overlaps_explicit_alias_cue_for_other_attribute(
+                attribute, text, start, end
             )
         ]
 
@@ -633,9 +661,56 @@ class MessageParser:
     ) -> bool:
         if not expected_attribute or attribute == expected_attribute:
             return True
-        return self._is_negative_value(text, start) or self._has_explicit_alias_cue(
-            attribute, "", text, start, end
+        return (
+            self._is_negative_value(text, start)
+            or self._has_explicit_alias_cue(attribute, "", text, start, end)
+            or (
+                attribute == "category"
+                and self._is_category_goal_span(text, start, end)
+            )
         )
+
+    @staticmethod
+    def _overlaps_explicit_alias_cue_for_other_attribute(
+        attribute: str, text: str, start: int, end: int
+    ) -> bool:
+        return any(
+            candidate != attribute
+            and MessageParser._explicit_alias_span(candidate, text, start, end)
+            for candidate in (
+                "brand",
+                "category",
+                "color",
+                "feature",
+                "material",
+                "size",
+                "style",
+                "use_case",
+            )
+        )
+
+    @staticmethod
+    def _has_category_goal_phrase(text: str) -> bool:
+        return bool(_GOAL_CATEGORY_RE.search(text))
+
+    @staticmethod
+    def _is_category_goal_span(text: str, start: int, end: int) -> bool:
+        return any(
+            category_start <= start and end <= category_end
+            for match in _GOAL_CATEGORY_RE.finditer(text)
+            for category_start, category_end in (match.span("category"),)
+        )
+
+    @staticmethod
+    def _explicit_alias_span(
+        attribute: str, text: str, start: int, end: int
+    ) -> tuple[int, int] | None:
+        prefix = text[:start]
+        attribute_label = re.escape(attribute).replace("_", r"\s+")
+        match = re.search(
+            rf"\b{attribute_label}(?:\s+is)?\s*[:=-]\s*$", prefix
+        )
+        return (match.start(), end) if match else None
 
     @staticmethod
     def _overlaps_any(
@@ -650,10 +725,9 @@ class MessageParser:
     def _has_explicit_alias_cue(
         attribute: str, value: str, text: str, start: int, end: int
     ) -> bool:
-        attribute_label = re.escape(attribute).replace("_", r"\s+")
         left = text[max(0, start - 24) : start]
         right = text[end : min(len(text), end + 16)]
-        if re.search(rf"\b{attribute_label}(?:\s+is)?\s*[:=-]\s*$", left):
+        if MessageParser._explicit_alias_span(attribute, text, start, end):
             return True
         if attribute == "brand":
             if "brand" in terms(value) or re.search(r"['’]s\b", text[start:end]):
