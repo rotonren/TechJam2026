@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from agent import Agent
+from compasscart.config import RuntimeConfig
 
 
 def _ids(response: dict) -> list[str]:
@@ -108,3 +109,27 @@ def test_browsing_context_survives_a_follow_up_attribute_answer(fixture_catalog_
     trace = agent.traces.records[-1]
     assert trace["route"] == "browsing"
     assert trace["route_reason"] == "explicit_browsing"
+
+
+def test_agent_wires_bounded_rank_calibration_without_changing_response_contract(
+    fixture_catalog_path,
+):
+    config = RuntimeConfig(
+        rank_attribute_weight=0.05,
+        rank_consensus_bonus=0.025,
+        rank_boundary_bonus=0.025,
+        rank_fusion_weight=0.15,
+        adaptive_browsing_mmr=True,
+    )
+    agent = Agent(fixture_catalog_path, config=config)
+    agent.reset("rank-config", {"preference_tags": []})
+
+    response = agent.respond("rank-config", "running shoes", 1, 4)
+
+    assert response["recommendations"]
+    assert set(response) == {"message", "ask_attribute", "recommendations", "usage"}
+    assert agent.ranker.attribute_weight == 0.05
+    assert agent.ranker.consensus_bonus == 0.025
+    assert agent.ranker.boundary_bonus == 0.025
+    assert agent.ranker.fusion_weight == 0.15
+    assert agent.ranker.adaptive_browsing_mmr is True

@@ -1,3 +1,5 @@
+from dataclasses import asdict
+
 from compasscart.models import Candidate, Constraint, SessionState
 
 
@@ -36,6 +38,17 @@ def test_constraint_and_candidate_defaults_preserve_existing_call_shapes():
     assert constraint.values() == ("blue",)
     assert candidate.violations == ()
     assert candidate.relaxed is False
+    assert candidate.source_ranks == {}
+    assert candidate.pre_rank is None
+
+
+def test_candidate_evidence_fields_append_without_shifting_legacy_arguments():
+    candidate = Candidate("P1", {"title": "Product"}, {"lexical": 0.2}, 0.4, (), True)
+
+    assert candidate.relaxed is True
+    assert candidate.source_ranks == {}
+    assert candidate.pre_rank is None
+    assert asdict(candidate)["source_ranks"] == {}
 
 
 def test_constraint_values_prefers_alternatives_over_legacy_value():

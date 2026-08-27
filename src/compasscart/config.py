@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,7 +31,39 @@ class RuntimeConfig:
         ("attribute", 0.30),
     )
     rank_fusion_weight: float = 0.10
+    rank_attribute_weight: float = 0.0
+    rank_consensus_bonus: float = 0.0
+    rank_boundary_bonus: float = 0.0
     mmr_lambda: float = 0.85
+    adaptive_browsing_mmr: bool = False
+
+    def __post_init__(self) -> None:
+        self._validate_choice(
+            "rank_fusion_weight", self.rank_fusion_weight, {0.10, 0.15}
+        )
+        self._validate_choice(
+            "rank_attribute_weight", self.rank_attribute_weight, {0.0, 0.05, 0.10}
+        )
+        self._validate_choice(
+            "rank_consensus_bonus", self.rank_consensus_bonus, {0.0, 0.025, 0.05}
+        )
+        self._validate_choice(
+            "rank_boundary_bonus", self.rank_boundary_bonus, {0.0, 0.025}
+        )
+        self._validate_choice("mmr_lambda", self.mmr_lambda, {0.85})
+        if not isinstance(self.adaptive_browsing_mmr, bool):
+            raise TypeError("adaptive_browsing_mmr must be a bool")
+        if self.rank_fusion_weight + self.rank_attribute_weight > 0.40:
+            raise ValueError(
+                "rank_fusion_weight + rank_attribute_weight must not exceed 0.40"
+            )
+
+    @staticmethod
+    def _validate_choice(name: str, value: float, allowed: set[float]) -> None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TypeError(f"{name} must be a finite number")
+        if not math.isfinite(float(value)) or value not in allowed:
+            raise ValueError(f"{name} must be one of {sorted(allowed)}")
 
     def resolve_dense_paths(
         self, submission_root: Path

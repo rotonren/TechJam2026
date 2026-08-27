@@ -14,15 +14,33 @@ class ConstraintRanker:
         catalog: CatalogIndex,
         *,
         fusion_weight: float = 0.0,
+        attribute_weight: float = 0.0,
+        consensus_bonus: float = 0.0,
+        boundary_bonus: float = 0.0,
         mmr_lambda: float = 0.85,
+        adaptive_browsing_mmr: bool = False,
     ) -> None:
-        if not 0.0 <= fusion_weight <= 0.10:
-            raise ValueError("fusion_weight must be between 0.0 and 0.10")
-        if not 0.0 <= mmr_lambda <= 1.0:
-            raise ValueError("mmr_lambda must be between 0.0 and 1.0")
+        if fusion_weight not in {0.0, 0.10, 0.15}:
+            raise ValueError("fusion_weight must be one of 0.0, 0.10, or 0.15")
+        if attribute_weight not in {0.0, 0.05, 0.10}:
+            raise ValueError("attribute_weight must be one of 0.0, 0.05, or 0.10")
+        if consensus_bonus not in {0.0, 0.025, 0.05}:
+            raise ValueError("consensus_bonus must be one of 0.0, 0.025, or 0.05")
+        if boundary_bonus not in {0.0, 0.025}:
+            raise ValueError("boundary_bonus must be one of 0.0 or 0.025")
+        if fusion_weight + attribute_weight > 0.40:
+            raise ValueError("fusion and attribute weights must not exceed 0.40")
+        if mmr_lambda != 0.85:
+            raise ValueError("mmr_lambda must be 0.85")
+        if not isinstance(adaptive_browsing_mmr, bool):
+            raise TypeError("adaptive_browsing_mmr must be a bool")
         self.catalog = catalog
         self.fusion_weight = fusion_weight
+        self.attribute_weight = attribute_weight
+        self.consensus_bonus = min(consensus_bonus, 0.05)
+        self.boundary_bonus = min(boundary_bonus, 0.025)
         self.mmr_lambda = mmr_lambda
+        self.adaptive_browsing_mmr = adaptive_browsing_mmr
         self._diversity_cache: OrderedDict[str, frozenset[str]] = OrderedDict()
 
     def rank(
@@ -42,8 +60,11 @@ class ConstraintRanker:
             allow_score_fallback=self.fusion_weight == 0.0,
         )
         dense = self._normalized_source(candidates, "dense")
+        attribute = self._normalized_source(candidates, "attribute")
         fusion = self._normalized_scores(candidates)
-        source_weight = (0.40 - self.fusion_weight) / 2.0
+        source_weight = (
+            0.40 - self.fusion_weight - self.attribute_weight
+        ) / 2.0
         hard = [item for item in state.active_constraints() if item.is_hard]
         soft = [
             item
@@ -65,15 +86,29 @@ class ConstraintRanker:
             ]
             category_match = self._coverage(identifier, category_constraints)
             conflict = float(any(self._conflicts(identifier, item) for item in hard))
+            consensus = self._has_consensus(candidate)
+            consensus_evidence = self.consensus_bonus if consensus else 0.0
+            boundary_evidence = (
+                self.boundary_bonus
+                if consensus
+                and candidate.pre_rank is not None
+                and candidate.pre_rank <= 10
+                and not candidate.relaxed
+                and not conflict
+                else 0.0
+            )
             score = (
                 0.30 * hard_coverage
                 + source_weight * lexical[identifier]
                 + source_weight * dense[identifier]
                 + self.fusion_weight * fusion[identifier]
+                + self.attribute_weight * attribute[identifier]
                 + 0.10 * category_match
                 + 0.10 * soft_coverage
                 + 0.05 * profile_affinity
                 + 0.05 * self.catalog.quality.get(identifier, 0.0)
+                + consensus_evidence
+                + boundary_evidence
                 - 0.60 * conflict
             )
             scored.append(
@@ -84,6 +119,8 @@ class ConstraintRanker:
                     score=score,
                     violations=candidate.violations,
                     relaxed=candidate.relaxed,
+                    source_ranks=dict(candidate.source_ranks),
+                    pre_rank=candidate.pre_rank,
                 )
             )
 
@@ -93,10 +130,21 @@ class ConstraintRanker:
             if deadline is None or time.perf_counter() < deadline:
                 exact = [item for item in scored if not item.relaxed]
                 relaxed = [item for item in scored if item.relaxed]
-                return (self._diverse_order(exact) + self._diverse_order(relaxed))[:limit]
+                return (
+                    self._browsing_order(exact) + self._browsing_order(relaxed)
+                )[:limit]
             if diagnostics is not None and "mmr_budget" not in diagnostics:
                 diagnostics.append("mmr_budget")
         return scored[:limit]
+
+    @staticmethod
+    def _has_consensus(candidate: Candidate) -> bool:
+        sources = {
+            source
+            for source, rank in candidate.source_ranks.items()
+            if source != "profile" and isinstance(rank, int) and rank > 0
+        }
+        return len(sources) >= 2 and bool(sources & {"lexical", "attribute"})
 
     def _coverage(self, identifier: str, constraints: list[Constraint]) -> float:
         if not constraints:
@@ -117,6 +165,32 @@ class ConstraintRanker:
         diverse = self._mmr(candidates, min(len(candidates), 10))
         selected = {item.parent_asin for item in diverse}
         return diverse + [item for item in candidates if item.parent_asin not in selected]
+
+    def _browsing_order(self, candidates: list[Candidate]) -> list[Candidate]:
+        if not self.adaptive_browsing_mmr:
+            return self._diverse_order(candidates)
+        if not self._adaptive_mmr_eligible(candidates):
+            return list(candidates)
+        return self._diverse_order(candidates)
+
+    def _adaptive_mmr_eligible(self, candidates: list[Candidate]) -> bool:
+        if len(candidates) < 11:
+            return False
+        normalized = self._normalized_scores(candidates)
+        if abs(
+            normalized[candidates[9].parent_asin]
+            - normalized[candidates[10].parent_asin]
+        ) > 0.025:
+            return False
+        similar_pairs = 0
+        first_ten = candidates[:10]
+        for left_index, left in enumerate(first_ten):
+            for right in first_ten[left_index + 1 :]:
+                if self._similarity(left.parent_asin, right.parent_asin) >= 0.60:
+                    similar_pairs += 1
+                    if similar_pairs >= 3:
+                        return True
+        return False
 
     @staticmethod
     def _normalized_source(

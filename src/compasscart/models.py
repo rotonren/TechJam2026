@@ -112,6 +112,8 @@ class Candidate:
     score: float = 0.0
     violations: tuple[str, ...] = ()
     relaxed: bool = False
+    source_ranks: dict[str, int] = field(default_factory=dict)
+    pre_rank: int | None = None
 
 
 def _numeric_sort_key(value: str) -> float:

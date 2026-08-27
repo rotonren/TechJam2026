@@ -80,6 +80,9 @@ class HybridRetriever:
         weights = dict(plan.source_weights) or self._default_weights(plan.route)
         fused_ids = reciprocal_rank_fusion(rankings, weights=weights, k=self.rrf_k)
         fused_ids = [item for item in fused_ids if item in self.catalog.valid_ids]
+        fused_pre_ranks = {
+            identifier: rank for rank, identifier in enumerate(fused_ids, start=1)
+        }
 
         desired = min(10, len(self.catalog.valid_ids), plan.candidate_limit)
         fallback_ids: list[str] | None = None
@@ -123,7 +126,7 @@ class HybridRetriever:
                 relaxed_ids.append(identifier)
                 if len(relaxed_ids) >= desired:
                     break
-        source_ranks = {
+        all_source_ranks = {
             source: {identifier: rank for rank, identifier in enumerate(ids, start=1)}
             for source, ids in rankings.items()
         }
@@ -131,7 +134,12 @@ class HybridRetriever:
         for identifier in exact_ids:
             contributions = {
                 source: weights.get(source, 0.0) / (self.rrf_k + ranks[identifier])
-                for source, ranks in source_ranks.items()
+                for source, ranks in all_source_ranks.items()
+                if identifier in ranks and weights.get(source, 0.0) > 0
+            }
+            evidence_ranks = {
+                source: ranks[identifier]
+                for source, ranks in all_source_ranks.items()
                 if identifier in ranks and weights.get(source, 0.0) > 0
             }
             candidates.append(
@@ -140,6 +148,8 @@ class HybridRetriever:
                     product=self.catalog.product(identifier),
                     source_scores=contributions,
                     score=sum(contributions.values()),
+                    source_ranks=evidence_ranks,
+                    pre_rank=fused_pre_ranks.get(identifier),
                 )
             )
         for identifier in relaxed_ids:

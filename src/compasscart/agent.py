@@ -47,7 +47,11 @@ class CompassCartAgent:
         self.ranker = ConstraintRanker(
             self.catalog,
             fusion_weight=self.config.rank_fusion_weight,
+            attribute_weight=self.config.rank_attribute_weight,
+            consensus_bonus=self.config.rank_consensus_bonus,
+            boundary_bonus=self.config.rank_boundary_bonus,
             mmr_lambda=self.config.mmr_lambda,
+            adaptive_browsing_mmr=self.config.adaptive_browsing_mmr,
         )
         self.question_policy = QuestionPolicy(self.catalog.attributes)
         self.response_builder = ResponseBuilder(

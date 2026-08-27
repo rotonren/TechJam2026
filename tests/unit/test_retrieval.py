@@ -369,3 +369,78 @@ def test_category_not_in_candidate_ids_use_semantic_category_union(
         "DRESS1",
         "JACKET1",
     }
+
+
+def test_retrieval_records_positive_weight_deduplicated_source_ranks_and_pre_rank(
+    fixture_catalog_path, monkeypatch
+):
+    class DenseResults:
+        available = True
+
+        def search(self, _text, _limit):
+            return [Candidate("SHOE1"), Candidate("DRESS1"), Candidate("SHOE1")]
+
+    index = CatalogIndex(fixture_catalog_path)
+    retriever = HybridRetriever(index, DenseResults())
+    monkeypatch.setattr(
+        index,
+        "search_lexical",
+        lambda _plan, *, limit: [
+            Candidate("DRESS1"),
+            Candidate("DRESS1"),
+            Candidate("SHOE1"),
+        ],
+    )
+    plan = RetrievalPlan(
+        route="browsing",
+        query_text="shoes",
+        source_weights=(("lexical", 0.30), ("dense", 0.45), ("profile", 0.0)),
+        candidate_limit=4,
+    )
+
+    candidates = retriever.retrieve(plan)
+    by_id = {item.parent_asin: item for item in candidates}
+
+    assert by_id["SHOE1"].source_ranks == {"lexical": 2, "dense": 1}
+    assert by_id["DRESS1"].source_ranks == {"lexical": 1, "dense": 2}
+    assert "profile" not in by_id["SHOE1"].source_ranks
+    assert [item.pre_rank for item in candidates[:2]] == [1, 2]
+
+
+def test_retrieval_keeps_zero_weight_rrf_behavior_without_recording_evidence(
+    fixture_catalog_path, monkeypatch
+):
+    index = CatalogIndex(fixture_catalog_path)
+    retriever = HybridRetriever(index)
+    monkeypatch.setattr(
+        index,
+        "search_lexical",
+        lambda _plan, *, limit: [Candidate("DRESS1"), Candidate("SHOE1")],
+    )
+    monkeypatch.setattr(
+        retriever, "_attribute_candidates", lambda _plan, _limit: ["SHOE1"]
+    )
+    plan = RetrievalPlan(
+        route="buying",
+        query_text="shoes",
+        source_weights=(("lexical", 1.0), ("attribute", 0.0)),
+        candidate_limit=4,
+    )
+
+    candidates = retriever.retrieve(plan)
+    by_id = {item.parent_asin: item for item in candidates}
+
+    assert by_id["DRESS1"].source_ranks == {"lexical": 1}
+    assert by_id["SHOE1"].source_ranks == {"lexical": 2}
+    assert by_id["SHOE1"].pre_rank == 2
+
+
+def test_retrieval_fallback_candidates_have_no_rank_evidence(fixture_catalog_path):
+    candidates = HybridRetriever(CatalogIndex(fixture_catalog_path)).retrieve(
+        RetrievalPlan(route="buying", query_text="unmatched query")
+    )
+
+    fallback = [item for item in candidates if not item.source_scores]
+    assert fallback
+    assert all(item.source_ranks == {} for item in fallback)
+    assert all(item.pre_rank is None for item in fallback)
