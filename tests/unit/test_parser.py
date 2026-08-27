@@ -496,6 +496,25 @@ def test_pending_bounded_negative_goal_phrases_do_not_create_category_or_soft_si
     assert result.constraints == ()
 
 
+@pytest.mark.parametrize(
+    "message",
+    (
+        "I don't currently want boots",
+        "I do not particularly want boots",
+        "I am definitely not looking for boots",
+    ),
+)
+def test_pending_structured_negative_goal_with_bounded_adverbs_has_no_category_or_soft_size(
+    message,
+):
+    result = MessageParser({"category": ("Boots",)}).parse(
+        message, turn=2, expected_attribute="size"
+    )
+
+    assert result.is_goal_replacement is False
+    assert result.constraints == ()
+
+
 def test_no_preference_override_does_not_replace_preferences():
     result = MessageParser().parse(
         "I've changed my mind, no preference", turn=2, expected_attribute="size"
@@ -512,6 +531,47 @@ def test_lining_remains_soft_text_when_it_is_the_pending_answer(expected_attribu
 
     assert [(item.attribute, item.value, item.is_hard) for item in result.constraints] == [
         (expected_attribute, "lining", False)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("message", "vocabulary", "expected"),
+    (
+        (
+            "I need boots with breathable lining",
+            {"category": ("Boots",), "feature": ("Breathable",)},
+            [("category", "boots", True), ("feature", "breathable", True)],
+        ),
+        (
+            "I need boots with waterproof padding",
+            {"category": ("Boots",), "feature": ("Waterproof",)},
+            [("category", "boots", True), ("feature", "waterproof", True)],
+        ),
+        (
+            "I need boots with waterproof inner lining",
+            {"category": ("Boots",), "feature": ("Waterproof",)},
+            [("category", "boots", True), ("feature", "waterproof", True)],
+        ),
+    ),
+)
+def test_goal_modifier_residual_is_derived_from_recognized_attribute_spans(
+    message, vocabulary, expected
+):
+    result = MessageParser(vocabulary).parse(
+        message, turn=2, expected_attribute="size"
+    )
+
+    assert [(item.attribute, item.value, item.is_hard) for item in result.constraints] == expected
+
+
+def test_unknown_goal_requirement_after_a_category_remains_soft_evidence():
+    result = MessageParser({"category": ("Boots",)}).parse(
+        "I need boots with a magnetic clasp", turn=2, expected_attribute="size"
+    )
+
+    assert [(item.attribute, item.value, item.is_hard) for item in result.constraints] == [
+        ("category", "boots", True),
+        ("size", "with a magnetic clasp", False),
     ]
 
 

@@ -770,7 +770,14 @@ class MessageParser:
     @staticmethod
     def _negative_goal_span(text: str, match: re.Match[str]) -> tuple[int, int]:
         prefix = MessageParser._negative_goal_prefix(text, match)
-        return (prefix[0], match.end()) if prefix else match.span()
+        if prefix is None:
+            return match.span()
+        sentence_start = max(
+            text.rfind(".", 0, prefix[0]),
+            text.rfind("!", 0, prefix[0]),
+            text.rfind(";", 0, prefix[0]),
+        ) + 1
+        return (sentence_start, match.end())
 
     @staticmethod
     def _negative_goal_prefix(
@@ -779,13 +786,8 @@ class MessageParser:
         window_start = max(0, match.start() - 32)
         prefix = text[window_start : match.start()]
         negative = re.search(
-            r"\b(?:"
-            r"(?:i(?:'m| am)\s+)?not\s+|"
-            r"never\s+|"
-            r"no\s+longer\s+|"
-            r"don['’]?t(?:\s+really)?\s+|"
-            r"do\s+not(?:\s+really)?\s+"
-            r")$",
+            r"\b(?:don['’]?t|do\s+not|never|no\s+longer|not)\s+"
+            r"(?:[a-z]+\s+){0,3}$",
             prefix,
         )
         if negative is None:
@@ -825,14 +827,21 @@ class MessageParser:
         )
 
     def _goal_modifier_spans(self, text: str) -> tuple[tuple[int, int], ...]:
-        return tuple(
-            match.span()
-            for match in re.finditer(
-                r"\b(?:with|that\s+has|but\s+with)\s+waterproof\s+lining\b",
-                text,
-            )
-            if self._is_in_confirmed_goal_clause(text, match.start(), match.end())
-        )
+        spans: list[tuple[int, int]] = []
+        for start, end, attribute, _ in self._raw_vocabulary_matches(text):
+            if attribute != "feature" or not self._is_in_confirmed_goal_clause(
+                text, start, end
+            ):
+                continue
+            prefix = text[max(0, start - 24) : start]
+            connector = re.search(r"\b(?:with|that\s+has|but\s+with)\s*$", prefix)
+            if connector is None:
+                continue
+            span_start = max(0, start - 24) + connector.start()
+            tail = re.search(r"\s+(?=\b(?:and|or|but)\b|[.!;]|$)", text[end:])
+            span_end = end + tail.start() if tail else len(text)
+            spans.append((span_start, span_end))
+        return tuple(spans)
 
     def _goal_category_head_spans(
         self, text: str
