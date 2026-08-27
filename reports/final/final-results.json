@@ -79,8 +79,8 @@
     "catalog_rows": 50000,
     "catalog_jsonl_sha256": "da979b05a68af864cb0dcf9ee6a81c010c7e66a57978ad286c7a2e005fc69a67",
     "catalog_gzip_sha256": "07fd142631fd6b03e2b4d09988c3eb7d53720e9d57010c79db48eeaada50a8f8",
-    "public_set_sha256": "571359a8a69014c43fc30d39c996c4a28e875dccc249dffc707358757beb16c0",
-    "evaluator_sha256": "84ea899707452de249ca62abee77c4b40ab7a3139b5cc798ac30c9f521f91b30"
+    "public_set_canonical_sha256": "857259f7a438e6188ac63e18995b6ff4489bfcfc4a716a798b9a2aa0ee8f7579",
+    "evaluator_canonical_sha256": "79a5ea06f9a1b8c5036f30efa85dc1f36b8f6b06eb8feb8f545dfa767bc45564"
   },
   "usage_and_cost": {
     "prompt_tokens": 0,

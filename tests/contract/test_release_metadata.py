@@ -8,8 +8,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RESULTS_PATH = PROJECT_ROOT / "reports" / "final" / "final-results.json"
 
 
-def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def _sha256_canonical_text(path: Path) -> str:
+    content = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(content).hexdigest()
 
 
 def test_release_metadata_identifies_review_candidate_and_runtime():
@@ -29,10 +30,10 @@ def test_release_fingerprints_match_tracked_evidence():
     results = json.loads(RESULTS_PATH.read_text(encoding="utf-8"))
     fingerprints = results["reproducibility"]
 
-    assert fingerprints["public_set_sha256"] == _sha256(
+    assert fingerprints["public_set_canonical_sha256"] == _sha256_canonical_text(
         PROJECT_ROOT / "data" / "public_set.jsonl"
     )
-    assert fingerprints["evaluator_sha256"] == _sha256(
+    assert fingerprints["evaluator_canonical_sha256"] == _sha256_canonical_text(
         PROJECT_ROOT / "evaluator" / "local_evaluator.py"
     )
 

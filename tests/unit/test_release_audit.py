@@ -7,6 +7,7 @@ import pytest
 
 from tools.release_audit import (
     load_release_results,
+    sha256_canonical_text,
     sha256_file,
     verify_release_fingerprints,
 )
@@ -29,6 +30,15 @@ def test_load_release_results_requires_current_schema(tmp_path: Path):
         load_release_results(path)
 
 
+def test_canonical_text_hash_ignores_checkout_line_endings(tmp_path: Path):
+    lf = tmp_path / "lf.txt"
+    crlf = tmp_path / "crlf.txt"
+    lf.write_bytes(b"one\ntwo\n")
+    crlf.write_bytes(b"one\r\ntwo\r\n")
+
+    assert sha256_canonical_text(lf) == sha256_canonical_text(crlf)
+
+
 def test_release_fingerprints_reject_changed_inputs(tmp_path: Path):
     data = tmp_path / "data"
     evaluator = tmp_path / "evaluator"
@@ -43,8 +53,8 @@ def test_release_fingerprints_reject_changed_inputs(tmp_path: Path):
     results = {
         "reproducibility": {
             "catalog_jsonl_sha256": sha256_file(catalog),
-            "public_set_sha256": sha256_file(public),
-            "evaluator_sha256": sha256_file(local_evaluator),
+            "public_set_canonical_sha256": sha256_canonical_text(public),
+            "evaluator_canonical_sha256": sha256_canonical_text(local_evaluator),
         }
     }
 

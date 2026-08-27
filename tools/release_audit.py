@@ -22,6 +22,12 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def sha256_canonical_text(path: Path) -> str:
+    """Hash UTF-8 text after normalizing checkout-specific line endings."""
+    content = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(content).hexdigest()
+
+
 def load_release_results(path: Path = RESULTS_PATH) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if payload.get("schema_version") != 2:
@@ -36,25 +42,34 @@ def verify_release_fingerprints(
     catalog_path: Path,
 ) -> dict[str, str]:
     expected = results["reproducibility"]
-    inputs = {
+    binary_inputs = {
         "catalog_jsonl": (
             catalog_path,
             str(expected["catalog_jsonl_sha256"]),
         ),
+    }
+    text_inputs = {
         "public_set": (
             root / "data" / "public_set.jsonl",
-            str(expected["public_set_sha256"]),
+            str(expected["public_set_canonical_sha256"]),
         ),
         "evaluator": (
             root / "evaluator" / "local_evaluator.py",
-            str(expected["evaluator_sha256"]),
+            str(expected["evaluator_canonical_sha256"]),
         ),
     }
     actual: dict[str, str] = {}
-    for name, (path, wanted) in inputs.items():
+    for name, (path, wanted) in binary_inputs.items():
         if not path.is_file():
             raise FileNotFoundError(path)
         digest = sha256_file(path)
+        if digest != wanted:
+            raise ValueError(f"{name} fingerprint mismatch")
+        actual[name] = digest
+    for name, (path, wanted) in text_inputs.items():
+        if not path.is_file():
+            raise FileNotFoundError(path)
+        digest = sha256_canonical_text(path)
         if digest != wanted:
             raise ValueError(f"{name} fingerprint mismatch")
         actual[name] = digest
