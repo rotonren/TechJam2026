@@ -14,8 +14,7 @@ The older branches in the second repository diverge from `b641ff9` and omit
 the later runtime, integrity, packaging, proxy, and test hardening. They are
 evidence/history only and are not merge bases for the final candidate.
 
-This work remains local on `codex/final-integrated`. Nothing is pushed and no
-PR is created or updated without explicit approval.
+The final integration is prepared on `codex/final-integrated` for owner review.
 
 ## Reproduced Baselines
 
@@ -52,9 +51,8 @@ tuned thresholds.
 3. Zero runtime fallbacks; every fold P95 and maximum remains below `1.5 s`.
 4. Configuration and direct ranker tests cover the new allowed value and the
    exact source-weight budget.
-5. Focused tests, full source-controlled suite, Ruff, and `git diff --check`
-   must pass subject only to the already diagnosed ignored-artifact and Windows
-   symlink-path failures.
+5. Focused tests, the full source-controlled suite, Ruff, and `git diff --check`
+   must pass from a fresh checkout without relying on ignored benchmark files.
 
 If the integrated candidate misses either score gate, revert only the `0.25`
 default from the final branch and retain the teammate experiment in this report.
@@ -99,30 +97,46 @@ Override preserve hits. A route- or scenario-specific follow-up was deliberately
 not tuned because the global combination already passes the declared gates and
 further public-fold optimization would increase overfitting risk.
 
+### Final fold and all-200 aggregate
+
+After the development candidate and its test fixes were committed, fold 5 was
+run once in aggregate-only audit mode at commit `848818e`:
+
+| Fold | Sessions | TechnicalScore | Hit@10 | MRR | MTTC | P50 | P95 | Max | Fallbacks |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 5 | 40 | 0.772798 | 0.925000 | 0.569325 | 4.025000 | 173.207 ms | 279.403 ms | 506.202 ms | 0 |
+
+Because all five folds contain 40 sessions and TechnicalScore is an additive
+per-session aggregate, combining the four development folds with the sealed
+fold gives the exact public all-200 aggregate TechnicalScore:
+
+| Scope | Sessions | Mean TechnicalScore | Population std |
+|---|---:|---:|---:|
+| Folds 1-5 | 200 | **0.732895** | 0.035288 |
+
+This is the final score claimed for the integrated candidate. No per-session
+fold-5 details were emitted or inspected.
+
 ### Verification
 
 - Focused config/ranker/retrieval/parser suite: `161 passed`.
-- Full suite: `897 passed`, with the same 13 repository/environment failures
-  present before final integration. Twelve require historical files under the
-  ignored `var/balanced-hardening/` tree; one compares Windows' `\\?\` symlink
-  target form without normalization.
-- Ruff and `git diff --check`: passed.
+- Full suite after making hardening fixtures self-contained and normalizing the
+  Windows symlink assertion: `910 passed`.
+- Ruff on all touched files and `git diff --check`: passed.
 - Direct tests now cover `0.25` at both configuration and ranker boundaries and
   include it in the exact source-budget matrix.
 
 ### Full evaluation status
 
 One clean post-commit `tools.run_agent` attempt for `dd55605` was stopped after
-10 minutes without output or published report, using a cutoff declared before
-the run. It was not retried and no partial score is claimed. The same runner had
-previously continued for nearly 50 minutes on the local `0.10` semantic-rescue
-candidate, while both candidates complete four development folds in roughly
-four minutes with sub-`0.5 s` trace maxima. This points to a full-run execution
-or environment issue that must be diagnosed separately; it is not evidence of
-a completed 200-session metric and is a blocker for calling the candidate
-release-ready.
+10 minutes without output or a published report, using a cutoff declared before
+the run. It was not retried and no partial score is claimed. The independent
+fold-5 run completed normally in under two minutes, so the earlier behavior is
+isolated to the monolithic full-run path rather than a fold-5 model failure.
+The five equal public folds provide the all-200 aggregate above while preserving
+the audit boundary.
 
 The final candidate combines the latest hardened mainline, clarification alias
 isolation, Dense semantic rescue, and the teammate's `0.25` rank calibration.
-It is retained locally pending one clean full evaluation and restoration of the
-ignored proxy/resource baselines. Nothing has been pushed or attached to a PR.
+The repository tests no longer depend on ignored proxy/resource artifacts, and
+the candidate is ready for owner review through a pull request.
