@@ -110,6 +110,18 @@ further public-fold optimization would increase overfitting risk.
 - Direct tests now cover `0.25` at both configuration and ranker boundaries and
   include it in the exact source-budget matrix.
 
+### Full evaluation status
+
+One clean post-commit `tools.run_agent` attempt for `dd55605` was stopped after
+10 minutes without output or published report, using a cutoff declared before
+the run. It was not retried and no partial score is claimed. The same runner had
+previously continued for nearly 50 minutes on the local `0.10` semantic-rescue
+candidate, while both candidates complete four development folds in roughly
+four minutes with sub-`0.5 s` trace maxima. This points to a full-run execution
+or environment issue that must be diagnosed separately; it is not evidence of
+a completed 200-session metric and is a blocker for calling the candidate
+release-ready.
+
 The final candidate combines the latest hardened mainline, clarification alias
 isolation, Dense semantic rescue, and the teammate's `0.25` rank calibration.
 It is retained locally pending one clean full evaluation and restoration of the
