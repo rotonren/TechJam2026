@@ -235,7 +235,13 @@ def test_zero_component_budget_skips_optional_work_without_using_fallbacks(
             self.calls += 1
             return []
 
-    agent = Agent(fixture_catalog_path, config=RuntimeConfig(component_timeout_ms=0))
+    agent = Agent(
+        fixture_catalog_path,
+        config=RuntimeConfig(
+            component_timeout_ms=0,
+            dense_rescue_only=False,
+        ),
+    )
     dense = CountingDense()
     agent.dense = dense
     agent.retriever.dense = dense

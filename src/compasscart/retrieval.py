@@ -36,10 +36,14 @@ class HybridRetriever:
         dense: DenseBackend | None = None,
         *,
         rrf_k: int = 60,
+        dense_rescue_only: bool = False,
     ) -> None:
+        if not isinstance(dense_rescue_only, bool):
+            raise TypeError("dense_rescue_only must be a bool")
         self.catalog = catalog
         self.dense = dense
         self.rrf_k = rrf_k
+        self.dense_rescue_only = dense_rescue_only
 
     def retrieve(
         self,
@@ -60,24 +64,32 @@ class HybridRetriever:
         lexical = self.catalog.search_lexical(plan, limit=component_limit)
         attribute_ids = self._attribute_candidates(plan, component_limit)
         profile_ids = self._profile_candidates(plan, component_limit)
-        dense: list[Candidate] = []
-        if self.dense is not None and self.dense.available:
-            if deadline is None or time.perf_counter() < deadline:
-                dense = self._dense_candidates(plan.query_text, component_limit)
-            elif diagnostics is not None and "dense_budget" not in diagnostics:
-                diagnostics.append("dense_budget")
-
+        weights = dict(plan.source_weights) or self._default_weights(plan.route)
         rankings = {
             "lexical": self._exact_ids(
                 [item.parent_asin for item in lexical], plan, excluded
             ),
             "attribute": self._exact_ids(attribute_ids, plan, excluded),
             "profile": self._exact_ids(profile_ids, plan, excluded),
-            "dense": self._exact_ids(
-                [item.parent_asin for item in dense], plan, excluded
-            ),
+            "dense": [],
         }
-        weights = dict(plan.source_weights) or self._default_weights(plan.route)
+        non_dense_evidence = any(
+            rankings[source] and weights.get(source, 0.0) > 0
+            for source in ("lexical", "attribute", "profile")
+        )
+        dense: list[Candidate] = []
+        should_search_dense = (
+            weights.get("dense", 0.0) > 0
+            and (not self.dense_rescue_only or not non_dense_evidence)
+        )
+        if should_search_dense and self.dense is not None and self.dense.available:
+            if deadline is None or time.perf_counter() < deadline:
+                dense = self._dense_candidates(plan.query_text, component_limit)
+            elif diagnostics is not None and "dense_budget" not in diagnostics:
+                diagnostics.append("dense_budget")
+        rankings["dense"] = self._exact_ids(
+            [item.parent_asin for item in dense], plan, excluded
+        )
         fused_ids = reciprocal_rank_fusion(rankings, weights=weights, k=self.rrf_k)
         fused_ids = [item for item in fused_ids if item in self.catalog.valid_ids]
         fused_pre_ranks = {

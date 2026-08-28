@@ -42,7 +42,10 @@ class CompassCartAgent:
         else:
             self.dense = load_dense_backend(*dense_paths)
         self.retriever = HybridRetriever(
-            self.catalog, self.dense, rrf_k=self.config.rrf_k
+            self.catalog,
+            self.dense,
+            rrf_k=self.config.rrf_k,
+            dense_rescue_only=self.config.dense_rescue_only,
         )
         self.ranker = ConstraintRanker(
             self.catalog,

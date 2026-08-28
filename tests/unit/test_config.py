@@ -145,6 +145,7 @@ def test_rank_calibration_neutral_values_and_agent_wiring_are_neutral(
         rank_consensus_bonus=0.0,
         rank_boundary_bonus=0.0,
         adaptive_browsing_mmr=False,
+        dense_rescue_only=True,
     )
     agent = CompassCartAgent(fixture_catalog_path, config=config)
 
@@ -153,11 +154,13 @@ def test_rank_calibration_neutral_values_and_agent_wiring_are_neutral(
     assert config.rank_boundary_bonus == 0.0
     assert config.rank_fusion_weight == 0.10
     assert config.adaptive_browsing_mmr is False
+    assert config.dense_rescue_only is True
     assert agent.ranker.fusion_weight == 0.10
     assert agent.ranker.attribute_weight == 0.0
     assert agent.ranker.consensus_bonus == 0.0
     assert agent.ranker.boundary_bonus == 0.0
     assert agent.ranker.adaptive_browsing_mmr is False
+    assert agent.retriever.dense_rescue_only is True
 
 
 @pytest.mark.parametrize(
@@ -206,6 +209,12 @@ def test_rank_calibration_rejects_invalid_numeric_values(field, value):
 def test_adaptive_browsing_mmr_requires_a_real_bool(value):
     with pytest.raises(TypeError, match="adaptive_browsing_mmr"):
         RuntimeConfig(adaptive_browsing_mmr=value)
+
+
+@pytest.mark.parametrize("value", (0, 1, "true", None))
+def test_dense_rescue_only_requires_a_real_bool(value):
+    with pytest.raises(TypeError, match="dense_rescue_only"):
+        RuntimeConfig(dense_rescue_only=value)
 
 
 @pytest.mark.parametrize(
