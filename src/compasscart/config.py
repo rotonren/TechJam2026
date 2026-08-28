@@ -30,7 +30,7 @@ class RuntimeConfig:
         ("dense", 0.35),
         ("attribute", 0.30),
     )
-    rank_fusion_weight: float = 0.10
+    rank_fusion_weight: float = 0.25
     rank_attribute_weight: float = 0.0
     rank_consensus_bonus: float = 0.0
     rank_boundary_bonus: float = 0.0
@@ -39,7 +39,7 @@ class RuntimeConfig:
 
     def __post_init__(self) -> None:
         self._validate_choice(
-            "rank_fusion_weight", self.rank_fusion_weight, {0.10, 0.15}
+            "rank_fusion_weight", self.rank_fusion_weight, {0.10, 0.15, 0.25}
         )
         self._validate_choice(
             "rank_attribute_weight", self.rank_attribute_weight, {0.0, 0.05, 0.10}
