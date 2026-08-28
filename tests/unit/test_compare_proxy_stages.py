@@ -9,6 +9,102 @@ from pathlib import Path
 
 import pytest
 
+_RESOURCE_BASELINE_PATH: Path | None = None
+
+
+def _resource_trial() -> dict[str, object]:
+    from tools import benchmark_release as bench
+
+    latencies = [100.0] * 800
+    trace_latencies = [99.0] * 800
+    return {
+        "init_ms": 100.0,
+        "peak_mib": 100.0,
+        "rss_mib": 80.0,
+        "peak_metric_source": "windows_peak_wset",
+        "latencies_ms": latencies,
+        "trace_latencies_ms": trace_latencies,
+        "instrumentation_delta_ms": bench._latency_summary(
+            [
+                wall - trace
+                for wall, trace in zip(latencies, trace_latencies, strict=True)
+            ]
+        ),
+        "dense_available": True,
+        "dense_status": "available",
+        "fallback_count": 0,
+        "runtime_hash": "a" * 64,
+        "config_hash": "b" * 64,
+        "response_hash": "c" * 64,
+        "transcript_hash": "d" * 64,
+        "catalog_hash": "e" * 64,
+        "catalog_snapshot_hash": "e" * 64,
+        "capture_provenance": {
+            "manifest_hash": "f" * 64,
+            "proxy_manifest_hash": "1" * 64,
+            "representative_dataset_hash": "2" * 64,
+            "agent_class": "test:Agent",
+            "config_hash": "b" * 64,
+            "capture_seed": 20260829,
+            "session_count": 200,
+            "response_count": 800,
+            "cwd_mode": "root",
+            "dense_available": True,
+            "dense_status": "available",
+            "platform": {"python": "test", "platform": "test"},
+        },
+        "response_count": 800,
+        "platform": {
+            "os": "Windows",
+            "python": "3.12",
+            "processor": "x86_64",
+            "onnxruntime": "1.29.0",
+            "psutil": "7.2.2",
+        },
+    }
+
+
+def _resource_baseline() -> dict[str, object]:
+    from tools import benchmark_release as bench
+
+    trial = _resource_trial()
+    report = bench.aggregate_trials([trial])
+    report.update(
+        {
+            "cwd_mode": "outside",
+            "platform": {
+                "os": "Windows",
+                "python": "3.12",
+                "processor": "x86_64",
+                "cpu_logical": 8,
+                "cpu_physical": 4,
+                "ram_mib": 16_384.0,
+                "onnxruntime": "1.29.0",
+                "psutil": "7.2.2",
+            },
+        }
+    )
+    return report
+
+
+@pytest.fixture(autouse=True)
+def isolated_resource_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from tools import compare_proxy_stages
+
+    global _RESOURCE_BASELINE_PATH
+    baseline_path = tmp_path / "benchmark-r0-wall-v2.json"
+    baseline_path.write_text(
+        json.dumps(_resource_baseline()), encoding="utf-8"
+    )
+    _RESOURCE_BASELINE_PATH = baseline_path
+    monkeypatch.setattr(compare_proxy_stages, "_R0_BASELINE", baseline_path)
+    try:
+        yield
+    finally:
+        _RESOURCE_BASELINE_PATH = None
+
 
 def _report(*, suite: str = "representative", runtime: str = "a" * 64, config: str = "b" * 64, all_hits: bool = False, boundary_hits: int = 1) -> dict[str, object]:
     scenarios = ("buying", "browsing", "intent_override", "boundary")
@@ -33,7 +129,8 @@ def _report(*, suite: str = "representative", runtime: str = "a" * 64, config: s
 def _resource_report(runtime: str = "a" * 64, config: str = "b" * 64) -> dict[str, object]:
     from tools import benchmark_release as bench
 
-    baseline_path = Path("var/balanced-hardening/benchmark-r0-wall-v2.json")
+    baseline_path = _RESOURCE_BASELINE_PATH
+    assert baseline_path is not None
     baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
     candidate = deepcopy(bench.validate_baseline_report(baseline))
     for trial in candidate["trials"]:
@@ -46,6 +143,26 @@ def _resource_report(runtime: str = "a" * 64, config: str = "b" * 64) -> dict[st
         "baseline_sha256": hashlib.sha256(baseline_path.read_bytes()).hexdigest(),
     }
     return candidate
+
+
+def _legacy_p0_report(*, suite: str) -> dict[str, object]:
+    from tools import compare_proxy_stages
+
+    report = _report(suite=suite)
+    report.pop("runtime_hash")
+    report.update(
+        {
+            "commit": compare_proxy_stages._P0_LEGACY_COMMIT,
+            "config_hash": compare_proxy_stages._P0_LEGACY_CONFIG_HASH,
+            "manifest_hash": compare_proxy_stages._P0_LEGACY_MANIFEST_HASH,
+            "dataset_hash": (
+                compare_proxy_stages._P0_LEGACY_DEV_DATASET_HASH
+                if suite == "representative"
+                else compare_proxy_stages._P0_LEGACY_STRESS_DATASET_HASH
+            ),
+        }
+    )
+    return report
 
 
 def _rebuild(report: dict[str, object]) -> None:
@@ -172,7 +289,7 @@ def test_complete_requires_matching_dev_stress_and_resource_fingerprints(tmp_pat
 def test_metrics_accepts_real_p0_six_decimal_scenario_aggregates() -> None:
     from tools.compare_proxy_stages import _metrics
 
-    report = json.loads(Path("var/balanced-hardening/proxy-v1/dev-p0.json").read_text(encoding="utf-8"))
+    report = _legacy_p0_report(suite="representative")
 
     assert _metrics(report)["suite"] == "representative"
 
@@ -412,8 +529,8 @@ def test_stage_rejects_arbitrary_legacy_parent_even_with_matching_git_commit() -
 def test_legacy_parent_acceptance_is_limited_to_real_p0_identity_pair() -> None:
     from tools.compare_proxy_stages import _cross_report_lineage_failures, _metrics
 
-    parent_dev = json.loads(Path("var/balanced-hardening/proxy-v1/dev-p0.json").read_text(encoding="utf-8"))
-    parent_stress = json.loads(Path("var/balanced-hardening/proxy-v1/stress-p0.json").read_text(encoding="utf-8"))
+    parent_dev = _legacy_p0_report(suite="representative")
+    parent_stress = _legacy_p0_report(suite="stress")
 
     assert _cross_report_lineage_failures(
         _metrics(parent_dev), _metrics(_report(all_hits=True)),

@@ -709,7 +709,7 @@ def test_restore_failure_retains_symlink_backup_entry_and_reports_its_path(
     retained = list(output.glob(".*.bak"))
     assert len(retained) == 1
     assert retained[0].is_symlink()
-    assert os.readlink(retained[0]) == os.fspath(external)
+    assert os.path.samefile(os.readlink(retained[0]), external)
     assert os.path.abspath(os.fspath(retained[0])) in str(error.value)
     assert external.read_text(encoding="utf-8") == "original"
 
