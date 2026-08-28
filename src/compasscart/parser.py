@@ -358,13 +358,19 @@ class MessageParser:
             covered.append(category_match.span("category"))
 
         # The fixed lexical category list is useful even when a lightweight
-        # parser was constructed without a catalog vocabulary.
-        for match in re.finditer(
-            r"\b(?:" + "|".join(sorted(_KNOWN_CATEGORIES, key=len, reverse=True)) + r")\b",
-            text,
-            re.IGNORECASE,
-        ):
-            covered.append(match.span())
+        # parser was constructed without a catalog vocabulary. A style answer
+        # is the exception: terms such as "sneaker" can describe a look, and
+        # should survive as soft text evidence rather than disappear merely
+        # because they are also category words.
+        if normalize_value(expected_attribute or "") != "style":
+            for match in re.finditer(
+                r"\b(?:"
+                + "|".join(sorted(_KNOWN_CATEGORIES, key=len, reverse=True))
+                + r")\b",
+                text,
+                re.IGNORECASE,
+            ):
+                covered.append(match.span())
 
         residual_chars = [
             character
@@ -538,21 +544,39 @@ class MessageParser:
             return False
         if len(value_terms) == 1 and value_terms[0] in _ALIAS_STOPWORDS:
             return False
-        if normalized in self._fixed_values.get(attribute, set()):
-            return True
-        if attribute == "category" and self._overlaps_any(
-            start, end, root_taxonomy_spans
-        ):
-            return False
-        explicit_cue = attribute == normalize_value(
-            expected_attribute or ""
-        ) or self._has_explicit_alias_cue(
+        expected = normalize_value(expected_attribute or "")
+        fixed_value = normalized in self._fixed_values.get(attribute, set())
+        explicit_cue = attribute == expected or self._has_explicit_alias_cue(
             attribute,
             normalized,
             text,
             start,
             end,
         )
+        # Catalog-derived style labels often come from free-form product text.
+        # During a style clarification they are query evidence, not a safe
+        # structured filter. Returning False lets `_extract_expected` retain
+        # the complete answer as a soft clarification constraint.
+        if expected == "style" and attribute == "style" and not fixed_value:
+            return False
+        # Long catalog descriptions can incidentally contain another product's
+        # category or size vocabulary (for example "dress" or "free"). Keep
+        # fixed semantic values and concise multi-attribute answers, but require
+        # a nearby cue before a dynamic alias escapes the pending slot.
+        if (
+            expected
+            and attribute != expected
+            and not fixed_value
+            and not self._is_concise_clarification(text)
+            and not explicit_cue
+        ):
+            return False
+        if fixed_value:
+            return True
+        if attribute == "category" and self._overlaps_any(
+            start, end, root_taxonomy_spans
+        ):
+            return False
         if attribute in {"brand", "style"}:
             if self._overlaps_any(start, end, category_spans) and not explicit_cue:
                 return False
@@ -649,7 +673,35 @@ class MessageParser:
                     r"\s*[,;:=-]?\s*(?:style|styled|look|design)\b", right
                 )
             )
+        left = text[max(0, start - 32) : start]
+        if attribute == "category":
+            return bool(
+                re.search(
+                    r"\b(?:category|type|kind|looking\s+for|shopping\s+for|"
+                    r"need|want|find|show\s+me)\b[^.!;:]{0,20}$",
+                    left,
+                )
+            )
+        if attribute == "size":
+            return bool(
+                re.search(r"\b(?:size|sized|width)\b[^.!;:]{0,12}$", left)
+                or re.search(r"\bwear(?:\s+an?)?\s*$", left)
+            )
+        if attribute == "feature":
+            return bool(
+                re.search(
+                    r"\b(?:feature|with|must\s+have|prefer)\b[^.!;:]{0,20}$",
+                    left,
+                )
+            )
+        if attribute == "use_case":
+            return bool(re.search(r"\bfor\b[^.!;:]{0,20}$", left))
         return False
+
+    @staticmethod
+    def _is_concise_clarification(text: str) -> bool:
+        cleaned = re.sub(r"^for that,?\s*(?:what matters is:?)?\s*", "", text)
+        return len(terms(cleaned)) <= 4
 
     @staticmethod
     def _phrase_aliases(

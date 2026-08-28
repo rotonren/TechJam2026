@@ -79,6 +79,16 @@ def _parent_report(**overrides: object) -> dict[str, object]:
     return report
 
 
+def _legacy_parent_report(**overrides: object) -> dict[str, object]:
+    report = _parent_report(**overrides)
+    report.pop("runtime_hash")
+    report.pop("config_hash")
+    for trial in report["trials"]:
+        trial.pop("runtime_hash")
+        trial.pop("config_hash")
+    return report
+
+
 def _capture_metadata() -> dict[str, object]:
     return {
         "catalog_hash": "c" * 64, "proxy_manifest_hash": "a" * 64,
@@ -898,7 +908,7 @@ def test_resource_comparison_rejects_fallback_or_dense_unavailability() -> None:
 
 
 def test_legacy_r0_baseline_is_accepted_but_candidate_schema_remains_strict() -> None:
-    baseline = json.loads(Path("var/balanced-hardening/benchmark-r0-wall-v2.json").read_text(encoding="utf-8"))
+    baseline = _legacy_parent_report(latency_ms=438.09)
 
     normalized = bench.validate_baseline_report(baseline)
     assert normalized["latency_ms"]["p95"] == 438.09

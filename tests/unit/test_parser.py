@@ -260,6 +260,66 @@ def test_pending_question_keeps_recognized_color_and_category_together():
     }
 
 
+def test_long_feature_clarification_does_not_leak_catalog_size_alias():
+    parser = MessageParser({"size": ("Free",)})
+
+    result = parser.parse(
+        "For that, what matters is: Wear comfortable or your money back! "
+        "30-day wear test! Free shipping and returns; feel free to contact us.",
+        turn=2,
+        expected_attribute="feature",
+    )
+
+    assert ("feature", "comfortable") in {
+        (item.attribute, item.value) for item in result.constraints
+    }
+    assert ("size", "free") not in {
+        (item.attribute, item.value) for item in result.constraints
+    }
+
+
+def test_long_color_clarification_does_not_leak_catalog_category_alias():
+    parser = MessageParser({"category": ("Dresses",)})
+
+    result = parser.parse(
+        "For that, what matters is: Standard US size. This women's casual "
+        "loose dress is available in a variety of solid colors and prints.",
+        turn=2,
+        expected_attribute="color",
+    )
+
+    assert ("category", "dresses") not in {
+        (item.attribute, item.value) for item in result.constraints
+    }
+
+
+def test_catalog_style_clarification_remains_soft_text_evidence():
+    parser = MessageParser({"style": ("Embroidery",)})
+
+    result = parser.parse(
+        "For that, what matters is: a loose fit with beautiful embroidery.",
+        turn=2,
+        expected_attribute="style",
+    )
+
+    assert [
+        (item.attribute, item.is_hard, item.confidence)
+        for item in result.constraints
+    ] == [("style", False, 0.6)]
+
+
+def test_explicit_cross_attribute_catalog_alias_survives_clarification():
+    parser = MessageParser({"category": ("Dresses",)})
+
+    result = parser.parse(
+        "For category, I need dresses.", turn=2, expected_attribute="color"
+    )
+
+    assert ("category", "dresses", True) in {
+        (item.attribute, item.value, item.is_hard) for item in result.constraints
+    }
+
+
 def test_catalog_vocabulary_keeps_or_grouping_separate_from_other_attributes():
     parser = MessageParser({"category": ("Shoes",)})
 
@@ -389,7 +449,7 @@ def test_explicit_style_and_brand_cues_survive_category_span_protection():
     }
 
 
-def test_pending_attribute_is_an_explicit_cue_for_dynamic_catalog_aliases():
+def test_pending_attribute_hardens_dynamic_brand_but_keeps_style_soft():
     parser = MessageParser(
         {"brand": ("Acme Fashion",), "style": ("Sneaker",)}
     )
@@ -402,7 +462,7 @@ def test_pending_attribute_is_an_explicit_cue_for_dynamic_catalog_aliases():
         for item in (*brand.constraints, *style.constraints)
     ] == [
         ("brand", "acme fashion", 1.0, True, "clarification"),
-        ("style", "sneaker", 1.0, True, "clarification"),
+        ("style", "sneaker", 0.6, False, "clarification"),
     ]
 
 

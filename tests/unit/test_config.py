@@ -145,6 +145,7 @@ def test_rank_calibration_neutral_values_and_agent_wiring_are_neutral(
         rank_consensus_bonus=0.0,
         rank_boundary_bonus=0.0,
         adaptive_browsing_mmr=False,
+        dense_rescue_only=True,
     )
     agent = CompassCartAgent(fixture_catalog_path, config=config)
 
@@ -153,11 +154,13 @@ def test_rank_calibration_neutral_values_and_agent_wiring_are_neutral(
     assert config.rank_boundary_bonus == 0.0
     assert config.rank_fusion_weight == 0.10
     assert config.adaptive_browsing_mmr is False
+    assert config.dense_rescue_only is True
     assert agent.ranker.fusion_weight == 0.10
     assert agent.ranker.attribute_weight == 0.0
     assert agent.ranker.consensus_bonus == 0.0
     assert agent.ranker.boundary_bonus == 0.0
     assert agent.ranker.adaptive_browsing_mmr is False
+    assert agent.retriever.dense_rescue_only is True
 
 
 @pytest.mark.parametrize(
@@ -166,7 +169,7 @@ def test_rank_calibration_neutral_values_and_agent_wiring_are_neutral(
         ("rank_attribute_weight", (0.0, 0.05, 0.10)),
         ("rank_consensus_bonus", (0.0, 0.025, 0.05)),
         ("rank_boundary_bonus", (0.0, 0.025)),
-        ("rank_fusion_weight", (0.10, 0.15)),
+        ("rank_fusion_weight", (0.10, 0.15, 0.25)),
     ),
 )
 def test_rank_calibration_accepts_only_predeclared_numeric_values(field, values):
@@ -208,6 +211,12 @@ def test_adaptive_browsing_mmr_requires_a_real_bool(value):
         RuntimeConfig(adaptive_browsing_mmr=value)
 
 
+@pytest.mark.parametrize("value", (0, 1, "true", None))
+def test_dense_rescue_only_requires_a_real_bool(value):
+    with pytest.raises(TypeError, match="dense_rescue_only"):
+        RuntimeConfig(dense_rescue_only=value)
+
+
 @pytest.mark.parametrize(
     "value", (True, 0.0, 1.0, -0.85, float("nan"), float("inf"))
 )
@@ -217,7 +226,7 @@ def test_runtime_config_keeps_mmr_lambda_fixed_at_point_85(value):
 
 
 def test_rank_source_budget_is_exact_for_every_allowed_combination():
-    for fusion_weight in (0.10, 0.15):
+    for fusion_weight in (0.10, 0.15, 0.25):
         for attribute_weight in (0.0, 0.05, 0.10):
             config = RuntimeConfig(
                 rank_fusion_weight=fusion_weight,

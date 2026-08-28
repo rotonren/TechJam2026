@@ -30,16 +30,17 @@ class RuntimeConfig:
         ("dense", 0.35),
         ("attribute", 0.30),
     )
-    rank_fusion_weight: float = 0.10
+    rank_fusion_weight: float = 0.25
     rank_attribute_weight: float = 0.0
     rank_consensus_bonus: float = 0.0
     rank_boundary_bonus: float = 0.0
     mmr_lambda: float = 0.85
     adaptive_browsing_mmr: bool = False
+    dense_rescue_only: bool = True
 
     def __post_init__(self) -> None:
         self._validate_choice(
-            "rank_fusion_weight", self.rank_fusion_weight, {0.10, 0.15}
+            "rank_fusion_weight", self.rank_fusion_weight, {0.10, 0.15, 0.25}
         )
         self._validate_choice(
             "rank_attribute_weight", self.rank_attribute_weight, {0.0, 0.05, 0.10}
@@ -53,6 +54,8 @@ class RuntimeConfig:
         self._validate_choice("mmr_lambda", self.mmr_lambda, {0.85})
         if not isinstance(self.adaptive_browsing_mmr, bool):
             raise TypeError("adaptive_browsing_mmr must be a bool")
+        if not isinstance(self.dense_rescue_only, bool):
+            raise TypeError("dense_rescue_only must be a bool")
         if self.rank_fusion_weight + self.rank_attribute_weight > 0.40:
             raise ValueError(
                 "rank_fusion_weight + rank_attribute_weight must not exceed 0.40"

@@ -407,6 +407,98 @@ def test_retrieval_records_positive_weight_deduplicated_source_ranks_and_pre_ran
     assert [item.pre_rank for item in candidates[:2]] == [1, 2]
 
 
+def test_dense_rescue_skips_dense_when_positive_non_dense_evidence_exists(
+    fixture_catalog_path, monkeypatch
+):
+    class DenseMustNotRun:
+        available = True
+
+        def search(self, _text, _limit):
+            raise AssertionError("dense must not run when lexical evidence exists")
+
+    index = CatalogIndex(fixture_catalog_path)
+    retriever = HybridRetriever(index, DenseMustNotRun(), dense_rescue_only=True)
+    monkeypatch.setattr(
+        index,
+        "search_lexical",
+        lambda _plan, *, limit: [Candidate("DRESS1")],
+    )
+    plan = RetrievalPlan(
+        route="browsing",
+        query_text="dress",
+        source_weights=(("lexical", 0.30), ("dense", 0.45)),
+        candidate_limit=4,
+    )
+
+    candidates = retriever.retrieve(plan)
+
+    assert candidates[0].parent_asin == "DRESS1"
+    assert candidates[0].source_ranks == {"lexical": 1}
+
+
+def test_dense_rescue_runs_dense_when_all_positive_non_dense_sources_are_empty(
+    fixture_catalog_path, monkeypatch
+):
+    calls = 0
+
+    class DenseRescue:
+        available = True
+
+        def search(self, _text, _limit):
+            nonlocal calls
+            calls += 1
+            return [Candidate("SHOE1")]
+
+    index = CatalogIndex(fixture_catalog_path)
+    retriever = HybridRetriever(index, DenseRescue(), dense_rescue_only=True)
+    monkeypatch.setattr(index, "search_lexical", lambda _plan, *, limit: [])
+    plan = RetrievalPlan(
+        route="browsing",
+        query_text="unseen semantic phrase",
+        source_weights=(("lexical", 0.30), ("dense", 0.45)),
+        candidate_limit=4,
+    )
+
+    candidates = retriever.retrieve(plan)
+
+    assert calls == 1
+    assert candidates[0].parent_asin == "SHOE1"
+    assert candidates[0].source_ranks == {"dense": 1}
+
+
+def test_dense_rescue_ignores_zero_weight_non_dense_evidence(
+    fixture_catalog_path, monkeypatch
+):
+    calls = 0
+
+    class DenseRescue:
+        available = True
+
+        def search(self, _text, _limit):
+            nonlocal calls
+            calls += 1
+            return [Candidate("SHOE1")]
+
+    index = CatalogIndex(fixture_catalog_path)
+    retriever = HybridRetriever(index, DenseRescue(), dense_rescue_only=True)
+    monkeypatch.setattr(
+        index,
+        "search_lexical",
+        lambda _plan, *, limit: [Candidate("DRESS1")],
+    )
+    plan = RetrievalPlan(
+        route="browsing",
+        query_text="semantic phrase",
+        source_weights=(("lexical", 0.0), ("dense", 1.0)),
+        candidate_limit=4,
+    )
+
+    candidates = retriever.retrieve(plan)
+
+    assert calls == 1
+    assert candidates[0].parent_asin == "SHOE1"
+
+
 def test_retrieval_keeps_zero_weight_rrf_behavior_without_recording_evidence(
     fixture_catalog_path, monkeypatch
 ):
