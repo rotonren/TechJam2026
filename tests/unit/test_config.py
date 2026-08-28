@@ -169,7 +169,7 @@ def test_rank_calibration_neutral_values_and_agent_wiring_are_neutral(
         ("rank_attribute_weight", (0.0, 0.05, 0.10)),
         ("rank_consensus_bonus", (0.0, 0.025, 0.05)),
         ("rank_boundary_bonus", (0.0, 0.025)),
-        ("rank_fusion_weight", (0.10, 0.15)),
+        ("rank_fusion_weight", (0.10, 0.15, 0.25)),
     ),
 )
 def test_rank_calibration_accepts_only_predeclared_numeric_values(field, values):
@@ -226,7 +226,7 @@ def test_runtime_config_keeps_mmr_lambda_fixed_at_point_85(value):
 
 
 def test_rank_source_budget_is_exact_for_every_allowed_combination():
-    for fusion_weight in (0.10, 0.15):
+    for fusion_weight in (0.10, 0.15, 0.25):
         for attribute_weight in (0.0, 0.05, 0.10):
             config = RuntimeConfig(
                 rank_fusion_weight=fusion_weight,

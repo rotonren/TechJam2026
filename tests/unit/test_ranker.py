@@ -248,6 +248,14 @@ def test_ranker_rejects_out_of_range_fusion_weight(
         ConstraintRanker(index, fusion_weight=fusion_weight)
 
 
+def test_ranker_accepts_team_calibrated_fusion_weight(fixture_catalog_path):
+    index = CatalogIndex(fixture_catalog_path)
+
+    ranker = ConstraintRanker(index, fusion_weight=0.25)
+
+    assert ranker.fusion_weight == 0.25
+
+
 @pytest.mark.parametrize(
     ("argument", "value"),
     (
