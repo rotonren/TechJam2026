@@ -59,16 +59,27 @@ class CompassCartAgent:
             mmr_lambda=self.config.mmr_lambda,
             adaptive_browsing_mmr=self.config.adaptive_browsing_mmr,
         )
-        self.reranker = RerankStage(
-            load_rerank_backend(
+        rerank_assets = self.config.resolve_rerank_asset_dir(SUBMISSION_ROOT)
+
+        def rerank_backend(name: str):
+            return load_rerank_backend(
                 enabled=self.config.rerank_enabled,
-                backend=self.config.rerank_backend,
-                asset_dir=self.config.resolve_rerank_asset_dir(SUBMISSION_ROOT),
+                backend=name,
+                asset_dir=rerank_assets,
                 max_length=self.config.rerank_max_length,
-            ),
+            )
+
+        browsing_backend = rerank_backend(self.config.rerank_backend)
+        self.reranker = RerankStage(
+            browsing_backend,
             window=self.config.rerank_window,
             weight=self.config.rerank_weight,
             buying_weight=self.config.rerank_buying_weight,
+            buying_backend=(
+                rerank_backend(self.config.rerank_buying_backend)
+                if self.config.rerank_buying_backend
+                else browsing_backend
+            ),
         )
         self.memory = PolicyMemory(enabled=self.config.evolution_enabled)
         self.strategy = StrategySelector(enabled=self.config.strategy_enabled)
@@ -109,6 +120,7 @@ class CompassCartAgent:
         deadline = started + max(self.config.component_timeout_ms, 0) / 1_000.0
         fallbacks: list[str] = []
         budget_skips: list[str] = []
+        usage: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0}
         old_version = state.intent_version
         expected_attribute = state.pending_attribute
         previous_recommendations = set(state.previous_recommendations)
@@ -176,7 +188,11 @@ class CompassCartAgent:
 
         try:
             ranked = self.reranker.apply(
-                ranked, state, deadline=deadline, diagnostics=budget_skips
+                ranked,
+                state,
+                deadline=deadline,
+                diagnostics=budget_skips,
+                usage=usage,
             )
         except Exception:  # noqa: BLE001 - keep the constraint ranker's order.
             fallbacks.append("reranker")
@@ -208,7 +224,7 @@ class CompassCartAgent:
         ]
 
         response = self.response_builder.build(
-            ranked, question, top_k=top_k, excluded_ids=excluded_ids
+            ranked, question, top_k=top_k, excluded_ids=excluded_ids, usage=usage
         )
         # A continuation marker belongs only to this turn.  Clearing it after
         # response construction prevents a later refinement from inheriting the
@@ -241,9 +257,12 @@ class CompassCartAgent:
                 ),
                 "ask_attribute": question.ask_attribute,
                 "dense_status": dense_status,
-                "rerank_status": getattr(self.reranker.backend, "status", "unknown"),
+                "rerank_status": getattr(
+                    self.reranker.backend_for(state), "status", "unknown"
+                ),
                 "strategy": strategy.name,
                 "strategy_reason": strategy.reason,
+                "usage": dict(usage),
                 "stall_count": state.stall_count,
                 "unproductive_attributes": sorted(state.unproductive_attributes),
                 "fallbacks": fallbacks,

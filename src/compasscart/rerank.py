@@ -300,6 +300,168 @@ class CrossEncoderBackend:
             return [0.0] * len(candidates)
 
 
+_LLM_SYSTEM_PROMPT = (
+    "You rank shopping candidates against a customer's stated requirements. "
+    'Reply with JSON only, in the form {"ranking": [...]}. '
+    "The list must contain EVERY candidate index exactly once, ordered most to "
+    "least relevant. Never omit an index, even if it matches poorly."
+)
+
+
+class LlmRerankBackend:
+    """Rank the window with a hosted model over an OpenAI-compatible endpoint.
+
+    This is the one component that can leave the machine, so it is built to be
+    removable: credentials come from the environment and are never read from
+    the repository, the call uses only the standard library, and any failure -
+    no credentials, a timeout, a refused request, an unparseable reply, a reply
+    that is not a permutation of the window - marks the backend unavailable so
+    the stage falls back to the lexical backend rather than degrading the turn.
+
+    `submission_rules.md` warns that official scoring may run without network
+    access, and forbids shipping credentials. The offline path is therefore the
+    one that must always work; this is an upgrade over it, never a requirement.
+    """
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        api_key: str,
+        model: str,
+        timeout_s: float = 8.0,
+        document_chars: int = 220,
+        query_tokens: int = 48,
+        failure_limit: int = 3,
+        cache_size: int = 2048,
+    ) -> None:
+        if not base_url or not api_key or not model:
+            raise ValueError("base_url, api_key and model are all required")
+        if timeout_s <= 0:
+            raise ValueError("timeout_s must be positive")
+        self._url = base_url.rstrip("/") + "/chat/completions"
+        self._api_key = api_key
+        self.model = model
+        self.timeout_s = timeout_s
+        self.document_chars = document_chars
+        self.query_tokens = query_tokens
+        self._failure_limit = failure_limit
+        self._failures = 0
+        self._available = True
+        self.status = "llm"
+        self.last_usage: dict[str, int] = {}
+        self._cache: OrderedDict[tuple[str, tuple[str, ...]], list[float]] = (
+            OrderedDict()
+        )
+        self._cache_size = cache_size
+
+    @property
+    def available(self) -> bool:
+        return self._available
+
+    def scores(
+        self, evidence: Evidence, candidates: Sequence[Candidate]
+    ) -> list[float]:
+        self.last_usage = {}
+        if not self._available or not evidence or not candidates:
+            return [0.0] * len(candidates)
+        query = evidence_query(evidence, self.query_tokens)
+        if not query:
+            return [0.0] * len(candidates)
+
+        key = (query, tuple(item.parent_asin for item in candidates))
+        cached = self._cache.get(key)
+        if cached is not None:
+            self._cache.move_to_end(key)
+            return list(cached)
+
+        try:
+            ranking, usage = self._request(query, candidates)
+        except Exception:  # noqa: BLE001 - the offline backend is the guarantee.
+            self._failures += 1
+            if self._failures >= self._failure_limit:
+                self._available = False
+                self.status = "llm_unavailable"
+            return [0.0] * len(candidates)
+
+        self.last_usage = usage
+        # Highest score first, matching the order the model returned.
+        count = len(candidates)
+        scores = [0.0] * count
+        for position, index in enumerate(ranking):
+            scores[index] = float(count - position)
+        self._cache[key] = list(scores)
+        self._cache.move_to_end(key)
+        while len(self._cache) > self._cache_size:
+            self._cache.popitem(last=False)
+        return scores
+
+    def _request(
+        self, query: str, candidates: Sequence[Candidate]
+    ) -> tuple[list[int], dict[str, int]]:
+        import json
+        import urllib.request
+
+        listing = "\n".join(
+            f"{index}. {compact_document(item.product, self.document_chars)}"
+            for index, item in enumerate(candidates)
+        )
+        body = json.dumps(
+            {
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": _LLM_SYSTEM_PROMPT},
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Requirements: {query}\n\n"
+                            f"Candidates ({len(candidates)} total):\n{listing}"
+                        ),
+                    },
+                ],
+                "response_format": {"type": "json_object"},
+                # Zero temperature keeps a replayed session on the same path.
+                "temperature": 0,
+                "max_tokens": 16 * len(candidates) + 64,
+            }
+        ).encode("utf-8")
+        request = urllib.request.Request(
+            self._url,
+            data=body,
+            headers={
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=self.timeout_s) as response:
+            payload = json.loads(response.read())
+        content = payload["choices"][0]["message"]["content"]
+        ranking = json.loads(content)["ranking"]
+        if sorted(ranking) != list(range(len(candidates))):
+            # A partial or duplicated ranking would silently drop candidates.
+            raise ValueError("model did not return a permutation of the window")
+        reported = payload.get("usage") or {}
+        usage = {
+            field: int(reported[field])
+            for field in ("prompt_tokens", "completion_tokens")
+            if isinstance(reported.get(field), int)
+        }
+        return [int(index) for index in ranking], usage
+
+
+def load_llm_backend() -> RerankBackend:
+    """Build the hosted backend from the environment, or report why not."""
+    base_url = os.environ.get("COMPASSCART_LLM_BASE_URL", "").strip()
+    api_key = os.environ.get("COMPASSCART_LLM_API_KEY", "").strip()
+    model = os.environ.get("COMPASSCART_LLM_MODEL", "").strip()
+    if not base_url or not api_key or not model:
+        return NullRerankBackend("llm_credentials_missing")
+    try:
+        return LlmRerankBackend(base_url=base_url, api_key=api_key, model=model)
+    except Exception:  # noqa: BLE001 - optional by construction.
+        return NullRerankBackend("llm_construction_failed")
+
+
 def session_evidence(state: SessionState) -> Evidence:
     """Collect the phrases the shopper has actually stated.
 
@@ -368,6 +530,11 @@ def load_rerank_backend(
     if not enabled:
         return NullRerankBackend("disabled_by_config")
     try:
+        if backend == "llm":
+            loaded = load_llm_backend()
+            # No credentials in the scoring environment is the expected case,
+            # not an error; the lexical backend is what must always work.
+            return loaded if loaded.available else PhraseMatchBackend()
         if backend == "cross_encoder":
             if asset_dir is None:
                 return NullRerankBackend("assets_missing")
@@ -391,6 +558,7 @@ class RerankStage:
         window: int = 50,
         weight: float = 0.6,
         buying_weight: float | None = None,
+        buying_backend: RerankBackend | None = None,
     ) -> None:
         if window < 2:
             raise ValueError("window must be at least 2")
@@ -408,13 +576,24 @@ class RerankStage:
         # against `-0.025` Buying, which is what this separate weight exists
         # to stop paying for.
         self.buying_weight = weight if buying_weight is None else buying_weight
+        # Buying and Browsing can use different rerankers: phrase adjacency
+        # suits verbatim quotation, and a model suits judging whether a hard
+        # requirement is actually satisfied.
+        self.buying_backend = buying_backend or self.backend
+
+    def backend_for(self, state: SessionState) -> RerankBackend:
+        return self.buying_backend if state.route == "buying" else self.backend
 
     @property
     def available(self) -> bool:
-        return (
-            bool(getattr(self.backend, "available", False))
-            and max(self.weight, self.buying_weight) > 0.0
+        browsing_ready = (
+            bool(getattr(self.backend, "available", False)) and self.weight > 0.0
         )
+        buying_ready = (
+            bool(getattr(self.buying_backend, "available", False))
+            and self.buying_weight > 0.0
+        )
+        return browsing_ready or buying_ready
 
     def weight_for(self, state: SessionState) -> float:
         return self.buying_weight if state.route == "buying" else self.weight
@@ -426,11 +605,13 @@ class RerankStage:
         *,
         deadline: float | None = None,
         diagnostics: list[str] | None = None,
+        usage: dict[str, int] | None = None,
     ) -> list[Candidate]:
         if not self.available or len(candidates) < 2:
             return candidates
         weight = self.weight_for(state)
-        if weight <= 0.0:
+        backend = self.backend_for(state)
+        if weight <= 0.0 or not getattr(backend, "available", False):
             return candidates
         if deadline is not None and time.perf_counter() >= deadline:
             if diagnostics is not None and "rerank_budget" not in diagnostics:
@@ -442,7 +623,13 @@ class RerankStage:
 
         head = candidates[: self.window]
         tail = candidates[self.window :]
-        scores = self.backend.scores(evidence, head)
+        scores = backend.scores(evidence, head)
+        if usage is not None:
+            # A backend that calls a model reports what the turn cost; the
+            # offline backends report nothing and leave the totals at zero.
+            for field, value in getattr(backend, "last_usage", {}).items():
+                if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                    usage[field] = usage.get(field, 0) + value
         if len(scores) != len(head):
             raise ValueError("rerank backend returned a mismatched score count")
 

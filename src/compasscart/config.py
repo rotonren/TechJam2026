@@ -44,6 +44,7 @@ class RuntimeConfig:
     # Buying, where explicit hard constraints already inform the ranker.
     rerank_buying_weight: float = 0.0
     rerank_backend: str = "phrase"
+    rerank_buying_backend: str | None = None
     evolution_enabled: bool = True
     strategy_enabled: bool = True
     rerank_max_length: int = 128
@@ -87,9 +88,15 @@ class RuntimeConfig:
             self.rerank_buying_weight,
             {0.0, 0.3, 0.45, 0.6, 0.8, 1.0},
         )
-        if self.rerank_backend not in {"phrase", "cross_encoder"}:
+        allowed_backends = {"phrase", "cross_encoder", "llm"}
+        if self.rerank_backend not in allowed_backends:
+            raise ValueError(f"rerank_backend must be one of {sorted(allowed_backends)}")
+        if (
+            self.rerank_buying_backend is not None
+            and self.rerank_buying_backend not in allowed_backends
+        ):
             raise ValueError(
-                'rerank_backend must be "phrase" or "cross_encoder"'
+                f"rerank_buying_backend must be one of {sorted(allowed_backends)}"
             )
         if isinstance(self.rerank_max_length, bool) or not isinstance(
             self.rerank_max_length, int
