@@ -17,14 +17,18 @@ unavailable.
    combines exact candidates with weighted reciprocal-rank fusion.
 4. `ConstraintRanker` keeps exact candidates ahead of explicitly marked
    relaxed alternatives, then diversifies the final ten products.
-5. `QuestionPolicy` estimates conversion gain for answerable attributes.
-6. `ResponseBuilder` emits unique catalog-valid IDs and zero token usage.
+5. `RerankStage` rescores the head of that list for phrase adjacency — the one
+   signal term-level scoring cannot express — and blends it with each
+   candidate's existing rank position. It runs on the Browsing route only.
+6. `QuestionPolicy` estimates conversion gain for answerable attributes.
+7. `ResponseBuilder` emits unique catalog-valid IDs and zero token usage.
 
 ## Judging Map
 
 | Judging concern | Evidence |
 | --- | --- |
 | Retrieval quality | Field-weighted FTS5, structured attributes, local semantic embeddings, weighted RRF |
+| Ranking quality | Phrase-adjacency rerank of the list head, applied per route because the same stage measured `+0.038` Browsing HitRate and `-0.025` Buying |
 | Multi-turn reasoning | Versioned constraint ledger, pending-question tracking, bounded raw query history |
 | Intent Override | Goal-level overrides clear obsolete text/questions; attribute-level corrections replace only the named slot |
 | Browsing utility | Profile-aware broad recall and conversion-gain clarification |

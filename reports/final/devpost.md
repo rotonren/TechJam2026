@@ -12,8 +12,9 @@ useful questions, and recover immediately when intent changes.
 CompassCart turns each conversation into a bounded, versioned constraint ledger.
 It routes precise purchases, broad browsing, and intent overrides differently;
 fuses lexical, attribute, profile, and local semantic retrieval; reranks against
-hard constraints; and asks only answerable questions with positive expected
-conversion gain. Every response is sanitized to ten unique catalog-valid IDs.
+hard constraints and then for phrase adjacency where that helps; and asks only
+answerable questions with positive expected conversion gain. Every response is
+sanitized to ten unique catalog-valid IDs.
 
 ## How We Built It
 
@@ -35,6 +36,10 @@ so "Actually, I need leather" cannot accidentally become a category answer.
 - Real override semantics: obsolete constraints and free text are superseded,
   not merely down-weighted.
 - Conversion-aware questions: the agent values the next turn, not question count.
+- Reranking that knows when to stay out of the way: the same stage is worth
+  `+0.038` HitRate on Browsing and `-0.025` on Buying, where hard constraints
+  already make the ranker well informed, so it runs on one route and not the
+  other.
 - Layered failure containment: advanced components can fail without invalidating
   the Agent contract.
 - Auditable evaluation: four development folds select one tagged candidate;
@@ -42,23 +47,26 @@ so "Actually, I need leather" cannot accidentally become a category answer.
 
 ## Results
 
-On the unchanged 200-session official public evaluator, the `compasscart-v2`
-candidate achieved:
+On the unchanged 200-session official public evaluator:
 
 | Metric | Starter | CompassCart |
 | --- | ---: | ---: |
-| TechnicalScore | 0.106710 | 0.518309 |
-| HitRate@10 | 0.125 | 0.625 |
-| MRR | 0.068034 | 0.321365 |
-| MTTC | 9.81 | 5.53 |
+| TechnicalScore | 0.106710 | **0.783514** |
+| HitRate@10 | 0.125 | 0.9450 |
+| MRR | 0.068034 | 0.528714 |
+| MTTC | 9.81 | 3.380 |
 
-Development folds 1-4 averaged `0.519195 +/- 0.036878` (selection score
-`0.500756`), with fold scores `0.479726`, `0.568101`, `0.541363`, and
-`0.487589`. The tagged candidate's once-only sealed fold 5 scored `0.514768`
-with zero runtime fallback and P95 latency `370.616 ms`. The final public
-metrics are recorded in `final-results.json`. Estimated API cost for the
-800-session private set is USD 0.00. Scenario HitRate@10 was `0.60` Boundary,
-`0.65` Browsing, `0.625` Buying, and `0.566667` Intent Override.
+Scenario HitRate@10 is `0.9000` Boundary, `0.9500` Browsing, `0.9375` Buying,
+and `0.9667` Intent Override. Initialization is `19.6 s` and a 200-session run
+takes `89.9 s`. Reported token usage is zero, so the estimated API cost for the
+800-session private set is USD 0.00. The automated suite passes 965 tests.
+
+Two ideas were measured and thrown away rather than shipped. Weighting the
+rerank by window-local inverse document frequency cost `-0.011`, because the
+rerank window is selected by the query and so a local statistic penalizes the
+shopper's own terms. A quantized MS MARCO cross-encoder cost `-0.007`: it
+produced the best MRR we measured and the worst HitRate, and HitRate carries
+the larger weight. Both are written up in `reports/final/rerank-results.md`.
 
 ## Challenges
 

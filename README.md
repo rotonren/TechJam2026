@@ -82,34 +82,47 @@ ledger and resets obsolete evidence on intent override. `RoutePlanner` selects
 Buying, Browsing, or Override weights; `HybridRetriever` fuses lexical,
 attribute, profile, and ONNX dense candidates with weighted reciprocal-rank
 fusion. `ConstraintRanker` applies hard constraints and final-list diversity.
+`RerankStage` then rescores the head of that list for phrase adjacency, which
+term-level scoring cannot see, and applies it on the Browsing route only.
 `QuestionPolicy` asks only when expected conversion gain is positive.
 `ResponseBuilder` deduplicates and validates all identifiers.
 
-Additional rationale is in `reports/final/architecture.md`.
+Additional rationale is in `reports/final/architecture.md`; the rerank
+experiments, including the two that were measured and rejected, are in
+`reports/final/rerank-results.md`.
 
 ## Measured Results
 
 All measurements use the unchanged official evaluator and frozen public data.
-The starter baseline scored `0.106710`. The final stable runtime candidate is
-commit `c0d444fa`. Its official 200-sample public evaluation scored `0.660411`
-(HitRate@10 `0.84`, MRR `0.376036`, MTTC `4.62`, efficiency `0.638`). Scenario
-HitRate@10 was `0.90` Boundary, `0.85` Browsing, `0.8625` Buying, and `0.733333`
-Intent Override. The result exactly matches the previous stable measurement at
-`b641ff97`, so the final hardening delta is `0.000000`.
+The starter baseline scored `0.106710`. The current runtime scores `0.783514`
+on the official 200-sample public evaluation (HitRate@10 `0.9450`, MRR
+`0.528714`, MTTC `3.380`, efficiency `0.7620`), measured twice with identical
+results. Scenario HitRate@10 is `0.9000` Boundary, `0.9500` Browsing, `0.9375`
+Buying, and `0.9667` Intent Override.
 
-The one sealed audit scored `0.500563` on 394 representative samples with zero
-fallback and zero invalid responses. The final three-trial resource benchmark
-also passed with Dense available and zero fallback: P95 was `183.692 ms`,
-maximum latency was `529.531 ms`, initialization was `13219.807 ms`, and peak
-working set was `557.008 MiB`. P95 improved `58.070%` against the compatible R0
-benchmark. S1 through S4 were rejected by their development gates and reverted;
-S5 was deferred for accelerated stable delivery. Full aggregate evidence is in
-`reports/final/final-results.json` and
-`reports/final/score-results-c0d444fa-2026-08-27.json`.
+| Stage | TechnicalScore | Change |
+| --- | ---: | ---: |
+| Team result before this round | 0.761209 | — |
+| Phrase rerank, one weight for every route | 0.771831 | +0.010622 |
+| Phrase rerank, Browsing route only | 0.783514 | +0.022305 |
 
-The full automated suite passed 891 tests with 7 skipped. All 9 frozen-input
-checks and all 51 delivery-contract checks passed, and Ruff lint passed. macOS
-verification is pending.
+Initialization is `19580.5 ms`, down from roughly `132 s`, because catalog
+layer discovery is now opt-in; see `docs/attribute_schema.md`. Two rerank
+variants were measured and rejected rather than kept: window-local IDF
+weighting at `-0.011`, and an ONNX cross-encoder backend at `-0.007`. Both,
+with their per-scenario numbers, are recorded in
+`reports/final/rerank-results.md`.
+
+The full automated suite passes 965 tests with 7 skipped, and Ruff lint passes
+across `src`, `tests`, and `tools`.
+
+Earlier stable evidence remains in `reports/final/final-results.json` and
+`reports/final/score-results-c0d444fa-2026-08-27.json`, recorded at commit
+`c0d444fa` when the public score was `0.660411`. The sealed audit fold, the
+three-trial resource benchmark, and the frozen-input and delivery-contract
+checks in those files were not re-run for the current runtime; only the public
+evaluation, the automated suite, and the initialization measurement above were.
+macOS and Linux verification are pending.
 
 The agent reports zero prompt and completion tokens. Official runtime API cost
 is USD 0.00 per session and USD 0.00 for the full 800-session private set.
@@ -118,8 +131,14 @@ a one-time CPU process.
 
 ## Limitations
 
-- Intent Override remains the least stable scenario because terse replacement
-  messages may expose only one attribute.
+- Boundary is now the weakest scenario at `0.9000` HitRate@10, on only ten
+  public sessions, so its measurement is noisy.
+- The rerank stage is disabled on the Buying route, which is where its phrase
+  evidence measured net harmful. Intent Override sessions route as Buying, so
+  they do not benefit from it either.
+- Override payload extraction recognizes a family of replacement lead-ins and
+  otherwise falls back to the message's final sentence. A paraphrase that
+  states the new requirement somewhere else would still be missed.
 - Dense quality depends on text metadata; images are intentionally out of scope.
 - First initialization loads the catalog and ONNX assets, so cold-start memory
   and latency are higher than steady-state response latency. A full-catalog
