@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Collection, Iterable
+from collections.abc import Collection, Iterable, Mapping
 
 from .attribute_schema import ALLOWED_ASK_ATTRIBUTES
 from .models import Candidate, QuestionDecision
@@ -34,6 +34,7 @@ class ResponseBuilder:
         relaxed: bool | None = None,
         relaxed_constraints: Iterable[str] = (),
         excluded_ids: Collection[str] = (),
+        usage: Mapping[str, object] | None = None,
     ) -> dict[str, object]:
         limit = min(max(int(top_k), 0), 10)
         identifiers: list[str] = []
@@ -105,5 +106,23 @@ class ResponseBuilder:
             "recommendations": [
                 {"parent_asin": identifier} for identifier in identifiers
             ],
-            "usage": {"prompt_tokens": 0, "completion_tokens": 0},
+            "usage": _token_usage(usage),
         }
+
+
+def _token_usage(usage: Mapping[str, object] | None) -> dict[str, int]:
+    """Report what a model actually consumed, defaulting to nothing.
+
+    The contract requires non-negative integers, so a backend that reports a
+    malformed or negative count is treated as having reported none rather than
+    being allowed to emit an invalid response.
+    """
+    reported: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0}
+    if not usage:
+        return reported
+    for field in reported:
+        value = usage.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            continue
+        reported[field] = value
+    return reported
