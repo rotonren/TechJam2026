@@ -37,6 +37,13 @@ class RuntimeConfig:
     mmr_lambda: float = 0.85
     adaptive_browsing_mmr: bool = False
     dense_rescue_only: bool = True
+    rerank_enabled: bool = True
+    rerank_window: int = 50
+    rerank_weight: float = 0.8
+    rerank_buying_weight: float = 0.3
+    rerank_backend: str = "phrase"
+    rerank_max_length: int = 128
+    rerank_asset_dir: str | Path = Path("assets/reranker")
 
     def __post_init__(self) -> None:
         self._validate_choice(
@@ -56,6 +63,34 @@ class RuntimeConfig:
             raise TypeError("adaptive_browsing_mmr must be a bool")
         if not isinstance(self.dense_rescue_only, bool):
             raise TypeError("dense_rescue_only must be a bool")
+        if not isinstance(self.rerank_enabled, bool):
+            raise TypeError("rerank_enabled must be a bool")
+        if isinstance(self.rerank_window, bool) or not isinstance(
+            self.rerank_window, int
+        ):
+            raise TypeError("rerank_window must be an int")
+        if self.rerank_window not in {20, 50, 100}:
+            raise ValueError("rerank_window must be one of 20, 50, or 100")
+        self._validate_choice(
+            "rerank_weight", self.rerank_weight, {0.0, 0.3, 0.45, 0.6, 0.8, 1.0}
+        )
+        self._validate_choice(
+            "rerank_buying_weight",
+            self.rerank_buying_weight,
+            {0.0, 0.3, 0.45, 0.6, 0.8, 1.0},
+        )
+        if self.rerank_backend not in {"phrase", "cross_encoder"}:
+            raise ValueError(
+                'rerank_backend must be "phrase" or "cross_encoder"'
+            )
+        if isinstance(self.rerank_max_length, bool) or not isinstance(
+            self.rerank_max_length, int
+        ):
+            raise TypeError("rerank_max_length must be an int")
+        if self.rerank_max_length not in {96, 128, 192, 256}:
+            raise ValueError(
+                "rerank_max_length must be one of 96, 128, 192, or 256"
+            )
         if self.rank_fusion_weight + self.rank_attribute_weight > 0.40:
             raise ValueError(
                 "rank_fusion_weight + rank_attribute_weight must not exceed 0.40"
@@ -67,6 +102,11 @@ class RuntimeConfig:
             raise TypeError(f"{name} must be a finite number")
         if not math.isfinite(float(value)) or value not in allowed:
             raise ValueError(f"{name} must be one of {sorted(allowed)}")
+
+    def resolve_rerank_asset_dir(self, submission_root: Path) -> Path:
+        """Resolve the rerank asset directory against the installed package."""
+        path = Path(self.rerank_asset_dir)
+        return path if path.is_absolute() else submission_root.resolve() / path
 
     def resolve_dense_paths(
         self, submission_root: Path

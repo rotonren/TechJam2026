@@ -14,6 +14,7 @@ from .models import Candidate, QuestionDecision, RetrievalPlan, SessionState
 from .parser import MessageParser
 from .question_policy import QuestionPolicy
 from .ranker import ConstraintRanker
+from .rerank import RerankStage, load_rerank_backend
 from .response import ResponseBuilder
 from .retrieval import HybridRetriever
 from .router import RoutePlanner
@@ -55,6 +56,17 @@ class CompassCartAgent:
             boundary_bonus=self.config.rank_boundary_bonus,
             mmr_lambda=self.config.mmr_lambda,
             adaptive_browsing_mmr=self.config.adaptive_browsing_mmr,
+        )
+        self.reranker = RerankStage(
+            load_rerank_backend(
+                enabled=self.config.rerank_enabled,
+                backend=self.config.rerank_backend,
+                asset_dir=self.config.resolve_rerank_asset_dir(SUBMISSION_ROOT),
+                max_length=self.config.rerank_max_length,
+            ),
+            window=self.config.rerank_window,
+            weight=self.config.rerank_weight,
+            buying_weight=self.config.rerank_buying_weight,
         )
         self.question_policy = QuestionPolicy(self.catalog.attributes)
         self.response_builder = ResponseBuilder(
@@ -153,6 +165,13 @@ class CompassCartAgent:
             fallbacks.append("ranker")
             ranked = candidates
 
+        try:
+            ranked = self.reranker.apply(
+                ranked, state, deadline=deadline, diagnostics=budget_skips
+            )
+        except Exception:  # noqa: BLE001 - keep the constraint ranker's order.
+            fallbacks.append("reranker")
+
         if not user_message.strip():
             question = QuestionDecision("category")
         else:
@@ -205,6 +224,7 @@ class CompassCartAgent:
                 ),
                 "ask_attribute": question.ask_attribute,
                 "dense_status": dense_status,
+                "rerank_status": getattr(self.reranker.backend, "status", "unknown"),
                 "fallbacks": fallbacks,
                 "budget_skips": budget_skips,
                 "elapsed_ms": elapsed_ms,
