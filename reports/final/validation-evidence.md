@@ -27,7 +27,8 @@ python -m tools.verify_frozen_inputs
 ## 2. 主分数
 
 ```
-python -m tools.run_agent --catalog data/catalog.jsonl --dataset data/public_set.jsonl --output results.json
+python -m tools.run_agent --catalog data/catalog.jsonl --dataset data/public_set.jsonl \
+  --output results.json --evidence-output results-evidence.json
 ```
 
 **0.822490**,覆盖全部 200 个会话、536 轮对话,离线运行,零 token,零降级。

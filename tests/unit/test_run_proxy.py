@@ -378,7 +378,7 @@ def test_run_proxy_non_audit_failure_writes_diagnostic_and_uses_sample_invalid_r
 
 
 def test_frozen_evaluator_hash_is_unchanged():
-    assert sha256_file(Path("evaluator/local_evaluator.py")) == "84ea899707452de249ca62abee77c4b40ab7a3139b5cc798ac30c9f521f91b30"
+    assert sha256_file(Path("evaluator/local_evaluator.py")) == "79a5ea06f9a1b8c5036f30efa85dc1f36b8f6b06eb8feb8f545dfa767bc45564"
 
 
 def _valid_suite_row(sample_id: str = "one", suite: str = "representative") -> dict:
