@@ -1,0 +1,600 @@
+<title>CompassCart Design Record</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:ital,wght@0,500;0,600;1,400&display=swap">
+
+<style>
+  :root {
+    --ground: #f5f7f9;
+    --surface: #ffffff;
+    --sunk: #eef1f5;
+    --ink: #16202b;
+    --muted: #5a6b7c;
+    --faint: #8496a6;
+    --rule: #dae1e9;
+    --accept: #1c6b58;
+    --accept-soft: #e3efeb;
+    --reject: #9d5537;
+    --reject-soft: #f3e8e2;
+    --shadow: 0 1px 2px rgba(22, 32, 43, .06), 0 8px 24px -16px rgba(22, 32, 43, .3);
+
+    --sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    --serif: "IBM Plex Serif", Georgia, serif;
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #10171f;
+      --surface: #18212b;
+      --sunk: #131c25;
+      --ink: #e1e8ef;
+      --muted: #92a1b1;
+      --faint: #6d7f90;
+      --rule: #27323e;
+      --accept: #57af94;
+      --accept-soft: #17302a;
+      --reject: #cf8b6c;
+      --reject-soft: #2e211b;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -16px rgba(0, 0, 0, .8);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #10171f;
+    --surface: #18212b;
+    --sunk: #131c25;
+    --ink: #e1e8ef;
+    --muted: #92a1b1;
+    --faint: #6d7f90;
+    --rule: #27323e;
+    --accept: #57af94;
+    --accept-soft: #17302a;
+    --reject: #cf8b6c;
+    --reject-soft: #2e211b;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -16px rgba(0, 0, 0, .8);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 62rem;
+    margin: 0 auto;
+    padding: 3.5rem 1.5rem 6rem;
+    display: flex;
+    flex-direction: column;
+    gap: 3.5rem;
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: .72rem;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--faint);
+    margin: 0;
+  }
+
+  h1 {
+    font-family: var(--serif);
+    font-weight: 600;
+    font-size: clamp(2rem, 5vw, 2.9rem);
+    line-height: 1.12;
+    letter-spacing: -.015em;
+    text-wrap: balance;
+    margin: .5rem 0 0;
+  }
+
+  h2 {
+    font-family: var(--serif);
+    font-weight: 600;
+    font-size: 1.5rem;
+    letter-spacing: -.01em;
+    text-wrap: balance;
+    margin: 0;
+  }
+
+  h3 {
+    font-family: var(--sans);
+    font-weight: 600;
+    font-size: 1rem;
+    margin: 0;
+  }
+
+  p { margin: 0; max-width: 66ch; }
+  .lede { font-size: 1.06rem; color: var(--muted); max-width: 60ch; margin-top: 1rem; }
+
+  section { display: flex; flex-direction: column; gap: 1.25rem; }
+
+  .headline-figures {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2.5rem;
+    padding: 1.5rem 0 0;
+    border-top: 1px solid var(--rule);
+    margin-top: 2rem;
+  }
+  .fig { display: flex; flex-direction: column; gap: .15rem; }
+  .fig .n {
+    font-family: var(--mono);
+    font-size: 1.6rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -.02em;
+  }
+  .fig .n.up { color: var(--accept); }
+  .fig .k {
+    font-family: var(--mono);
+    font-size: .7rem;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+
+  figure { margin: 0; }
+  figure svg { display: block; width: 100%; max-width: 100%; height: auto; color: var(--ink); }
+  .figscroll { overflow-x: auto; background: var(--surface); border: 1px solid var(--rule); border-radius: 3px; padding: 1.5rem 1rem; box-shadow: var(--shadow); }
+  figcaption { font-size: .84rem; color: var(--muted); margin-top: .9rem; max-width: 62ch; }
+
+  .steps { display: flex; flex-direction: column; gap: 0; border-top: 1px solid var(--rule); }
+  .step {
+    display: grid;
+    grid-template-columns: 7.5rem 1fr 6rem;
+    gap: 1.25rem;
+    padding: 1.15rem 0;
+    border-bottom: 1px solid var(--rule);
+    align-items: baseline;
+  }
+  .step .score {
+    font-family: var(--mono);
+    font-size: .95rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .step .delta {
+    font-family: var(--mono);
+    font-size: .82rem;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    color: var(--accept);
+  }
+  .step .body { display: flex; flex-direction: column; gap: .3rem; }
+  .step .body p { font-size: .92rem; color: var(--muted); }
+  .step.shipped .score { color: var(--accept); }
+  .step.shipped { background: var(--accept-soft); margin-inline: -1rem; padding-inline: 1rem; }
+  .step.optional .score, .step.optional .delta { color: var(--faint); }
+
+  table { border-collapse: collapse; width: 100%; font-size: .88rem; }
+  .tablescroll { overflow-x: auto; }
+  th, td { text-align: left; padding: .7rem .9rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th {
+    font-family: var(--mono);
+    font-size: .68rem;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--faint);
+    font-weight: 500;
+    border-bottom-color: var(--ink);
+  }
+  td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  td.num.neg { color: var(--reject); }
+  td.num.pos { color: var(--accept); }
+  code, .m { font-family: var(--mono); font-size: .875em; background: var(--sunk); padding: .1em .35em; border-radius: 2px; }
+  td code, td .m { background: none; padding: 0; }
+
+  .pipeline { display: flex; flex-direction: column; gap: 0; }
+  .stage {
+    display: grid;
+    grid-template-columns: 2rem 11rem 1fr;
+    gap: 1rem;
+    padding: .85rem 0;
+    border-bottom: 1px solid var(--rule);
+    align-items: baseline;
+  }
+  .stage:first-child { border-top: 1px solid var(--ink); }
+  .stage .i { font-family: var(--mono); font-size: .8rem; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .stage .who { font-family: var(--mono); font-size: .84rem; font-weight: 500; }
+  .stage .what { font-size: .92rem; color: var(--muted); }
+  .stage.new .who { color: var(--accept); }
+
+  .lessons { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: 1.5rem; }
+  .lesson { display: flex; flex-direction: column; gap: .4rem; padding-top: 1rem; border-top: 2px solid var(--ink); }
+  .lesson h3 { font-family: var(--serif); font-size: 1.05rem; }
+  .lesson p { font-size: .9rem; color: var(--muted); }
+
+  .note {
+    border-left: 2px solid var(--reject);
+    padding: .1rem 0 .1rem 1.1rem;
+    font-size: .92rem;
+    color: var(--muted);
+  }
+
+  footer { border-top: 1px solid var(--rule); padding-top: 1.5rem; font-size: .85rem; color: var(--faint); }
+  footer p { max-width: 66ch; }
+
+  @media (max-width: 44rem) {
+    .step { grid-template-columns: 6.5rem 1fr; }
+    .step .delta { grid-column: 1 / -1; text-align: left; }
+    .stage { grid-template-columns: 1.5rem 1fr; }
+    .stage .what { grid-column: 2; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">TikTok TechJam 2026 · Track 4 · Internal record</p>
+    <h1>How CompassCart got from 0.761 to 0.822</h1>
+    <p class="lede">Nineteen commits, seven accepted changes, seven measured rejections, and three
+      conclusions that turned out to be wrong before they were corrected. Every number here comes
+      from the unchanged official evaluator over the frozen 200-session public set &mdash; plus one
+      fold of 40 that was sealed before any of it started.</p>
+
+    <div class="headline-figures">
+      <div class="fig"><span class="n up">0.822490</span><span class="k">Shipped score</span></div>
+      <div class="fig"><span class="n up">0.834997</span><span class="k">Sealed fold, opened once</span></div>
+      <div class="fig"><span class="n">+0.0613</span><span class="k">Net gain</span></div>
+      <div class="fig"><span class="n">1047</span><span class="k">Tests passing</span></div>
+      <div class="fig"><span class="n">0</span><span class="k">Tokens on the default path</span></div>
+      <div class="fig"><span class="n">19.6<span style="font-size:.6em"> s</span></span><span class="k">Init, from 132 s</span></div>
+    </div>
+  </header>
+
+  <section>
+    <h2>The lineage</h2>
+    <div class="figscroll">
+      <figure>
+        <svg viewBox="0 0 700 880" role="img" aria-label="A vertical lineage of seven accepted changes raising the score from 0.761209 to 0.822490, with seven rejected experiments branching off and terminating.">
+          <defs>
+            <marker id="tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+            </marker>
+          </defs>
+
+          <!-- spine -->
+          <line x1="150" y1="52" x2="150" y2="700" stroke="var(--accept)" stroke-width="2"/>
+          <line x1="150" y1="700" x2="150" y2="800" stroke="var(--faint)" stroke-width="2" stroke-dasharray="5 4"/>
+
+          <!-- accepted nodes -->
+          <g font-family="IBM Plex Mono, monospace" font-size="12">
+            <circle cx="150" cy="52" r="5" fill="var(--ground)" stroke="var(--accept)" stroke-width="2"/>
+            <text x="132" y="49" text-anchor="end" font-size="13" font-weight="600" fill="currentColor">0.761209</text>
+            <text x="132" y="65" text-anchor="end" fill="var(--muted)">starting point</text>
+
+            <circle cx="150" cy="160" r="5" fill="var(--accept)"/>
+            <text x="132" y="157" text-anchor="end" font-size="13" font-weight="600" fill="currentColor">0.771831</text>
+            <text x="132" y="173" text-anchor="end" fill="var(--muted)">phrase adjacency</text>
+            <text x="168" y="112" fill="var(--accept)">+0.0106</text>
+
+            <circle cx="150" cy="268" r="5" fill="var(--accept)"/>
+            <text x="132" y="265" text-anchor="end" font-size="13" font-weight="600" fill="currentColor">0.783514</text>
+            <text x="132" y="281" text-anchor="end" fill="var(--muted)">Browsing route only</text>
+            <text x="168" y="220" fill="var(--accept)">+0.0117</text>
+
+            <circle cx="150" cy="376" r="5" fill="var(--accept)"/>
+            <text x="132" y="373" text-anchor="end" font-size="13" font-weight="600" fill="currentColor">0.800849</text>
+            <text x="132" y="389" text-anchor="end" fill="var(--muted)">policy memory</text>
+            <text x="168" y="328" fill="var(--accept)">+0.0173</text>
+
+            <circle cx="150" cy="484" r="5" fill="var(--accept)"/>
+            <text x="132" y="481" text-anchor="end" font-size="13" font-weight="600" fill="currentColor">0.804724</text>
+            <text x="132" y="497" text-anchor="end" fill="var(--muted)">memory per route</text>
+            <text x="168" y="436" fill="var(--accept)">+0.0039</text>
+
+            <circle cx="150" cy="592" r="7" fill="var(--accept)"/>
+            <text x="132" y="589" text-anchor="end" font-size="13" font-weight="600" fill="var(--accept)">0.822490</text>
+            <text x="132" y="605" text-anchor="end" fill="var(--muted)">strategy selection</text>
+            <text x="168" y="544" fill="var(--accept)">+0.0178</text>
+            <text x="168" y="596" font-size="11" font-weight="600" fill="var(--accept)">SHIPPED DEFAULT</text>
+
+            <circle cx="150" cy="800" r="5" fill="var(--ground)" stroke="var(--faint)" stroke-width="2" stroke-dasharray="3 2"/>
+            <text x="132" y="797" text-anchor="end" font-size="13" fill="var(--faint)">0.826831</text>
+            <text x="132" y="813" text-anchor="end" fill="var(--faint)">LLM rerank</text>
+            <text x="168" y="752" fill="var(--faint)">+0.0043 · needs credentials,</text>
+            <text x="168" y="768" fill="var(--faint)">so official scoring never runs it</text>
+          </g>
+
+          <!-- rejected branches -->
+          <g font-family="IBM Plex Mono, monospace" font-size="11" stroke-linecap="round">
+            <path d="M150 214 L300 214" stroke="var(--reject)" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#tip)" fill="none" color="var(--reject)"/>
+            <text x="310" y="211" fill="var(--reject)">window-local IDF</text>
+            <text x="310" y="226" fill="var(--faint)">−0.011 · penalises the shopper's own terms</text>
+
+            <path d="M150 322 L300 322" stroke="var(--reject)" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#tip)" fill="none" color="var(--reject)"/>
+            <text x="310" y="319" fill="var(--reject)">ONNX cross-encoder</text>
+            <text x="310" y="334" fill="var(--faint)">−0.007 · confounded, not settled</text>
+
+            <path d="M150 430 L300 430" stroke="var(--reject)" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#tip)" fill="none" color="var(--reject)"/>
+            <text x="310" y="427" fill="var(--reject)">constraint-count signal</text>
+            <text x="310" y="442" fill="var(--faint)">−0.015 · measured the parser, not the shopper</text>
+
+            <path d="M150 538 L300 538" stroke="var(--reject)" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#tip)" fill="none" color="var(--reject)"/>
+            <text x="310" y="535" fill="var(--reject)">relax on stall</text>
+            <text x="310" y="550" fill="var(--faint)">−0.010 · conditioned on the wrong thing</text>
+
+            <path d="M150 646 L300 646" stroke="var(--reject)" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#tip)" fill="none" color="var(--reject)"/>
+            <text x="310" y="643" fill="var(--reject)">grouped model prompt</text>
+            <text x="310" y="658" fill="var(--faint)">−0.003 · a label said the opposite of the shopper</text>
+
+            <path d="M150 690 L300 690" stroke="var(--reject)" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#tip)" fill="none" color="var(--reject)"/>
+            <text x="310" y="687" fill="var(--reject)">state-selected prompt</text>
+            <text x="310" y="702" fill="var(--faint)">+0.0002 · the gains did not compose</text>
+          </g>
+
+          <!-- rail label -->
+          <g font-family="IBM Plex Mono, monospace" font-size="10" fill="var(--faint)">
+            <text x="20" y="24" letter-spacing="1.5">ACCEPTED ↓</text>
+            <text x="310" y="24" letter-spacing="1.5">REJECTED, MEASURED →</text>
+          </g>
+        </svg>
+        <figcaption>Each node is one accepted change and the score it produced. Branches leave the
+          spine at the point the experiment was run and terminate: they were measured against the
+          node they branch from, not argued about. The dashed tail is the model-backed path, which
+          scores higher but cannot authenticate in the scoring environment.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section>
+    <h2>What each accepted step did</h2>
+    <div class="steps">
+      <div class="step">
+        <span class="score">0.761209</span>
+        <div class="body">
+          <h3>Starting point, and one measurement before any code</h3>
+          <p>An oracle probe recorded where the target sat at every pipeline stage across 691 turns.
+            The target was in the candidate pool in 99% of sessions and at rank 1 in 32%. Retrieval
+            was not the bottleneck; ordering was. No work went into recall after that.</p>
+        </div>
+        <span class="delta"></span>
+      </div>
+      <div class="step">
+        <span class="score">0.771831</span>
+        <div class="body">
+          <h3>Phrase adjacency</h3>
+          <p>Fusion and constraint scoring both work at term level, so a requirement stated as a
+            contiguous phrase scored no better against a product whose title contains it exactly.
+            The rerank stage supplies that one missing signal.</p>
+        </div>
+        <span class="delta">+0.0106</span>
+      </div>
+      <div class="step">
+        <span class="score">0.783514</span>
+        <div class="body">
+          <h3>Run it on Browsing only</h3>
+          <p>The same stage measured <span class="m">+0.038</span> Browsing HitRate and
+            <span class="m">−0.025</span> Buying. A Buying turn already carries hard constraints, so
+            the ranker is well informed and reordering destroys good work. Turning it off on one
+            route beat every weight and window sweep combined.</p>
+        </div>
+        <span class="delta">+0.0117</span>
+      </div>
+      <div class="step">
+        <span class="score">0.800849</span>
+        <div class="body">
+          <h3>Question priors that check themselves</h3>
+          <p>The response-likelihood table was hand-written and never validated. Treating it as a
+            prior and updating from whether questions were actually answered corrected the two
+            entries we had backwards — <span class="m">feature</span> from 0.70 to 0.973,
+            <span class="m">budget</span> from 0.90 to 0.000.</p>
+        </div>
+        <span class="delta">+0.0173</span>
+      </div>
+      <div class="step">
+        <span class="score">0.804724</span>
+        <div class="body">
+          <h3>Condition the memory on route too</h3>
+          <p><span class="m">use_case</span> is answered 44% of the time on Buying and never on
+            Browsing. A shopper still exploring has not yet formed a view on what the item is for.
+            Nothing in the code encoded that; it came out of 303 observations.</p>
+        </div>
+        <span class="delta">+0.0039</span>
+      </div>
+      <div class="step shipped">
+        <span class="score">0.822490</span>
+        <div class="body">
+          <h3>Spend the turns that were being wasted</h3>
+          <p>When the question policy has nothing worth asking, the turn is spent for nothing — the
+            shopper replies "ask me about one specific attribute" and discloses zero. An open
+            question instead fires eleven times in 536 turns and is worth most of this.</p>
+        </div>
+        <span class="delta">+0.0178</span>
+      </div>
+      <div class="step optional">
+        <span class="score">0.826831</span>
+        <div class="body">
+          <h3>LLM rerank — measured, not shipped</h3>
+          <p>Worth <span class="m">+0.0043</span> for 362,330 prompt tokens and a 4.3× slower run.
+            Not the default: <span class="m">submission_rules.md</span> forbids shipping API keys
+            and says official scoring may disable network access, so the offline path is what the
+            organizer will actually run. Both numbers are reported.</p>
+        </div>
+        <span class="delta">+0.0043</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Three conclusions that were wrong first</h2>
+    <p>Each of these stood for hours and would have gone into the report. The controls that caught
+      them cost about ninety seconds each.</p>
+    <div class="tablescroll">
+      <table>
+        <thead>
+          <tr><th>Claim</th><th>What was actually true</th><th style="text-align:right">Correction</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>The LLM reranker costs score</td>
+            <td>The experiment changed the rerank window <em>and</em> the backend. The window alone
+              cost <span class="m">−0.0095</span>, charged to the model.</td>
+            <td class="num pos">−0.0013 → +0.0043</td>
+          </tr>
+          <tr>
+            <td>Boundary suffered because it routes as Buying and met the model</td>
+            <td>Route counts show Boundary is routed Browsing on all thirty of its turns. The model
+              never ran on it.</td>
+            <td class="num">retracted</td>
+          </tr>
+          <tr>
+            <td>Grouping the ledger by role must beat a token bag</td>
+            <td><span class="m">is_hard=False</span> means <em>this text cannot safely become a
+              filter</em>, not <em>the shopper is indifferent</em>. The prompt called an override's
+              new requirement optional.</td>
+            <td class="num pos">+0.0025 recovered</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">The cross-encoder's <span class="m">−0.007</span> carries the same window
+      confound and has not been re-measured. It is reported as measured, not as settled.</p>
+  </section>
+
+  <section>
+    <h2>Does any of it generalise?</h2>
+    <p>Every number above was read off the same 200 sessions the changes were tuned on. So one fold
+      of 40 was <strong>sealed at the start of the round</strong> and opened once, at the end, after
+      the configuration was frozen.</p>
+
+    <figure>
+      <div class="figscroll">
+        <svg viewBox="0 0 700 215" role="img" style="max-width:100%;height:auto" aria-label="Four tuning folds spread from 0.769 to 0.837 around a mean of 0.812. The sealed fold 5 scores 0.835, above that mean and above the all-200 score of 0.822. With the learning layer disabled the fold mean drops to 0.793.">
+          <g font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="11.5" fill="currentColor">
+
+            <text x="152" y="49" text-anchor="end" font-weight="600">Tuning folds 1&ndash;4</text>
+            <line x1="220.9" y1="45" x2="622.3" y2="45" stroke="currentColor" stroke-width="1" opacity=".28"/>
+            <circle cx="220.9" cy="45" r="4.5" fill="var(--ground)" stroke="currentColor" stroke-width="1.5" opacity=".65"/>
+            <circle cx="506.4" cy="45" r="4.5" fill="var(--ground)" stroke="currentColor" stroke-width="1.5" opacity=".65"/>
+            <circle cx="551.2" cy="45" r="4.5" fill="var(--ground)" stroke="currentColor" stroke-width="1.5" opacity=".65"/>
+            <circle cx="622.3" cy="45" r="4.5" fill="var(--ground)" stroke="currentColor" stroke-width="1.5" opacity=".65"/>
+            <line x1="475.2" y1="34" x2="475.2" y2="56" stroke="currentColor" stroke-width="2"/>
+            <text x="475.2" y="27" text-anchor="middle" font-size="10.5" opacity=".75">mean 0.812</text>
+
+            <text x="152" y="94" text-anchor="end" opacity=".7">Same folds, learning off</text>
+            <circle cx="359.5" cy="90" r="4.5" fill="var(--reject)"/>
+            <text x="359.5" y="109" text-anchor="middle" font-size="10.5" fill="var(--reject)">0.793</text>
+
+            <text x="152" y="139" text-anchor="end" opacity=".7">All 200 sessions</text>
+            <circle cx="536.3" cy="135" r="4.5" fill="currentColor" opacity=".55"/>
+            <text x="536.3" y="154" text-anchor="middle" font-size="10.5" opacity=".7">0.822</text>
+
+            <text x="152" y="184" text-anchor="end" font-weight="600" fill="var(--accept)">Fold 5 &mdash; sealed</text>
+            <circle cx="610.6" cy="180" r="7" fill="var(--accept)"/>
+            <text x="610.6" y="167" text-anchor="middle" font-size="11.5" font-weight="600" fill="var(--accept)">0.834997</text>
+
+            <line x1="165" y1="203" x2="680" y2="203" stroke="currentColor" stroke-width="1" opacity=".3"/>
+            <g font-size="10" opacity=".6" text-anchor="middle">
+              <line x1="224.4" y1="203" x2="224.4" y2="207" stroke="currentColor"/><text x="224.4" y="217">0.77</text>
+              <line x1="343.2" y1="203" x2="343.2" y2="207" stroke="currentColor"/><text x="343.2" y="217">0.79</text>
+              <line x1="462.1" y1="203" x2="462.1" y2="207" stroke="currentColor"/><text x="462.1" y="217">0.81</text>
+              <line x1="580.9" y1="203" x2="580.9" y2="207" stroke="currentColor"/><text x="580.9" y="217">0.83</text>
+            </g>
+          </g>
+        </svg>
+      </div>
+      <figcaption>The sealed fold lands above the mean of the folds the work was tuned on, and above
+        the all-200 score. Disabling the learning layer under the same four folds drops the mean by
+        <span class="m">0.019</span>, so the memory works on 40 sessions rather than living off an
+        accumulated 200.</figcaption>
+    </figure>
+
+    <p class="note">Neither result certifies a <span class="m">+0.004</span> decision &mdash; the
+      tuning folds alone span 0.769 to 0.837, a spread wider than most individual changes in this
+      round. They certify that the <span class="m">+0.0613</span> of accepted change did not come
+      from memorising the public set. The learning layer is also a net win in three folds of four,
+      not four of four.</p>
+  </section>
+
+  <section>
+    <h2>The pipeline today</h2>
+    <p>Seven stages per turn. Each is wrapped so a failure degrades rather than breaks the turn.
+      Stages in colour were added this round.</p>
+    <div class="pipeline">
+      <div class="stage"><span class="i">1</span><span class="who">SessionStore</span><span class="what">Parse the turn into a versioned constraint ledger. An override supersedes rather than appends.</span></div>
+      <div class="stage new"><span class="i">2</span><span class="who">PolicyMemory</span><span class="what">Observe whether the previous question was answered. This is where cross-session learning happens.</span></div>
+      <div class="stage"><span class="i">3</span><span class="who">RoutePlanner</span><span class="what">Buying or Browsing, from constraint specificity, plus the fusion weights.</span></div>
+      <div class="stage"><span class="i">4</span><span class="who">HybridRetriever</span><span class="what">Lexical, attribute, profile and dense sources fused by weighted reciprocal rank. ~500 candidates.</span></div>
+      <div class="stage"><span class="i">5</span><span class="who">ConstraintRanker</span><span class="what">Hard-constraint coverage and quality; exact candidates stay ahead of disclosed relaxations.</span></div>
+      <div class="stage new"><span class="i">6</span><span class="who">RerankStage</span><span class="what">Rescore the head of the list per route. Browsing: phrase adjacency. Buying: off by default.</span></div>
+      <div class="stage new"><span class="i">7</span><span class="who">StrategySelector</span><span class="what">Decide what to do with a turn the question policy declined — open question, or stop asking.</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Switches worth knowing</h2>
+    <p>Turning all three new layers off reproduces <span class="m">0.761209</span> exactly, which is
+      how each one's contribution was isolated.</p>
+    <div class="tablescroll">
+      <table>
+        <thead>
+          <tr><th>Setting</th><th>Default</th><th>What it does</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>rerank_buying_weight</code></td><td class="num">0.0</td><td>Zero on purpose — the rerank stage does not run on Buying</td></tr>
+          <tr><td><code>rerank_window</code></td><td class="num">50</td><td>Candidates reordered on Browsing; <code>rerank_buying_window</code> sets Buying separately</td></tr>
+          <tr><td><code>rerank_backend</code></td><td><code>"phrase"</code></td><td><code>phrase</code>, <code>cross_encoder</code> or <code>llm</code>; per route</td></tr>
+          <tr><td><code>rerank_prompt_style</code></td><td><code>"flat"</code></td><td><code>flat</code>, <code>structured</code> or <code>adaptive</code></td></tr>
+          <tr><td><code>evolution_enabled</code></td><td><code>True</code></td><td>Policy memory; <code>False</code> returns the hand-written prior</td></tr>
+          <tr><td><code>strategy_enabled</code></td><td><code>True</code></td><td>Per-turn strategy selection</td></tr>
+          <tr><td><code>COMPASSCART_DISABLE_DENSE</code></td><td>unset</td><td>Lexical only — scores identically and uses 156 MiB less</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>What generalises past this project</h2>
+    <div class="lessons">
+      <div class="lesson">
+        <h3>Measure the ceiling first</h3>
+        <p>The oracle probe took thirty minutes and decided three days of work. Without it the
+          obvious move was to improve recall, which was already at 99%.</p>
+      </div>
+      <div class="lesson">
+        <h3>Isolate one variable</h3>
+        <p>Violating this produced a confidently wrong conclusion that survived several hours. The
+          control that caught it was a single ninety-second run.</p>
+      </div>
+      <div class="lesson">
+        <h3>Adaptation needs real structure</h3>
+        <p>Conditioning on route paid twice, about <span class="m">+0.02</span> each. Conditioning on
+          "did the last turn fail" lost score in four configurations out of four.</p>
+      </div>
+      <div class="lesson">
+        <h3>A field's meaning doesn't travel</h3>
+        <p><span class="m">is_hard</span> means "safe to filter on" in the retrieval path. Read as
+          "important to the shopper" in a new path, it inverted the prompt.</p>
+      </div>
+      <div class="lesson">
+        <h3>Mislabelled structure beats no structure — downward</h3>
+        <p>A flat query is uninformative. A structured one with the wrong labels is confidently
+          wrong, and cost <span class="m">0.105</span> Override MRR.</p>
+      </div>
+      <div class="lesson">
+        <h3>Layers couple through shared state</h3>
+        <p>Reordering Buying candidates changed what the memory learned, which moved Boundary — a
+          scenario the change never touched. Local optima did not compose.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <p>Full experiment records live in the repository:
+      <span class="m">reports/final/rerank-results.md</span> for every rerank experiment including
+      the rejections, <span class="m">reports/final/evolution-results.md</span> for the policy
+      memory and strategy selector, <span class="m">reports/final/architecture-guide.md</span> for
+      the working guide, and <span class="m">reports/final/approach-evolution.md</span> for this
+      record in prose.</p>
+  </footer>
+
+</div>
