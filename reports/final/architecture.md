@@ -20,7 +20,9 @@ unavailable.
 5. `RerankStage` rescores the head of that list for phrase adjacency — the one
    signal term-level scoring cannot express — and blends it with each
    candidate's existing rank position. It runs on the Browsing route only.
-6. `QuestionPolicy` estimates conversion gain for answerable attributes.
+6. `QuestionPolicy` estimates conversion gain for answerable attributes,
+   weighted by a `PolicyMemory` posterior over how often each attribute has
+   actually been answered. Every turn feeds one observation back into it.
 7. `ResponseBuilder` emits unique catalog-valid IDs and zero token usage.
 
 ## Judging Map
@@ -33,6 +35,7 @@ unavailable.
 | Intent Override | Goal-level overrides clear obsolete text/questions; attribute-level corrections replace only the named slot |
 | Browsing utility | Profile-aware broad recall and conversion-gain clarification |
 | Reliability | Shared hard-filter matcher, disclosed relaxation evidence, bounded state/traces, component fallbacks, valid-ID filtering |
+| Self-evolution | Cross-session question-yield memory, ablatable, prior-preserving under a per-session harness; it corrected our hand-written `feature` prior from `0.70` to `0.946` and `budget` from `0.90` to `0.288` |
 | Feasibility | CPU ONNX int8 assets, 45 MiB runtime asset set, zero API cost, offline operation; full-catalog dense smoke was 504 MiB working set after one response |
 | Reproducibility | Deterministic CV, tagged candidate and sealed audit fold, checksummed assets, deterministic allowlist ZIP |
 

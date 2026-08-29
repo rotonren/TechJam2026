@@ -36,6 +36,12 @@ so "Actually, I need leather" cannot accidentally become a category answer.
 - Real override semantics: obsolete constraints and free text are superseded,
   not merely down-weighted.
 - Conversion-aware questions: the agent values the next turn, not question count.
+- Questions that get better from experience: the policy's response-likelihood
+  table was hand-written and unchecked, so the agent now treats it as a prior
+  and corrects it from whether shoppers actually answered. It found our two
+  worst guesses - `feature` was ranked second-lowest at `0.70` and is really
+  the most productive question at `0.964`; `budget` was ranked top tier at
+  `0.90` and produced nothing in 17 attempts.
 - Reranking that knows when to stay out of the way: the same stage is worth
   `+0.038` HitRate on Browsing and `-0.025` on Buying, where hard constraints
   already make the ranker well informed, so it runs on one route and not the
@@ -51,15 +57,15 @@ On the unchanged 200-session official public evaluator:
 
 | Metric | Starter | CompassCart |
 | --- | ---: | ---: |
-| TechnicalScore | 0.106710 | **0.783514** |
-| HitRate@10 | 0.125 | 0.9450 |
-| MRR | 0.068034 | 0.528714 |
-| MTTC | 9.81 | 3.380 |
+| TechnicalScore | 0.106710 | **0.800849** |
+| HitRate@10 | 0.125 | 0.9400 |
+| MRR | 0.068034 | 0.560163 |
+| MTTC | 9.81 | 2.860 |
 
-Scenario HitRate@10 is `0.9000` Boundary, `0.9500` Browsing, `0.9375` Buying,
-and `0.9667` Intent Override. Initialization is `19.6 s` and a 200-session run
+Scenario HitRate@10 is `0.9000` Boundary, `0.9625` Browsing, `0.9375` Buying,
+and `0.9000` Intent Override. Initialization is `19.6 s` and a 200-session run
 takes `89.9 s`. Reported token usage is zero, so the estimated API cost for the
-800-session private set is USD 0.00. The automated suite passes 965 tests.
+800-session private set is USD 0.00. The automated suite passes 990 tests.
 
 Two ideas were measured and thrown away rather than shipped. Weighting the
 rerank by window-local inverse document frequency cost `-0.011`, because the
@@ -77,9 +83,19 @@ subtle: an Intent Override could be parsed as the answer to a question from the
 old intent. A one-turn pending attribute plus override-first parsing fixed the
 state transition and became a regression test.
 
-Intent Override remains the hardest scenario. Terse replacement messages may
-reveal only one attribute, so future work should improve local query expansion
-without adding a network dependency or leaking old-intent evidence.
+The policy memory's first version scored a question by whether the reply grew
+the constraint ledger, which measured our parser rather than the shopper: a
+requirement stated as free text often parses to nothing yet still reaches
+retrieval as query evidence. Under that signal three attributes recorded a
+literal zero disclosure rate and the ablation came out at `-0.015`. Scoring the
+refusal marker instead - the distinction the simulator actually makes - turned
+it into `+0.017`.
+
+That gain is not free everywhere. Sharper question selection costs Intent
+Override two hits, from `0.9667` to `0.9000`, while lifting Browsing to
+`0.9625` and cutting mean turns to conversion from `3.380` to `2.860`. Making
+the memory route-aware, as the rerank stage already is, is the obvious next
+step.
 
 ## Team Contributions
 

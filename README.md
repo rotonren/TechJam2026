@@ -84,8 +84,10 @@ attribute, profile, and ONNX dense candidates with weighted reciprocal-rank
 fusion. `ConstraintRanker` applies hard constraints and final-list diversity.
 `RerankStage` then rescores the head of that list for phrase adjacency, which
 term-level scoring cannot see, and applies it on the Browsing route only.
-`QuestionPolicy` asks only when expected conversion gain is positive.
-`ResponseBuilder` deduplicates and validates all identifiers.
+`QuestionPolicy` asks only when expected conversion gain is positive, and
+weights each candidate question by a `PolicyMemory` estimate that starts at our
+hand-written prior and is corrected by whether the shopper answered previous
+questions. `ResponseBuilder` deduplicates and validates all identifiers.
 
 Additional rationale is in `reports/final/architecture.md`; the rerank
 experiments, including the two that were measured and rejected, are in
@@ -94,26 +96,30 @@ experiments, including the two that were measured and rejected, are in
 ## Measured Results
 
 All measurements use the unchanged official evaluator and frozen public data.
-The starter baseline scored `0.106710`. The current runtime scores `0.783514`
-on the official 200-sample public evaluation (HitRate@10 `0.9450`, MRR
-`0.528714`, MTTC `3.380`, efficiency `0.7620`), measured twice with identical
-results. Scenario HitRate@10 is `0.9000` Boundary, `0.9500` Browsing, `0.9375`
-Buying, and `0.9667` Intent Override.
+The starter baseline scored `0.106710`. The current runtime scores `0.800849`
+on the official 200-sample public evaluation (HitRate@10 `0.9400`, MRR
+`0.560163`, MTTC `2.860`, efficiency `0.8140`).
 
 | Stage | TechnicalScore | Change |
 | --- | ---: | ---: |
 | Team result before this round | 0.761209 | — |
 | Phrase rerank, one weight for every route | 0.771831 | +0.010622 |
 | Phrase rerank, Browsing route only | 0.783514 | +0.022305 |
+| Cross-session policy memory | 0.800849 | +0.039640 |
+
+Each stage has an ablation switch, and disabling both reproduces `0.761209`
+exactly.
 
 Initialization is `19580.5 ms`, down from roughly `132 s`, because catalog
 layer discovery is now opt-in; see `docs/attribute_schema.md`. Two rerank
 variants were measured and rejected rather than kept: window-local IDF
 weighting at `-0.011`, and an ONNX cross-encoder backend at `-0.007`. Both,
 with their per-scenario numbers, are recorded in
-`reports/final/rerank-results.md`.
+`reports/final/rerank-results.md`; the policy memory's ablation and the
+corrections it made to our hand-written question priors are in
+`reports/final/evolution-results.md`.
 
-The full automated suite passes 965 tests with 7 skipped, and Ruff lint passes
+The full automated suite passes 990 tests with 7 skipped, and Ruff lint passes
 across `src`, `tests`, and `tools`.
 
 Earlier stable evidence remains in `reports/final/final-results.json` and
@@ -131,8 +137,12 @@ a one-time CPU process.
 
 ## Limitations
 
-- Boundary is now the weakest scenario at `0.9000` HitRate@10, on only ten
-  public sessions, so its measurement is noisy.
+- The policy memory trades Intent Override for Browsing: it costs that
+  scenario two hits, `0.9667` to `0.9000`, while lifting Browsing to `0.9625`
+  and cutting MTTC from `3.380` to `2.860`. The memory is not route-aware
+  the way the rerank stage is, which is the obvious next step.
+- Boundary is the weakest scenario at `0.9000` HitRate@10 on only ten public
+  sessions, so its measurement is noisy.
 - The rerank stage is disabled on the Buying route, which is where its phrase
   evidence measured net harmful. Intent Override sessions route as Buying, so
   they do not benefit from it either.
