@@ -20,14 +20,35 @@ for a user's whole-product material preference.
 ## Safety boundary
 
 The legacy `extract_attributes` result remains the scoring-time contract used
-by retrieval, hard filtering, ranking, and question selection. Layered values
-are stored in `CatalogIndex.layer_inverted` and described by
-`CatalogIndex.attribute_schema`.
+by retrieval, hard filtering, ranking, and question selection.
 
 The default parser vocabulary exposes only the existing evaluator-safe fields.
 Catalog-discovered fields require explicit opt-in. This preserves current
 competition behavior while leaving a controlled extension point for future
 experiments or a commercial API.
+
+## Cost of discovery, and why it is gated
+
+`CatalogIndex` builds its schema from the flat attribute index it already
+populates (`AttributeSchema.from_catalog`). Mining the catalog for the
+discovered category and dynamic fields is a second pass over every product,
+enabled with `CatalogIndex(..., discover_layers=True)`, which fills
+`layer_inverted` and `attribute_category_scopes` and switches the schema to
+`AttributeSchema.from_layers`.
+
+Measured on the 50,000-product competition catalog:
+
+| Path | Load | Process RSS | Parser vocabulary |
+| --- | ---: | ---: | --- |
+| `from_catalog` (default) | 20.72 s | +301.4 MiB | 7 fields, 21,884 values |
+| `from_layers` (`discover_layers=True`) | 113.46 s | +378.8 MiB | identical |
+
+The two vocabularies are equal field by field and value by value, because
+nothing outside the discovered layer is exposed by default and no component
+reads `layer_inverted`. Paying 92.7 s of startup and 77.4 MiB for an identical
+result is not a trade the competition runtime should make, so discovery is off
+unless a caller asks for it. Turning it on is how a future experiment would
+evaluate the discovered fields.
 
 ## Evaluation comparison
 

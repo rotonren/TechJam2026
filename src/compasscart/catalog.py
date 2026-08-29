@@ -86,7 +86,19 @@ class _CompactTermSet(AbstractSet[str]):
 
 
 class CatalogIndex:
-    def __init__(self, catalog_path: str | Path, *, enable_fts: bool = True) -> None:
+    def __init__(
+        self,
+        catalog_path: str | Path,
+        *,
+        enable_fts: bool = True,
+        discover_layers: bool = False,
+    ) -> None:
+        # Catalog-discovered layer fields are an extension point, not a scoring
+        # input: `parser_vocabulary` exposes only the evaluator-safe fields, and
+        # nothing else reads `layer_inverted`.  Mining them costs 92.7s of load
+        # time and 77.4 MiB for a vocabulary identical to the one derived from
+        # the flat index, so the pass is opt-in.
+        self.discover_layers = discover_layers
         self.catalog_path = Path(catalog_path)
         # An empty filename gives SQLite an automatically deleted temporary database.
         self.connection = sqlite3.connect("")
@@ -115,10 +127,16 @@ class CatalogIndex:
         self._fts_enabled = False
         self._fts_failures = 0
         self._load(enable_fts=enable_fts)
-        self.attribute_schema = AttributeSchema.from_layers(
-            self.layer_inverted,
-            product_count=len(self.valid_ids),
-            category_scopes=self.attribute_category_scopes,
+        self.attribute_schema = (
+            AttributeSchema.from_layers(
+                self.layer_inverted,
+                product_count=len(self.valid_ids),
+                category_scopes=self.attribute_category_scopes,
+            )
+            if discover_layers
+            else AttributeSchema.from_catalog(
+                self.attribute_inverted, product_count=len(self.valid_ids)
+            )
         )
 
     def _load(self, *, enable_fts: bool) -> None:
@@ -143,10 +161,6 @@ class CatalogIndex:
                 parent_asin = str(product["parent_asin"])
                 fields = searchable_fields(product)
                 attributes = extract_attributes(product)
-                layered_attributes = extract_layered_attributes(
-                    product, core_attributes=attributes
-                )
-                category_scope = infer_category_scope(product)
                 category_terms = category_term_set(attributes.get("category", ()))
                 searchable_terms, field_masks = _compact_searchable_terms(
                     fields, self._search_term_ids, self._search_terms
@@ -163,16 +177,21 @@ class CatalogIndex:
                 for attribute, values in attributes.items():
                     for value in values:
                         self.attribute_inverted[attribute][value].add(parent_asin)
-                for layer, layer_attributes in layered_attributes.items():
-                    for attribute, values in layer_attributes.items():
-                        for value in values:
-                            self.layer_inverted[layer][attribute][value].add(
-                                parent_asin
-                            )
-                        if layer == "category":
-                            self.attribute_category_scopes[attribute].add(
-                                category_scope
-                            )
+                if self.discover_layers:
+                    category_scope = infer_category_scope(product)
+                    layered_attributes = extract_layered_attributes(
+                        product, core_attributes=attributes
+                    )
+                    for layer, layer_attributes in layered_attributes.items():
+                        for attribute, values in layer_attributes.items():
+                            for value in values:
+                                self.layer_inverted[layer][attribute][value].add(
+                                    parent_asin
+                                )
+                            if layer == "category":
+                                self.attribute_category_scopes[attribute].add(
+                                    category_scope
+                                )
                 if self._fts_enabled:
                     fts_batch.append((parent_asin, *fields))
                     if len(fts_batch) >= 1_000:
