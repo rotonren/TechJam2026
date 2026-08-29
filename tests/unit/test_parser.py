@@ -84,6 +84,59 @@ def test_override_keeps_unknown_replacement_as_soft_text_evidence():
 
 
 @pytest.mark.parametrize(
+    ("message", "soft_value"),
+    (
+        # The reference lead-in must keep working unchanged.
+        (
+            "Actually, ignore my earlier preference. What I need is: Water Resistant.",
+            "water resistant",
+        ),
+        # A paraphrased override must not lose its payload just because the
+        # lead-in differs from the reference wording.
+        (
+            "I have changed my mind - show me Water Resistant.",
+            "water resistant",
+        ),
+        (
+            "Ignore my earlier preferences; my new requirement is Water Resistant.",
+            "water resistant",
+        ),
+        (
+            "Actually, ignore my earlier preference. Please switch it to Water Resistant.",
+            "water resistant",
+        ),
+        # No recognized lead-in at all: the final sentence carries the payload.
+        (
+            "I have changed my mind. Water Resistant.",
+            "water resistant",
+        ),
+    ),
+)
+def test_override_payload_survives_paraphrased_lead_ins(message, soft_value):
+    result = MessageParser().parse(message, turn=3)
+
+    assert (soft_value, False, "clarification") in {
+        (item.value, item.is_hard, item.source) for item in result.constraints
+    }
+
+
+def test_override_payload_keeps_text_after_an_interior_period():
+    result = MessageParser().parse(
+        "Actually, ignore my earlier preference. What I need is: 3.5 inch shaft.",
+        turn=3,
+    )
+
+    assert "3.5 inch shaft" in {item.value for item in result.constraints}
+
+
+def test_non_override_message_produces_no_payload_constraint():
+    result = MessageParser().parse("For that, what matters is: Water Resistant.", turn=2)
+
+    assert result.is_override is False
+    assert all(item.source != "clarification" for item in result.constraints)
+
+
+@pytest.mark.parametrize(
     ("text", "expected_attribute", "material", "soft_value"),
     (
         ("Rubber sole", "other", "rubber", "rubber sole"),

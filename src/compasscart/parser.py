@@ -31,10 +31,21 @@ _PREFERENCE_RESET_RE = re.compile(
     r"i have changed my mind|what i need is)\b",
     re.IGNORECASE,
 )
-_OVERRIDE_PAYLOAD_RE = re.compile(
-    r"\bwhat i need is\s*:?[\s-]*(?P<value>[^.!?]{2,160})",
+# Lead-ins that announce the *replacement* requirement.  Phrases such as
+# "instead of" or "rather than" are deliberately absent: they introduce the
+# value being discarded, not the new one.
+_OVERRIDE_PAYLOAD_ANCHOR_RE = re.compile(
+    r"\b(?:what i (?:need|want|really want|am looking for)(?: is)?|"
+    r"i (?:need|want|really need|really want|would like|am looking for)|"
+    r"my new requirement is|"
+    r"(?:please )?(?:switch|change) (?:it |that )?to|"
+    r"make it|"
+    r"show me)\b",
     re.IGNORECASE,
 )
+_SENTENCE_SPLIT_RE = re.compile(r"[.!?]+")
+_PAYLOAD_TRIM = " :;,-.\t"
+_PAYLOAD_LIMIT = 160
 _CONTINUATION_RE = re.compile(
     r"\b(?:show me more|more options|different choices)\b", re.IGNORECASE
 )
@@ -338,15 +349,36 @@ class MessageParser:
         )
 
     @staticmethod
+    def _override_payload_text(text: str) -> str:
+        """Return the replacement requirement stated in an override message.
+
+        The anchor family is intentionally wider than the reset markers that
+        gate this path.  An override turn carries the single strongest signal
+        about the new goal, so losing its payload to an unrecognized lead-in
+        costs the whole turn.  When no anchor matches, the requirement is in
+        practice stated in the final sentence, after any reset marker.
+        """
+        anchors = list(_OVERRIDE_PAYLOAD_ANCHOR_RE.finditer(text))
+        if anchors:
+            return text[anchors[-1].end() :]
+        sentences = [part.strip() for part in _SENTENCE_SPLIT_RE.split(text)]
+        tail = next((part for part in reversed(sentences) if part), "")
+        markers = [
+            *_OVERRIDE_RE.finditer(tail),
+            *_PREFERENCE_RESET_RE.finditer(tail),
+        ]
+        if markers:
+            return tail[max(item.end() for item in markers) :]
+        return tail
+
+    @staticmethod
     def _extract_override_payload(
         text: str, extracted: list[ParsedConstraint]
     ) -> list[ParsedConstraint]:
         """Retain an explicit replacement requirement as soft text evidence."""
-        match = _OVERRIDE_PAYLOAD_RE.search(text)
-        if match is None:
-            return []
-        value = normalize_value(match.group("value"))
-        if not value:
+        payload = MessageParser._override_payload_text(text)
+        value = normalize_value(payload.strip(_PAYLOAD_TRIM)[:_PAYLOAD_LIMIT])
+        if len(value) < 2:
             return []
         payload_terms = {token for token in terms(value) if not token.isdigit()}
         represented_terms = {
