@@ -40,8 +40,11 @@ class RuntimeConfig:
     rerank_enabled: bool = True
     rerank_window: int = 50
     rerank_weight: float = 0.8
-    rerank_buying_weight: float = 0.3
+    # Measured: the rerank stage is worth +0.038 Browsing HitRate and -0.025 on
+    # Buying, where explicit hard constraints already inform the ranker.
+    rerank_buying_weight: float = 0.0
     rerank_backend: str = "phrase"
+    evolution_enabled: bool = True
     rerank_max_length: int = 128
     rerank_asset_dir: str | Path = Path("assets/reranker")
 
@@ -63,6 +66,8 @@ class RuntimeConfig:
             raise TypeError("adaptive_browsing_mmr must be a bool")
         if not isinstance(self.dense_rescue_only, bool):
             raise TypeError("dense_rescue_only must be a bool")
+        if not isinstance(self.evolution_enabled, bool):
+            raise TypeError("evolution_enabled must be a bool")
         if not isinstance(self.rerank_enabled, bool):
             raise TypeError("rerank_enabled must be a bool")
         if isinstance(self.rerank_window, bool) or not isinstance(
