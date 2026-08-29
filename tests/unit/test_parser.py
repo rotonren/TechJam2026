@@ -624,3 +624,19 @@ def test_amazon_root_taxonomy_variants_are_not_hard_categories(taxonomy):
         item.attribute == "category" and item.is_hard
         for item in result.constraints
     )
+
+
+@pytest.mark.parametrize("spelling", ("grey", "gray"))
+def test_both_colour_spellings_reach_the_canonical_value(spelling):
+    # `extract_attributes` canonicalizes the catalog side to "gray", so a
+    # shopper writing "grey" must resolve to the same value rather than to
+    # nothing. 2,017 of the 50,000 catalog products spell it "grey".
+    result = MessageParser().parse(
+        f"For that, what matters is: color: {spelling}.",
+        turn=2,
+        expected_attribute="color",
+    )
+
+    assert ("color", "gray") in {
+        (item.attribute, item.value) for item in result.constraints
+    }
