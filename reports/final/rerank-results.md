@@ -160,8 +160,9 @@ is zero. The automated suite passes 965 tests with 7 skipped, and Ruff passes
 across `src`, `tests`, and `tools`.
 
 The sealed audit fold, the three-trial release benchmark, and the frozen-input
-and delivery-contract checks recorded at `c0d444fa` were **not** re-run for
-this runtime.
+checks were **not** re-run at the time this section was written. They have since
+been re-run at `900500b`: sealed fold 5 scores `0.834997` and the frozen-input
+check passes 9/9. See `validation-evidence.md`.
 
 ## Hosted LLM listwise reranking: measured, not shipped
 

@@ -61,8 +61,12 @@ The runtime never sends network requests or reads credentials.
 ## Evaluation Discipline
 
 The 200 public sessions are deterministically stratified by scenario and
-difficulty into five folds. Folds 1-4 selected commit `4c41adf` using
-`mean(TechnicalScore) - 0.5 * std(TechnicalScore)` (`0.500756`). The candidate
-was tagged `compasscart-v2-candidate` before fold 5 was viewed; fold 5 was then
-run once without further code tuning. The official evaluator and catalog are
-never modified.
+difficulty into five folds. Folds 1-4 are the tuning folds: every experiment in
+this round was read on them, and they select a candidate by
+`mean(TechnicalScore) - 0.5 * std(TechnicalScore)` (`0.799373`, from mean
+`0.812211` and std `0.025676`). Fold 5 was sealed at the start of the round and
+run once after the configuration was frozen. It scores `0.834997` - above both
+the tuning-fold mean and the all-200 score of `0.822490`, so the round's gain is
+not a memorised public set. The official evaluator, dataset, and assets are
+never modified; `python -m tools.verify_frozen_inputs` checks all nine
+byte-for-byte against the organizer's originals.

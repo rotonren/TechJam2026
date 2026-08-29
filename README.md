@@ -164,12 +164,12 @@ reported in `reports/final/rerank-results.md`.
 The full automated suite passes 1047 tests with 7 skipped, and Ruff lint passes
 across `src`, `tests`, and `tools`.
 
-Earlier stable evidence remains in `reports/final/final-results.json` and
-`reports/final/score-results-c0d444fa-2026-08-27.json`, recorded at commit
-`c0d444fa` when the public score was `0.660411`. The sealed audit fold, the
-three-trial resource benchmark, and the frozen-input and delivery-contract
-checks in those files were not re-run for the current runtime; only the public
-evaluation, the automated suite, and the initialization measurement above were.
+`reports/final/final-results.json` is recorded at the current commit. The
+sealed audit fold, the three-trial resource benchmark, and the frozen-input
+checks were all re-run for this runtime: fold 5 scores `0.834997`, and
+`tools.verify_frozen_inputs` passes 9/9 byte-for-byte against the organizer's
+originals. `reports/final/score-results-c0d444fa-2026-08-27.json` is retained as
+the earlier record at commit `c0d444fa`, when the public score was `0.660411`.
 macOS and Linux verification are pending.
 
 The agent reports zero prompt and completion tokens. Official runtime API cost

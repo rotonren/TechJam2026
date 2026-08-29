@@ -1,92 +1,130 @@
 {
   "schema_version": 1,
-  "recorded_at": "2026-08-27T23:35:52+08:00",
+  "recorded_at": "2026-08-29T20:14:03+08:00",
   "candidate": {
-    "tag": "compasscart-final-stable",
-    "commit": "c0d444fa6f53b8b91d8b268f0f7273737eb78cd0",
-    "runtime_commit": "c0d444fa6f53b8b91d8b268f0f7273737eb78cd0",
-    "config_hash": "5a4aea6fd43059c4891946500a5d986013e8fd1fd09f62520875a197fe5bc5e5"
+    "tag": null,
+    "commit": "900500b5953a5028523478c53c06f95dc1e409d6",
+    "runtime_commit": "900500b5953a5028523478c53c06f95dc1e409d6",
+    "config_hash": "fe4a3a9bb7f5cade96f0d72193dabdef8a1b8a703d6e904762befbcc4a38d86c",
+    "runtime_hash": "e3c24eeee1c1ead063f1600e93db1c06f58c1b0f73cebb8b19838b63a27877bd"
   },
   "official_starter_baseline": {
     "sample_count": 200,
     "hit_rate_at_10": 0.125,
     "mrr": 0.068034,
     "mttc": 9.81,
-    "recommended_technical_score": 0.10671
+    "recommended_technical_score": 0.10671,
+    "note": "Organizer starter agent. Constant; not re-run at this commit."
   },
   "official_public_evaluation": {
     "sample_count": 200,
-    "hit_rate_at_10": 0.84,
-    "mrr": 0.376036,
-    "mttc": 4.62,
-    "efficiency": 0.638,
-    "recommended_technical_score": 0.660411,
+    "hit_rate_at_10": 0.965,
+    "mrr": 0.580968,
+    "mttc": 2.715,
+    "efficiency": 0.8285,
+    "recommended_technical_score": 0.82249,
     "scenario_metrics": {
       "boundary": {
         "sample_count": 10,
-        "hit_rate_at_10": 0.9,
-        "mrr": 0.392619,
-        "mttc": 5.0
+        "hit_rate_at_10": 1.0,
+        "mrr": 0.504563,
+        "mttc": 3.0
       },
       "browsing": {
         "sample_count": 80,
-        "hit_rate_at_10": 0.85,
-        "mrr": 0.344018,
-        "mttc": 4.6
+        "hit_rate_at_10": 0.975,
+        "mrr": 0.635481,
+        "mttc": 2.65
       },
       "buying": {
         "sample_count": 80,
-        "hit_rate_at_10": 0.8625,
-        "mrr": 0.395208,
-        "mttc": 3.775
+        "hit_rate_at_10": 0.9625,
+        "mrr": 0.506042,
+        "mttc": 2.05
       },
       "intent_override": {
         "sample_count": 30,
-        "hit_rate_at_10": 0.733333,
-        "mrr": 0.404762,
-        "mttc": 6.8
+        "hit_rate_at_10": 0.933333,
+        "mrr": 0.660873,
+        "mttc": 4.566667
       }
     },
-    "comparison_to_previous_stable": {
-      "commit": "b641ff97b0f4d7ae0c2fc7646e250492370231bd",
-      "technical_score_delta": 0.0,
-      "result": "identical"
+    "comparison_to_round_start": {
+      "commit": "4f56f2fd2a463ff08dafab41e32bc0a607e1776c",
+      "recommended_technical_score": 0.761209,
+      "technical_score_delta": 0.061281
+    }
+  },
+  "cross_validation": {
+    "seed": 2026,
+    "fold_count": 5,
+    "sessions_per_fold": 40,
+    "tuning_folds": {
+      "folds": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "per_fold_technical_score": {
+        "1": 0.817467,
+        "2": 0.824997,
+        "3": 0.769402,
+        "4": 0.836976
+      },
+      "mean_technical_score": 0.812211,
+      "std_technical_score": 0.025676,
+      "selection_score": 0.799373
+    },
+    "learning_layer_disabled_control": {
+      "mean_technical_score": 0.792743,
+      "selection_score": 0.783329,
+      "mean_delta_vs_enabled": 0.019468,
+      "note": "Net gain in 3 of 4 folds; fold 3 is -0.001878."
     }
   },
   "sealed_audit_fold": {
+    "fold": 5,
     "run_count": 1,
-    "sample_count": 394,
-    "hit_rate_at_10": 0.637056,
-    "mrr": 0.282756,
-    "mttc": 6.139594,
-    "efficiency": 0.486041,
-    "recommended_technical_score": 0.500563,
+    "sample_count": 40,
+    "hit_rate_at_10": 0.975,
+    "mrr": 0.618323,
+    "mttc": 2.9,
+    "efficiency": 0.81,
+    "recommended_technical_score": 0.834997,
     "fallback_count": 0,
-    "invalid_response_count": 0
+    "note": "Sealed at the start of the round; opened once after the configuration was frozen."
   },
   "public_trace_evidence": {
-    "attempted_response_count": 892,
-    "trace_count": 892,
+    "attempted_response_count": 536,
+    "trace_count": 536,
     "trace_call_count_consistent": true,
     "fallback_count": 0
   },
   "resource_measurements": {
-    "trial_count": 3,
+    "method": "single process, agent constructed directly, Windows K32GetProcessMemoryInfo",
+    "trial_count": 1,
     "dense_available": true,
-    "fallback_count": 0,
-    "p95_response_latency_ms": 183.692,
-    "maximum_response_latency_ms": 529.531,
-    "initialization_ms": 13219.807,
-    "peak_working_set_mib": 557.008,
-    "p95_change_vs_r0_pct": -58.069803,
-    "accepted": true
+    "initialization_ms": 19218.6,
+    "peak_working_set_mib": 440.7,
+    "turn_latency_ms_median": 100.7,
+    "turn_latency_ms_max": 105.3,
+    "cv_p95_response_latency_ms_range": [
+      190.0,
+      322.5
+    ],
+    "three_trial_proxy_benchmark_rerun": false,
+    "note": "tools.benchmark_release needs the proxy-dataset pipeline and was not re-run at this commit."
   },
   "verification": {
-    "automated_tests_passed": 891,
+    "automated_tests_passed": 1047,
     "automated_tests_skipped": 7,
+    "contract_tests_passed": 14,
     "frozen_input_checks_passed": 9,
-    "delivery_contract_checks_passed": 51,
+    "frozen_inputs_byte_identical_to_organizer_kit": true,
     "ruff": "passed",
+    "verified_from_clean_github_clone": true,
+    "linux": "pending",
     "macos": "pending"
   },
   "usage_and_cost": {
@@ -94,16 +132,22 @@
     "completion_tokens": 0,
     "total_tokens": 0,
     "runtime_api_cost_usd": 0.0,
-    "private_800_sample_estimated_api_cost_usd": 0.0
+    "private_800_sample_estimated_api_cost_usd": 0.0,
+    "network_calls": 0
   },
   "selection": {
-    "accepted_runtime": "stable P0 behavior",
-    "rejected_stages": [
-      "S1",
-      "S2",
-      "S3",
-      "S4"
+    "shipped_configuration": "phrase rerank on Browsing, route-conditioned policy memory, per-turn strategy selection",
+    "measured_but_not_shipped": [
+      "llm rerank on Buying (+0.004341, needs credentials)",
+      "onnx cross-encoder (-0.007, window-confounded)"
     ],
-    "s5": "deferred for accelerated stable delivery"
+    "rejected": [
+      "window-local IDF (-0.011)",
+      "relax strategy (-0.010)",
+      "constraint-count disclosure signal (-0.015)",
+      "grouped model prompt (-0.003)",
+      "state-selected prompt (+0.0002)",
+      "layered catalog discovery (0.000, +92.7s startup)"
+    ]
   }
 }

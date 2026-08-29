@@ -151,6 +151,11 @@ Buying `-0.025`。Buying 轮次本身已经带着明确的硬约束,排序器信
 | 默认 | 749.7 MiB | 409.6 MiB | 24418 ms | 0.822490 |
 | `COMPASSCART_DISABLE_DENSE=1` | 593.2 MiB | 353.7 MiB | 19653 ms | 0.822490 |
 
+上表在本轮早期用带评测框架的方式测得。在当前 commit `900500b` 上单独测 agent 进程
+(直接构造 `Agent`,不带评测框架):初始化 `19218.6 ms`,峰值工作集 `440.7 MiB`,
+单轮延迟中位数 `100.7 ms`。和上表"仅 agent"那一列一致(409.6 → 440.7,本轮新增了
+三个阶段的代码)。
+
 峰值里大约 240 MiB 是评测框架自己那份目录副本,任何提交都要付这个成本。
 稠密召回被限定为"语义救援"用途,在公开集的 536 轮里一次都没触发过,
 这就是关掉它分数完全一致的原因 —— 保留它是因为私有集可能会走到救援路径。
@@ -172,7 +177,7 @@ $env:PYTHONPATH = "src;."
 | Lint | `python -m ruff check src tests tools` |
 | 冻结输入校验 | `python -m tools.verify_frozen_inputs` |
 | 交叉验证 | `python -m tools.run_cv --folds 1 2 3 4 5 --seed 2026` |
-| 资源基准 | `python -m tools.benchmark_release --trials 3` |
+| 资源基准 | 两步:先 `--capture-transcript --proxy-root <dir> --output t.json`,再 `--transcript t.json --trials 3 --output bench.json` |
 
 ## 接下来读哪些
 
