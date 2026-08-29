@@ -35,7 +35,7 @@ unavailable.
 | Intent Override | Goal-level overrides clear obsolete text/questions; attribute-level corrections replace only the named slot |
 | Browsing utility | Profile-aware broad recall and conversion-gain clarification |
 | Reliability | Shared hard-filter matcher, disclosed relaxation evidence, bounded state/traces, component fallbacks, valid-ID filtering |
-| Self-evolution | Cross-session question-yield memory, ablatable, prior-preserving under a per-session harness; it corrected our hand-written `feature` prior from `0.70` to `0.946` and `budget` from `0.90` to `0.288` |
+| Self-evolution | Cross-session question-yield memory, ablatable, prior-preserving under a per-session harness; it corrected our hand-written `feature` prior from `0.70` to `0.955` and `budget` from `0.90` to `0.300`, and found that `use_case` is answerable on the Buying route and never on Browsing |
 | Feasibility | CPU ONNX int8 assets, 45 MiB runtime asset set, zero API cost, offline operation; full-catalog dense smoke was 504 MiB working set after one response |
 | Reproducibility | Deterministic CV, tagged candidate and sealed audit fold, checksummed assets, deterministic allowlist ZIP |
 

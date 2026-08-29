@@ -57,15 +57,15 @@ On the unchanged 200-session official public evaluator:
 
 | Metric | Starter | CompassCart |
 | --- | ---: | ---: |
-| TechnicalScore | 0.106710 | **0.800849** |
-| HitRate@10 | 0.125 | 0.9400 |
-| MRR | 0.068034 | 0.560163 |
-| MTTC | 9.81 | 2.860 |
+| TechnicalScore | 0.106710 | **0.822490** |
+| HitRate@10 | 0.125 | 0.9650 |
+| MRR | 0.068034 | 0.580968 |
+| MTTC | 9.81 | 2.715 |
 
 Scenario HitRate@10 is `0.9000` Boundary, `0.9625` Browsing, `0.9375` Buying,
-and `0.9000` Intent Override. Initialization is `19.6 s` and a 200-session run
+and `0.9333` Intent Override. Initialization is `19.6 s` and a 200-session run
 takes `89.9 s`. Reported token usage is zero, so the estimated API cost for the
-800-session private set is USD 0.00. The automated suite passes 990 tests.
+800-session private set is USD 0.00. The automated suite passes 1006 tests.
 
 Two ideas were measured and thrown away rather than shipped. Weighting the
 rerank by window-local inverse document frequency cost `-0.011`, because the
@@ -91,11 +91,12 @@ literal zero disclosure rate and the ablation came out at `-0.015`. Scoring the
 refusal marker instead - the distinction the simulator actually makes - turned
 it into `+0.017`.
 
-That gain is not free everywhere. Sharper question selection costs Intent
-Override two hits, from `0.9667` to `0.9000`, while lifting Browsing to
-`0.9625` and cutting mean turns to conversion from `3.380` to `2.860`. Making
-the memory route-aware, as the rerank stage already is, is the obvious next
-step.
+The memory also had to learn per route, not in aggregate. Pooling both routes
+cost a session; conditioning on the retrieval route recovered it, because the
+same question is not the same question on both. `use_case` is answered 44% of
+the time on the Buying route and never on Browsing - a shopper still exploring
+has not yet formed a view on what the item is for. Nothing in the code knows
+that; it came out of 303 observations.
 
 ## Team Contributions
 
