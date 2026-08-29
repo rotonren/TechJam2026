@@ -61,6 +61,7 @@ class QuestionPolicy:
                 candidate_attributes,
                 probabilities,
                 state.turn,
+                state.route,
                 state.profile_segment,
             )
             for attribute in _ATTRIBUTES
@@ -91,6 +92,7 @@ class QuestionPolicy:
         candidate_attributes: list[dict[str, tuple[str, ...]]],
         probabilities: list[float],
         turn: int,
+        context: str = "",
         segment: str = "",
     ) -> float:
         partitions: dict[str, list[int]] = defaultdict(list)
@@ -121,7 +123,9 @@ class QuestionPolicy:
         remaining_turn_factor = max((11 - max(turn, 1)) / 10.0, 0.1)
         # The response likelihood is the estimate the memory refines: it starts
         # at the hand-written prior and moves only with observed evidence.
-        likelihood = self.memory.likelihood(attribute, segment=segment)
+        likelihood = self.memory.likelihood(
+            attribute, context=context, segment=segment
+        )
         return gain * coverage_mass * likelihood * remaining_turn_factor
 
     @staticmethod

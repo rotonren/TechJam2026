@@ -93,6 +93,56 @@ def test_segment_is_ignored_until_it_has_enough_evidence():
     assert memory.likelihood("size", segment="fit") > thin
 
 
+def test_route_context_refines_the_pooled_estimate():
+    memory = PolicyMemory(prior_strength=4.0, segment_floor=10)
+    # The same question behaves differently depending on where it is asked.
+    for _ in range(20):
+        memory.observe("size", True, context="browsing")
+        memory.observe("size", False, context="buying")
+
+    browsing = memory.likelihood("size", context="browsing")
+    buying = memory.likelihood("size", context="buying")
+    pooled = memory.likelihood("size")
+
+    assert browsing > pooled > buying
+
+
+def test_thin_route_evidence_does_not_override_the_pool():
+    memory = PolicyMemory(prior_strength=4.0, segment_floor=10)
+    for _ in range(20):
+        memory.observe("size", True)
+    memory.observe("size", False, context="buying")
+
+    assert memory.likelihood("size", context="buying") == memory.likelihood("size")
+
+
+def test_route_and_segment_refine_in_order():
+    memory = PolicyMemory(prior_strength=4.0, segment_floor=4)
+    for _ in range(10):
+        memory.observe("size", False, context="buying", segment="fit")
+    for _ in range(10):
+        memory.observe("size", True, context="buying", segment="warmth")
+
+    # Both segments sit inside the same route, so the route figure is their
+    # average while each segment pulls away from it in its own direction.
+    route = memory.likelihood("size", context="buying")
+    assert memory.likelihood("size", context="buying", segment="fit") < route
+    assert memory.likelihood("size", context="buying", segment="warmth") > route
+
+
+def test_snapshot_reports_route_contexts():
+    memory = PolicyMemory()
+    memory.observe("size", True, context="browsing")
+
+    contexts = memory.snapshot()["contexts"]
+
+    assert contexts["browsing"]["size"] == {
+        "asked": 1,
+        "disclosed": 1,
+        "observed_rate": 1.0,
+    }
+
+
 def test_segment_table_is_bounded():
     memory = PolicyMemory(max_segments=2)
     for index in range(5):

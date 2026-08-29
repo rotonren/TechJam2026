@@ -100,40 +100,75 @@ class PolicyMemory:
             "COMPASSCART_DISABLE_EVOLUTION"
         ) != "1"
         self._global: dict[str, YieldStat] = {}
+        self._contexts: dict[str, dict[str, YieldStat]] = {}
         self._segments: dict[str, dict[str, YieldStat]] = {}
 
     def observe(
-        self, attribute: str, disclosed: bool, *, segment: str = ""
+        self,
+        attribute: str,
+        disclosed: bool,
+        *,
+        context: str = "",
+        segment: str = "",
     ) -> None:
-        """Record whether asking `attribute` produced a new requirement."""
+        """Record whether asking `attribute` produced a new requirement.
+
+        `context` is where the question was asked - the retrieval route, in
+        practice. A Buying turn and a Browsing turn are not asking the same
+        question even when they name the same attribute, so their evidence is
+        kept apart as well as pooled.
+        """
         if not self.enabled or not attribute:
             return
         self._global[attribute] = self._global.get(attribute, YieldStat()).observe(
             disclosed
         )
-        if not segment:
+        # Routes are a closed set, so the context table needs no bound; segment
+        # signatures come from data and do.
+        self._record(self._contexts, context, attribute, disclosed, bound=None)
+        self._record(
+            self._segments, segment, attribute, disclosed, bound=self.max_segments
+        )
+
+    @staticmethod
+    def _record(
+        table: dict[str, dict[str, YieldStat]],
+        key: str,
+        attribute: str,
+        disclosed: bool,
+        *,
+        bound: int | None,
+    ) -> None:
+        if not key:
             return
-        bucket = self._segments.get(segment)
+        bucket = table.get(key)
         if bucket is None:
-            if len(self._segments) >= self.max_segments:
+            if bound is not None and len(table) >= bound:
                 return
             bucket = {}
-            self._segments[segment] = bucket
+            table[key] = bucket
         bucket[attribute] = bucket.get(attribute, YieldStat()).observe(disclosed)
 
-    def likelihood(self, attribute: str, *, segment: str = "") -> float:
-        """Posterior probability that asking `attribute` discloses something."""
-        prior = self.prior.get(attribute, 0.70)
+    def likelihood(
+        self, attribute: str, *, context: str = "", segment: str = ""
+    ) -> float:
+        """Posterior probability that asking `attribute` discloses something.
+
+        The estimate is refined in order of how much evidence stands behind it:
+        the pooled figure first, then the route, then the shopper segment. Each
+        refinement only applies once its own bucket clears the floor, so a thin
+        slice never overrides a well-supported one.
+        """
+        estimate = self.prior.get(attribute, 0.70)
         if not self.enabled:
-            return prior
-        overall = self._posterior(self._global.get(attribute), prior)
-        bucket = self._segments.get(segment) if segment else None
-        stat = bucket.get(attribute) if bucket else None
-        # A segment only overrides the global estimate once it has enough
-        # observations of its own; below that it is noise, not personalization.
-        if stat is not None and stat.asked >= self.segment_floor:
-            return self._posterior(stat, overall)
-        return overall
+            return estimate
+        estimate = self._posterior(self._global.get(attribute), estimate)
+        for table, key in ((self._contexts, context), (self._segments, segment)):
+            bucket = table.get(key) if key else None
+            stat = bucket.get(attribute) if bucket else None
+            if stat is not None and stat.asked >= self.segment_floor:
+                estimate = self._posterior(stat, estimate)
+        return estimate
 
     def _posterior(self, stat: YieldStat | None, prior: float) -> float:
         if stat is None or stat.asked == 0:
@@ -156,6 +191,17 @@ class PolicyMemory:
                     "posterior": round(self.likelihood(attribute), 6),
                 }
                 for attribute, stat in sorted(self._global.items())
+            },
+            "contexts": {
+                key: {
+                    attribute: {
+                        "asked": stat.asked,
+                        "disclosed": stat.disclosed,
+                        "observed_rate": round(stat.rate, 6),
+                    }
+                    for attribute, stat in sorted(bucket.items())
+                }
+                for key, bucket in sorted(self._contexts.items())
             },
             "segment_count": len(self._segments),
         }
