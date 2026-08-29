@@ -12,6 +12,7 @@ from .constraints import hard_constraint_violations
 from .dense import NullDenseBackend, load_dense_backend
 from .evolution import PolicyMemory, profile_segment
 from .models import Candidate, QuestionDecision, RetrievalPlan, SessionState
+from .orchestration import StrategyDecision, StrategySelector
 from .parser import MessageParser
 from .question_policy import QuestionPolicy
 from .ranker import ConstraintRanker
@@ -70,6 +71,7 @@ class CompassCartAgent:
             buying_weight=self.config.rerank_buying_weight,
         )
         self.memory = PolicyMemory(enabled=self.config.evolution_enabled)
+        self.strategy = StrategySelector(enabled=self.config.strategy_enabled)
         self.question_policy = QuestionPolicy(self.catalog.attributes, self.memory)
         self.response_builder = ResponseBuilder(
             self.catalog.valid_ids,
@@ -129,6 +131,7 @@ class CompassCartAgent:
 
         query_text = self._query_text(user_message, state)
         is_override = state.intent_version > old_version or state.override_scope != "none"
+        strategy = StrategyDecision()
         try:
             plan = self.router.build_plan(state, query_text, is_override=is_override)
             state.route = plan.route
@@ -186,6 +189,14 @@ class CompassCartAgent:
             except Exception:  # noqa: BLE001 - recommendations do not require a question.
                 fallbacks.append("question")
                 question = QuestionDecision(None)
+            try:
+                strategy = self.strategy.select(
+                    state, structured_question=question.ask_attribute
+                )
+                if strategy.open_question:
+                    question = QuestionDecision("other", 1.0)
+            except Exception:  # noqa: BLE001 - keep the structured decision.
+                fallbacks.append("strategy")
         if (
             question.ask_attribute
             and question.ask_attribute not in state.asked_attributes
@@ -231,6 +242,8 @@ class CompassCartAgent:
                 "ask_attribute": question.ask_attribute,
                 "dense_status": dense_status,
                 "rerank_status": getattr(self.reranker.backend, "status", "unknown"),
+                "strategy": strategy.name,
+                "strategy_reason": strategy.reason,
                 "stall_count": state.stall_count,
                 "unproductive_attributes": sorted(state.unproductive_attributes),
                 "fallbacks": fallbacks,
@@ -278,7 +291,10 @@ class CompassCartAgent:
             state.unproductive_attributes.add(asked_attribute)
         try:
             self.memory.observe(
-                asked_attribute, disclosed, segment=state.profile_segment
+                asked_attribute,
+                disclosed,
+                context=state.route,
+                segment=state.profile_segment,
             )
         except Exception:  # noqa: BLE001 - learning must never break a turn.
             # Stop learning rather than risk a partially updated estimate; the

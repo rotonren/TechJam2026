@@ -45,6 +45,7 @@ class RuntimeConfig:
     rerank_buying_weight: float = 0.0
     rerank_backend: str = "phrase"
     evolution_enabled: bool = True
+    strategy_enabled: bool = True
     rerank_max_length: int = 128
     rerank_asset_dir: str | Path = Path("assets/reranker")
 
@@ -66,6 +67,8 @@ class RuntimeConfig:
             raise TypeError("adaptive_browsing_mmr must be a bool")
         if not isinstance(self.dense_rescue_only, bool):
             raise TypeError("dense_rescue_only must be a bool")
+        if not isinstance(self.strategy_enabled, bool):
+            raise TypeError("strategy_enabled must be a bool")
         if not isinstance(self.evolution_enabled, bool):
             raise TypeError("evolution_enabled must be a bool")
         if not isinstance(self.rerank_enabled, bool):

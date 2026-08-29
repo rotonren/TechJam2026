@@ -208,3 +208,42 @@ def test_disabled_evolution_records_nothing(fixture_catalog_path):
 
     assert agent.memory.enabled is False
     assert agent.memory.snapshot()["observations"] == 0
+
+
+def test_an_open_question_replaces_a_turn_that_would_ask_nothing(
+    fixture_catalog_path,
+):
+    """The strategy layer's whole value is turns that would collect nothing."""
+    agent = Agent(fixture_catalog_path)
+    agent.reset("open", {"preference_tags": []})
+    agent.respond("open", "I'm looking for shoes, but I'm still exploring.", 1, 10)
+
+    # A large pool with no structured question worth asking is the trigger.
+    state = agent.sessions.get("open")
+    state.candidate_count = 500
+    decision = agent.strategy.select(state, structured_question=None)
+
+    assert decision.name == "open_probe"
+    assert decision.open_question is True
+
+
+def test_the_strategy_layer_can_be_switched_off(fixture_catalog_path):
+    agent = Agent(fixture_catalog_path, config=RuntimeConfig(strategy_enabled=False))
+    agent.reset("plain", {"preference_tags": []})
+    agent.respond("plain", "I'm looking for shoes, but I'm still exploring.", 1, 10)
+    agent.sessions.get("plain").candidate_count = 500
+
+    agent.respond("plain", "Those options are not quite right yet.", 2, 10)
+
+    assert agent.traces.records[-1]["strategy"] == "probe"
+
+
+def test_every_turn_records_which_strategy_ran(fixture_catalog_path):
+    agent = Agent(fixture_catalog_path)
+    agent.reset("traced", {"preference_tags": []})
+
+    agent.respond("traced", "I'm looking for shoes, but I'm still exploring.", 1, 10)
+
+    trace = agent.traces.records[-1]
+    assert trace["strategy"] in {"probe", "open_probe", "exploit"}
+    assert isinstance(trace["strategy_reason"], str)
