@@ -1,242 +1,213 @@
-# How the Design Arrived Here
+# 这套设计是怎么走到今天这一步的
 
-Written for the team. Every number below comes from the unchanged official
-evaluator over the frozen 200-session public set. The point of this document is
-not the final score; it is the order the decisions were made in, and what each
-measurement ruled out.
+写给团队看。下面每一个数字都来自未经修改的官方评测器,跑在冻结的 200 会话公开集上。
+这份文档的重点不是最终分数,而是**这些决策是按什么顺序做出来的**,
+以及每一次测量各自排除了什么。
 
-## The lineage
-
-```
-0.761209  ─ starting point (4f56f2f)
-     │
-     │  oracle probe: retrieval is not the bottleneck
-     ▼
-0.771831  ─ phrase-adjacency rerank, one weight for every route      +0.0106
-     │
-     │  the same stage helps Browsing and hurts Buying
-     ▼
-0.783514  ─ rerank on Browsing only                                  +0.0223
-     │
-     │  the question priors were never checked against anything
-     ▼
-0.800849  ─ cross-session policy memory, pooled                      +0.0173
-     │
-     │  the same question is not the same question on both routes
-     ▼
-0.804724  ─ policy memory conditioned on route                       +0.0212
-     │
-     │  a turn with no worthwhile question is a wasted turn
-     ▼
-0.822490  ─ per-turn strategy selection            SHIPPED DEFAULT   +0.0613
-     │
-     └─── optional, needs credentials ───▶ 0.826831  LLM rerank      +0.0043
-```
-
-Rejected along the way, each measured rather than argued:
+## 脉络
 
 ```
-window-local IDF weighting             -0.011     structurally wrong
-ONNX cross-encoder backend             -0.007     confounded, see below
-`relax` strategy                       -0.010     conditioned on the wrong thing
-constraint-count disclosure signal     -0.015     measured the parser, not the shopper
-grouped model prompt                   -0.003     labels were inverted, then still worse
-state-selected prompt                  +0.0002    gains did not compose
-layered catalog discovery              ±0.000     and cost 92.7s of startup
+0.761209  ─ 起点 (4f56f2f)
+     │
+     │  oracle 探针:瓶颈不在召回
+     ▼
+0.771831  ─ 短语邻接重排,所有路由用同一个权重           +0.0106
+     │
+     │  同一个阶段在 Browsing 上帮忙,在 Buying 上帮倒忙
+     ▼
+0.783514  ─ 只在 Browsing 上重排                        +0.0223
+     │
+     │  问题先验从来没有被任何东西校验过
+     ▼
+0.800849  ─ 跨会话策略记忆,汇总统计                     +0.0173
+     │
+     │  同一个问题在两条路由上并不是同一个问题
+     ▼
+0.804724  ─ 策略记忆按路由分开                          +0.0212
+     │
+     │  没有值得问的问题的那一轮,是白白浪费掉的
+     ▼
+0.822490  ─ 每轮策略选择                默认发布配置    +0.0613
+     │
+     └─── 可选,需要凭据 ───▶ 0.826831  LLM 重排        +0.0043
 ```
 
-## Step 1 — Measure the ceiling before building anything
+一路上被否决的方案,每一个都是实测出来的,不是讨论出来的:
 
-The first thing built was not a feature. It was an oracle probe that
-instrumented `HybridRetriever` and `ConstraintRanker` to record where the target
-product sat at each stage, across all 200 sessions and 691 turns.
+```
+窗口内 IDF 加权                        -0.011     结构上就是错的
+ONNX 交叉编码器后端                    -0.007     有混淆变量,见下文
+`relax` 策略                           -0.010     条件挂在了错的东西上
+约束计数式的信息披露信号               -0.015     量的是解析器,不是买家
+分组式模型 prompt                      -0.003     标签说反了,改对之后依然更差
+按状态选择 prompt                      +0.0002    收益不叠加
+分层目录发现                           ±0.000     而且要多花 92.7 秒启动
+```
 
-| Recall of the target in the retrieval output | @10 | @20 | @50 | @100 | any |
+## 第 1 步 —— 写任何代码之前,先测天花板
+
+第一件做出来的东西不是功能,是一个 oracle 探针。它给 `HybridRetriever` 和
+`ConstraintRanker` 加了埋点,记录目标商品在每个阶段所处的位置,覆盖全部 200 个会话、
+691 轮对话。
+
+| 目标商品在召回结果中的命中率 | @10 | @20 | @50 | @100 | 任意位置 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| All 200 sessions | 0.840 | 0.925 | 0.960 | 0.980 | 0.990 |
+| 全部 200 会话 | 0.840 | 0.925 | 0.960 | 0.980 | 0.990 |
 
-Two sessions out of two hundred never retrieved the target at all. The target
-was inside the final top-10 in 186 sessions but at rank 1 in only 64.
+两百个会话里只有两个从头到尾就没召回到目标。目标进入最终 top-10 的有 186 个会话,
+但排在第 1 位的只有 64 个。
 
-**Retrieval was not the problem. Ordering was.** That single table decided the
-next three days: no work went into recall, and every accepted change targeted
-position.
+**瓶颈不在召回,在排序。** 就这一张表决定了接下来三天:没有任何工作投入到提高召回上,
+每一项被采纳的改动针对的都是位置。
 
-## Step 2 — Add the signal the pipeline could not express
+## 第 2 步 —— 补上流水线无法表达的那个信号
 
-Fusion and constraint scoring both work at term level. A requirement stated as
-a contiguous phrase scores no better against a product whose title contains
-that exact phrase than against one mentioning the same words far apart.
+融合和约束打分都工作在词级别。一条以连续短语表述的需求,对标题里恰好含有这个短语的商品,
+并不会比对把这几个词散落各处的商品得分更高。
 
-Phrase adjacency closed that gap: `+0.0106`.
+短语邻接补上了这个缺口:`+0.0106`。
 
-## Step 3 — Notice that one stage was doing two opposite things
+## 第 3 步 —— 发现同一个阶段在做两件相反的事
 
-Per scenario, the same stage measured:
+按场景拆开看,同一个阶段的效果是:
 
-| Scenario | Hit@10 | MRR |
+| 场景 | Hit@10 | MRR |
 | --- | ---: | ---: |
 | Browsing | **+0.0375** | **+0.1006** |
 | Buying | −0.0250 | −0.0180 |
 
-A Buying turn already carries explicit hard constraints, so the constraint
-ranker is well informed and reordering it destroys good work. Turning the stage
-off on Buying was worth more than every weight and window sweep combined:
-`0.771831 → 0.783514`.
+Buying 轮次本身已经带着明确的硬约束,所以排序器信息充分,这时候再重排就是在破坏
+已有的正确结果。**在 Buying 上把这个阶段关掉,收益超过所有权重和窗口调参的总和:**
+`0.771831 → 0.783514`。
 
-This is the first appearance of the pattern that held for the rest of the work:
-**adaptation pays when it is conditioned on a real structural difference.**
+这是那个贯穿后续全部工作的规律第一次出现:
+**自适应只有挂在真实的结构性差异上时才有收益。**
 
-## Step 4 — Check a table nobody had ever checked
+## 第 4 步 —— 去查一张从来没人查过的表
 
-`QuestionPolicy` weighted each candidate clarification by a hand-written
-response likelihood. Every turn supplies the evidence to check it: the agent
-asks about an attribute, and the reply either states a requirement or refuses.
+`QuestionPolicy` 给每个候选澄清问题加权,用的是一张手写的"回答意愿"表。
+而每一轮对话都提供了校验它的证据:agent 问了某个属性,买家的回复要么给出一条需求,
+要么拒绝。
 
-Treating the hand-written value as a prior and updating a posterior was worth
-`+0.0173`, and it corrected the two entries we had backwards:
+把手写值当作先验、更新后验,值 `+0.0173`,并且纠正了我们填反的两项:
 
-| Attribute | Our guess | Observed | Why |
+| 属性 | 我们的猜测 | 实际观测 | 为什么 |
 | --- | ---: | ---: | --- |
-| `feature` | 0.70 | **0.973** | It is the classifier's fallback bucket, so it absorbs everything |
-| `budget` | 0.90 | **0.000** | 77.6% of products record no price at parent level |
-| `size` | 0.85 | 0.167 | 91.3% record no size - a `parent_asin` is not a SKU variant |
+| `feature` | 0.70 | **0.973** | 它是分类器的兜底桶,所以什么都往里装 |
+| `budget` | 0.90 | **0.000** | 77.6% 的商品在父级不记录价格 |
+| `size` | 0.85 | 0.167 | 91.3% 不记录尺码 —— `parent_asin` 不是 SKU 变体 |
 
-The agent inferred a structural fact about the catalog from nothing but which
-of its own questions got answered.
+agent 仅仅通过"自己问出去的问题哪些得到了回答",就推断出了一个关于目录结构的事实。
 
-## Step 5 — Condition the memory too
+## 第 5 步 —— 记忆也要加条件
 
-Pooling both routes into one estimate cost a session. Splitting by route
-recovered it and improved MTTC further, because the same question genuinely is
-not the same question:
+把两条路由混在一起估计,代价是掉了一个会话的分。按路由拆开不但补了回来,
+还进一步改善了 MTTC —— 因为同一个问题确实不是同一个问题:
 
-| Attribute | Browsing | Buying |
+| 属性 | Browsing | Buying |
 | --- | ---: | ---: |
 | `use_case` | 0/5 = 0.000 | 7/16 = 0.438 |
 | `style` | 0/3 = 0.000 | 4/14 = 0.286 |
 
-A shopper still exploring has not yet formed a view on what the item is for.
-One who opened with a hard requirement already has.
+还在逛的买家尚未形成"这东西是拿来干嘛的"的看法。而一上来就提硬需求的买家早就有了。
 
-## Step 6 — Spend the turns that were being wasted
+## 第 6 步 —— 把原本浪费掉的轮次用起来
 
-When the question policy has nothing worth asking, the turn is spent for
-nothing: the shopper answers "ask me about one specific attribute" and
-discloses zero. Asking an open question instead fires eleven times in 536 turns
-and is worth `+0.0178`.
+当提问策略没有任何值得问的问题时,这一轮就白花了:买家回一句
+"你问我某个具体属性吧",信息量为零。改成问开放性问题,在 536 轮里触发十一次,
+值 `+0.0178`。
 
-A third strategy, `relax`, dropped the weakest hard constraint whenever the
-conversation stalled. It lost score monotonically in how often it fired -
-`-0.003` at 53 firings, `-0.010` at 146 - because a stall does not mean the
-filters are wrong. It means the target is hard to find, and the hard
-constraints are quoted from the product itself.
+还有第三种策略 `relax`,在对话卡住时丢掉最弱的那条硬约束。它的掉分幅度随触发次数
+单调增加 —— 触发 53 次时 `-0.003`,触发 146 次时 `-0.010` —— 因为**卡住并不意味着
+过滤条件错了**。它意味着目标本来就难找,而那些硬约束是从商品本身抄下来的。
 
-**Conditioned on route: +0.022, +0.021. Conditioned on "did the last turn
-fail": negative every time.**
+**按路由做条件:+0.022、+0.021。按"上一轮是不是失败了"做条件:每一次都是负的。**
 
-## Step 7 — The LLM, and three wrong conclusions
+## 第 7 步 —— LLM,以及三个错误结论
 
-Pillar I of the brief names LLM semantic ranking, so it was implemented and
-measured rather than assumed. The path was not straight.
+赛题的支柱 I 明确点名了 LLM 语义排序,所以我们把它实现出来实测,而不是靠假设。
+这条路走得并不直。
 
-**The first measurement said `-0.001266`, and it was wrong.** The LLM
-configuration used a rerank window of 20 while the baseline used 50, and the
-window was a stage-level parameter, so lowering it for the model also lowered
-it for the phrase backend on Browsing. An isolation run with no model at all
-measured window 20 at `0.812999` against window 50 at `0.822490`. The window
-alone cost `-0.0095`, and that had been charged to the model. Making the window
-per route turned `-0.001266` into `+0.004341`.
+**第一次测量的结果是 `-0.001266`,而这个数是错的。** LLM 那组配置用的重排窗口是 20,
+而基线用的是 50,并且窗口当时是阶段级参数 —— 给模型调低窗口,也顺带调低了
+Browsing 上短语后端的窗口。一次完全不接模型的隔离实验测出:窗口 20 得 `0.812999`,
+窗口 50 得 `0.822490`。**单是窗口就值 `-0.0095`,而这笔账全算在了模型头上。**
+把窗口改成按路由配置之后,`-0.001266` 变成了 `+0.004341`。
 
-**The explanation offered for it was also wrong.** Boundary was said to suffer
-because those sessions route as Buying and so met the model. Route counts show
-Boundary is routed Browsing on all thirty of its turns; the model never ran on
-it.
+**当时给这个结果编的解释也是错的。** 我曾说 Boundary 场景变差是因为那些会话
+走 Buying 路由、于是撞上了模型。路由计数显示 Boundary 的三十轮**全部**走的是
+Browsing;模型根本没在它上面跑过。
 
-**The structured prompt inverted a label.** Grouping the ledger by role should
-have been strictly better than a token bag - which cannot distinguish a hard
-requirement from a preference, renders a budget of `80.00` as the tokens `80`
-and `00`, and makes a negative constraint read exactly like a positive one. It
-measured worse, because an override's replacement requirement was presented as
-`Preferences (helpful, not required)` on the very turn the shopper said it was
-what they needed. `is_hard=False` on that constraint means *this free text
-cannot safely become a retrieval filter*, not *the shopper is indifferent*.
-Grouping by `source` instead recovered `+0.0025`.
+**结构化 prompt 把一个标签写反了。** 把约束账本按角色分组,理应严格优于词袋 ——
+词袋分不清硬需求和偏好,会把 `80.00` 的预算渲染成 `80` 和 `00` 两个 token,
+还会让否定约束读起来和肯定约束一模一样。但它实测更差,原因是:在买家刚刚说出
+"我要的是这个"的那一轮,override 带来的替换需求被 prompt 归到了
+`Preferences (helpful, not required)` 下面。那条约束上的 `is_hard=False` 的含义是
+*这段自由文本不能安全地变成检索过滤器*,而不是 *买家不在乎*。改成按 `source`
+分组之后,找回了 `+0.0025`。
 
-The cross-encoder's `-0.007` carries the same window confound and has not been
-re-measured. It is reported as measured, not as settled.
+交叉编码器那个 `-0.007` 带着同样的窗口混淆,并且没有重测过。
+它是按"实测到的数字"报告的,不是按"已经定论"报告的。
 
-## Step 8 — Where the layers stopped being independent
+## 第 8 步 —— 各层不再彼此独立的地方
 
-The two prompt forms win on different turns, so taking each where it wins
-should have composed to about `0.832`. It scored `0.827009` - one part in five
-thousand above the flat prompt, which is not a result.
+两种 prompt 形态各自在不同的轮次上占优,所以"哪种赢就用哪种"理论上应该叠加到大约
+`0.832`。实际跑出 `0.827009` —— 比扁平 prompt 高出五千分之一,这不算一个结果。
 
-It also lost `0.067` of Boundary MRR, on a scenario the model never runs on.
-Boundary is served by the phrase backend and nothing about it changed - except
-that reordering Buying candidates changes which clarification gets asked, which
-changes what the cross-session memory learns, which reaches every later
-session.
+它还让 Boundary 的 MRR 掉了 `0.067`,而模型压根没在这个场景上跑过。Boundary 由短语后端
+服务,关于它的一切都没变 —— 除了:重排 Buying 的候选会改变问出哪个澄清问题,
+这会改变跨会话记忆学到什么,而记忆会影响之后的每一个会话。
 
-**The three layers are coupled through the shared memory. A configuration that
-is locally optimal per route is not the sum of the per-route optima.** That is
-the most useful thing this branch produced, and it explains several earlier
-surprises where changing one route moved a scenario it had no contact with.
+**这三层通过共享的记忆耦合在一起。一份按路由各自局部最优的配置,并不等于各路由最优的加和。**
+这是这条分支产出的最有用的一条结论,它也解释了此前好几次"改了一条路由,
+却让一个跟它没有接触的场景动了"的意外。
 
-## Step 9 — Check whether any of it generalizes
+## 第 9 步 —— 检验这些东西到底能不能推广
 
-Everything above was read off the same 200 sessions it was tuned on. So one
-fold of 40 was sealed at the start of the round and opened once, at the end,
-after the configuration was frozen.
+上面所有内容都是在同一批用来调参的 200 个会话上读出来的。所以有一折 40 个会话
+在这一轮开始时就被封存,直到最后配置冻结之后才开封,只跑一次。
 
 | | TechnicalScore |
 | --- | ---: |
-| Tuning folds 1-4, mean | 0.812211 |
-| All 200 sessions | 0.822490 |
-| **Fold 5, sealed** | **0.834997** |
+| 调参折 1–4 均值 | 0.812211 |
+| 全量 200 会话 | 0.822490 |
+| **第 5 折,密封** | **0.834997** |
 
-The sealed fold scored above both. Separately, disabling the learning layer
-under the same folds costs `-0.019468`, so the memory works on 40 sessions and
-is not living off the accumulated public set.
+密封折比这两个数都高。另外,在同样这四折上关掉学习层会掉 `-0.019468`,
+说明记忆层在 40 个会话上就已经起作用,不是靠攒满整个公开集吃老本。
 
-Neither result certifies a `+0.004` decision - the tuning folds alone span
-0.769 to 0.837. They certify that the `+0.061` of accepted change did not come
-from memorizing the public set. Full tables in `validation-evidence.md`.
+这两个结果都不足以为一个 `+0.004` 的决策背书 —— 光是调参折自己就从 0.769 跨到 0.837。
+它们能证明的是:被采纳的这 `+0.0613` 不是把公开集背下来的结果。
+完整表格见 `validation-evidence.md`。
 
-## What generalizes
+## 能带出这个项目的经验
 
-**Measure the ceiling first.** The oracle probe took thirty minutes and decided
-three days of work. Without it, the obvious move would have been to improve
-recall, which was already at 99%.
+**先测天花板。** 那个 oracle 探针花了三十分钟,决定了三天的工作方向。没有它,
+最顺手的动作就是去提高召回 —— 而召回已经是 99% 了。
 
-**Isolate one variable.** Violating this produced a confidently wrong
-conclusion that stood for several hours and would have gone into the report.
-The controls that caught it cost 90 seconds each.
+**一次只隔离一个变量。** 违反这一条,直接产出了一个自信但错误的结论,
+它存活了好几个小时,差点写进报告。抓住它的对照实验,每个只要九十秒。
 
-**Adaptation needs a real structural difference to condition on.** Route works.
-"The last turn failed" does not, in four configurations.
+**自适应需要挂在真实的结构性差异上。** 按路由做条件有效。
+按"上一轮是不是失败了"做条件,四种配置全部无效。
 
-**A field's meaning does not travel with its name.** `is_hard` means "safe to
-filter on" in the retrieval path. Read as "important to the shopper" in a new
-path, it inverted what the prompt said, and cost `0.105` Override MRR.
+**字段的含义不会跟着名字一起迁移。** `is_hard` 在检索路径里的意思是"能安全用作过滤条件"。
+在一条新路径里被读成"买家看重这个",就把 prompt 的意思整个说反了,
+代价是 Override 场景 `0.105` 的 MRR。
 
-**Structure is only better than a bag of words while its labels are right.** A
-flat query is uninformative; a mislabelled structured one is confidently wrong,
-which is worse.
+**只有在标签正确时,结构化才优于词袋。** 扁平查询只是信息量不足;
+标错标签的结构化查询是*自信地说错*,而后者更糟。
 
-**Measure the thing, not a proxy for it.** Three separate mistakes in this work
-came from counting net active constraints as a stand-in for "did the shopper
-tell us something" - it counts the parser, not the shopper, and deduplication
-and supersession both make it lie.
+**要量的是那个东西本身,不是它的代理指标。** 这轮工作里有三个各自独立的错误,
+都源于拿"净活跃约束数"去代替"买家有没有告诉我们信息" —— 它量的是解析器,不是买家,
+而且去重和覆盖两件事都会让它说谎。
 
-## What was deliberately not done
+## 有意没做的事
 
-- **Recall work.** 99% of targets are already in the pool.
-- **Shipping the LLM by default.** `submission_rules.md` forbids shipping API
-  keys and states official scoring may disable network access, so the offline
-  path is the one that will run. Both numbers are reported.
-- **Deleting the rejected code.** The cross-encoder and LLM backends stay,
-  disabled and tested, because they are the evidence behind the report's
-  claims. A reviewer can flip one config value and reproduce any row.
-- **Catalog layer discovery.** It produced a parser vocabulary identical to the
-  cheap path for 92.7 seconds of startup and 77.4 MiB, so it is opt-in.
+- **召回优化。** 99% 的目标商品本来就已经在候选池里了。
+- **把 LLM 设为默认。** `submission_rules.md` 禁止在提交里附带 API key,
+  并说明官方评分可能关闭网络访问,所以离线路径才是实际会被跑到的那条。两个数字都如实报告。
+- **删掉被否决的代码。** 交叉编码器和 LLM 后端都保留在代码树里,处于禁用状态并带测试,
+  因为它们是报告中各项结论的证据。评审只要改一个配置值,就能复现任意一行。
+- **目录层发现。** 它产出的解析器词表和廉价路径完全一致,却要多花 92.7 秒启动、
+  多占 77.4 MiB,所以设为可选。

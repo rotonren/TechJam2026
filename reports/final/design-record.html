@@ -1,7 +1,7 @@
-<title>CompassCart Design Record</title>
+<title>CompassCart 设计记录</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:ital,wght@0,500;0,600;1,400&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+SC:wght@400;500;600&family=IBM+Plex+Serif:ital,wght@0,500;0,600;1,400&family=Noto+Serif+SC:wght@600&display=swap">
 
 <style>
   :root {
@@ -18,8 +18,8 @@
     --reject-soft: #f3e8e2;
     --shadow: 0 1px 2px rgba(22, 32, 43, .06), 0 8px 24px -16px rgba(22, 32, 43, .3);
 
-    --sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
-    --serif: "IBM Plex Serif", Georgia, serif;
+    --sans: "IBM Plex Sans", "IBM Plex Sans SC", ui-sans-serif, system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+    --serif: "IBM Plex Serif", "Noto Serif SC", Georgia, "Songti SC", serif;
     --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
   }
 
@@ -63,7 +63,7 @@
     color: var(--ink);
     font-family: var(--sans);
     font-size: 16px;
-    line-height: 1.6;
+    line-height: 1.78;
     -webkit-font-smoothing: antialiased;
   }
 
@@ -88,9 +88,8 @@
   h1 {
     font-family: var(--serif);
     font-weight: 600;
-    font-size: clamp(2rem, 5vw, 2.9rem);
-    line-height: 1.12;
-    letter-spacing: -.015em;
+    font-size: clamp(1.9rem, 4.6vw, 2.7rem);
+    line-height: 1.3;
     text-wrap: balance;
     margin: .5rem 0 0;
   }
@@ -98,8 +97,8 @@
   h2 {
     font-family: var(--serif);
     font-weight: 600;
-    font-size: 1.5rem;
-    letter-spacing: -.01em;
+    font-size: 1.45rem;
+    line-height: 1.5;
     text-wrap: balance;
     margin: 0;
   }
@@ -108,11 +107,12 @@
     font-family: var(--sans);
     font-weight: 600;
     font-size: 1rem;
+    line-height: 1.6;
     margin: 0;
   }
 
-  p { margin: 0; max-width: 66ch; }
-  .lede { font-size: 1.06rem; color: var(--muted); max-width: 60ch; margin-top: 1rem; }
+  p { margin: 0; max-width: 40em; }
+  .lede { font-size: 1.05rem; color: var(--muted); max-width: 36em; margin-top: 1rem; }
 
   section { display: flex; flex-direction: column; gap: 1.25rem; }
 
@@ -131,20 +131,20 @@
     font-weight: 600;
     font-variant-numeric: tabular-nums;
     letter-spacing: -.02em;
+    line-height: 1.3;
   }
   .fig .n.up { color: var(--accept); }
   .fig .k {
-    font-family: var(--mono);
-    font-size: .7rem;
-    letter-spacing: .1em;
-    text-transform: uppercase;
+    font-size: .74rem;
+    letter-spacing: .04em;
     color: var(--faint);
+    line-height: 1.5;
   }
 
   figure { margin: 0; }
   figure svg { display: block; width: 100%; max-width: 100%; height: auto; color: var(--ink); }
   .figscroll { overflow-x: auto; background: var(--surface); border: 1px solid var(--rule); border-radius: 3px; padding: 1.5rem 1rem; box-shadow: var(--shadow); }
-  figcaption { font-size: .84rem; color: var(--muted); margin-top: .9rem; max-width: 62ch; }
+  figcaption { font-size: .86rem; color: var(--muted); margin-top: .9rem; max-width: 38em; }
 
   .steps { display: flex; flex-direction: column; gap: 0; border-top: 1px solid var(--rule); }
   .step {
@@ -174,17 +174,16 @@
   .step.shipped { background: var(--accept-soft); margin-inline: -1rem; padding-inline: 1rem; }
   .step.optional .score, .step.optional .delta { color: var(--faint); }
 
-  table { border-collapse: collapse; width: 100%; font-size: .88rem; }
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; }
   .tablescroll { overflow-x: auto; }
   th, td { text-align: left; padding: .7rem .9rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
   th {
-    font-family: var(--mono);
-    font-size: .68rem;
-    letter-spacing: .1em;
-    text-transform: uppercase;
+    font-size: .76rem;
+    letter-spacing: .06em;
     color: var(--faint);
     font-weight: 500;
     border-bottom-color: var(--ink);
+    white-space: nowrap;
   }
   td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
   td.num.neg { color: var(--reject); }
@@ -219,8 +218,8 @@
     color: var(--muted);
   }
 
-  footer { border-top: 1px solid var(--rule); padding-top: 1.5rem; font-size: .85rem; color: var(--faint); }
-  footer p { max-width: 66ch; }
+  footer { border-top: 1px solid var(--rule); padding-top: 1.5rem; font-size: .86rem; color: var(--faint); }
+  footer p { max-width: 40em; }
 
   @media (max-width: 44rem) {
     .step { grid-template-columns: 6.5rem 1fr; }
@@ -233,191 +232,182 @@
 <div class="wrap">
 
   <header>
-    <p class="eyebrow">TikTok TechJam 2026 · Track 4 · Internal record</p>
-    <h1>How CompassCart got from 0.761 to 0.822</h1>
-    <p class="lede">Nineteen commits, seven accepted changes, seven measured rejections, and three
-      conclusions that turned out to be wrong before they were corrected. Every number here comes
-      from the unchanged official evaluator over the frozen 200-session public set &mdash; plus one
-      fold of 40 that was sealed before any of it started.</p>
+    <p class="eyebrow">TikTok TechJam 2026 · Track 4 · 内部记录</p>
+    <h1>CompassCart 是怎么从 0.761 走到 0.822 的</h1>
+    <p class="lede">十九个提交,七项被采纳的改动,七项实测后被否决的方案,还有三个先得出错误结论、后来才纠正回来的判断。
+      这里每一个数字都来自未经修改的官方评测器,跑在冻结的 200 会话公开集上 &mdash;
+      另外加上一折 40 个会话,在这一切开始之前就被封存了。</p>
 
     <div class="headline-figures">
-      <div class="fig"><span class="n up">0.822490</span><span class="k">Shipped score</span></div>
-      <div class="fig"><span class="n up">0.834997</span><span class="k">Sealed fold, opened once</span></div>
-      <div class="fig"><span class="n">+0.0613</span><span class="k">Net gain</span></div>
-      <div class="fig"><span class="n">1047</span><span class="k">Tests passing</span></div>
-      <div class="fig"><span class="n">0</span><span class="k">Tokens on the default path</span></div>
-      <div class="fig"><span class="n">19.6<span style="font-size:.6em"> s</span></span><span class="k">Init, from 132 s</span></div>
+      <div class="fig"><span class="n up">0.822490</span><span class="k">发布版分数</span></div>
+      <div class="fig"><span class="n up">0.834997</span><span class="k">密封折,只开封一次</span></div>
+      <div class="fig"><span class="n">+0.0613</span><span class="k">净提升</span></div>
+      <div class="fig"><span class="n">1047</span><span class="k">测试全部通过</span></div>
+      <div class="fig"><span class="n">0</span><span class="k">默认路径 token 消耗</span></div>
+      <div class="fig"><span class="n">19.6<span style="font-size:.6em"> s</span></span><span class="k">初始化,原为 132 s</span></div>
     </div>
   </header>
 
   <section>
-    <h2>The lineage</h2>
+    <h2>脉络</h2>
     <div class="figscroll">
       <figure>
-        <svg viewBox="0 0 700 880" role="img" aria-label="A vertical lineage of seven accepted changes raising the score from 0.761209 to 0.822490, with seven rejected experiments branching off and terminating.">
+        <svg viewBox="0 0 700 880" role="img" aria-label="一条竖向脉络,七项被采纳的改动把分数从 0.761209 抬到 0.822490,七项被否决的实验从主干分叉出去并终止。">
           <defs>
             <marker id="tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
               <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
             </marker>
           </defs>
 
-          <!-- spine -->
+          <!-- 主干 -->
           <line x1="150" y1="52" x2="150" y2="700" stroke="var(--accept)" stroke-width="2"/>
           <line x1="150" y1="700" x2="150" y2="800" stroke="var(--faint)" stroke-width="2" stroke-dasharray="5 4"/>
 
-          <!-- accepted nodes -->
-          <g font-family="IBM Plex Mono, monospace" font-size="12">
+          <!-- 采纳节点 -->
+          <g font-family="'IBM Plex Sans SC', 'IBM Plex Mono', sans-serif" font-size="12">
             <circle cx="150" cy="52" r="5" fill="var(--ground)" stroke="var(--accept)" stroke-width="2"/>
-            <text x="132" y="49" text-anchor="end" font-size="13" font-weight="600" fill="currentColor">0.761209</text>
-            <text x="132" y="65" text-anchor="end" fill="var(--muted)">starting point</text>
+            <text x="132" y="49" text-anchor="end" font-size="13" font-weight="600" font-family="'IBM Plex Mono', monospace" fill="currentColor">0.761209</text>
+            <text x="132" y="67" text-anchor="end" fill="var(--muted)">起点</text>
 
             <circle cx="150" cy="160" r="5" fill="var(--accept)"/>
-            <text x="132" y="157" text-anchor="end" font-size="13" font-weight="600" fill="currentColor">0.771831</text>
-            <text x="132" y="173" text-anchor="end" fill="var(--muted)">phrase adjacency</text>
-            <text x="168" y="112" fill="var(--accept)">+0.0106</text>
+            <text x="132" y="157" text-anchor="end" font-size="13" font-weight="600" font-family="'IBM Plex Mono', monospace" fill="currentColor">0.771831</text>
+            <text x="132" y="175" text-anchor="end" fill="var(--muted)">短语邻接</text>
+            <text x="142" y="112" text-anchor="end" font-family="'IBM Plex Mono', monospace" fill="var(--accept)">+0.0106</text>
 
             <circle cx="150" cy="268" r="5" fill="var(--accept)"/>
-            <text x="132" y="265" text-anchor="end" font-size="13" font-weight="600" fill="currentColor">0.783514</text>
-            <text x="132" y="281" text-anchor="end" fill="var(--muted)">Browsing route only</text>
-            <text x="168" y="220" fill="var(--accept)">+0.0117</text>
+            <text x="132" y="265" text-anchor="end" font-size="13" font-weight="600" font-family="'IBM Plex Mono', monospace" fill="currentColor">0.783514</text>
+            <text x="132" y="283" text-anchor="end" fill="var(--muted)">只在 Browsing 路由</text>
+            <text x="142" y="220" text-anchor="end" font-family="'IBM Plex Mono', monospace" fill="var(--accept)">+0.0117</text>
 
             <circle cx="150" cy="376" r="5" fill="var(--accept)"/>
-            <text x="132" y="373" text-anchor="end" font-size="13" font-weight="600" fill="currentColor">0.800849</text>
-            <text x="132" y="389" text-anchor="end" fill="var(--muted)">policy memory</text>
-            <text x="168" y="328" fill="var(--accept)">+0.0173</text>
+            <text x="132" y="373" text-anchor="end" font-size="13" font-weight="600" font-family="'IBM Plex Mono', monospace" fill="currentColor">0.800849</text>
+            <text x="132" y="391" text-anchor="end" fill="var(--muted)">问题先验记忆</text>
+            <text x="142" y="328" text-anchor="end" font-family="'IBM Plex Mono', monospace" fill="var(--accept)">+0.0173</text>
 
             <circle cx="150" cy="484" r="5" fill="var(--accept)"/>
-            <text x="132" y="481" text-anchor="end" font-size="13" font-weight="600" fill="currentColor">0.804724</text>
-            <text x="132" y="497" text-anchor="end" fill="var(--muted)">memory per route</text>
-            <text x="168" y="436" fill="var(--accept)">+0.0039</text>
+            <text x="132" y="481" text-anchor="end" font-size="13" font-weight="600" font-family="'IBM Plex Mono', monospace" fill="currentColor">0.804724</text>
+            <text x="132" y="499" text-anchor="end" fill="var(--muted)">记忆按路由分开</text>
+            <text x="142" y="436" text-anchor="end" font-family="'IBM Plex Mono', monospace" fill="var(--accept)">+0.0039</text>
 
             <circle cx="150" cy="592" r="7" fill="var(--accept)"/>
-            <text x="132" y="589" text-anchor="end" font-size="13" font-weight="600" fill="var(--accept)">0.822490</text>
-            <text x="132" y="605" text-anchor="end" fill="var(--muted)">strategy selection</text>
-            <text x="168" y="544" fill="var(--accept)">+0.0178</text>
-            <text x="168" y="596" font-size="11" font-weight="600" fill="var(--accept)">SHIPPED DEFAULT</text>
+            <text x="132" y="589" text-anchor="end" font-size="13" font-weight="600" font-family="'IBM Plex Mono', monospace" fill="var(--accept)">0.822490</text>
+            <text x="132" y="607" text-anchor="end" fill="var(--muted)">每轮策略选择</text>
+            <text x="142" y="544" text-anchor="end" font-family="'IBM Plex Mono', monospace" fill="var(--accept)">+0.0178</text>
+            <text x="168" y="598" font-size="11.5" font-weight="600" fill="var(--accept)">默认发布配置</text>
 
             <circle cx="150" cy="800" r="5" fill="var(--ground)" stroke="var(--faint)" stroke-width="2" stroke-dasharray="3 2"/>
-            <text x="132" y="797" text-anchor="end" font-size="13" fill="var(--faint)">0.826831</text>
-            <text x="132" y="813" text-anchor="end" fill="var(--faint)">LLM rerank</text>
-            <text x="168" y="752" fill="var(--faint)">+0.0043 · needs credentials,</text>
-            <text x="168" y="768" fill="var(--faint)">so official scoring never runs it</text>
+            <text x="132" y="797" text-anchor="end" font-size="13" font-family="'IBM Plex Mono', monospace" fill="var(--faint)">0.826831</text>
+            <text x="132" y="815" text-anchor="end" fill="var(--faint)">LLM 重排</text>
+            <text x="168" y="752" fill="var(--faint)">+0.0043 · 需要凭据,</text>
+            <text x="168" y="770" fill="var(--faint)">官方评测跑不到这条路径</text>
           </g>
 
-          <!-- rejected branches -->
-          <g font-family="IBM Plex Mono, monospace" font-size="11" stroke-linecap="round">
+          <!-- 否决分支 -->
+          <g font-family="'IBM Plex Sans SC', sans-serif" font-size="11.5" stroke-linecap="round">
             <path d="M150 214 L300 214" stroke="var(--reject)" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#tip)" fill="none" color="var(--reject)"/>
-            <text x="310" y="211" fill="var(--reject)">window-local IDF</text>
-            <text x="310" y="226" fill="var(--faint)">−0.011 · penalises the shopper's own terms</text>
+            <text x="310" y="210" fill="var(--reject)">窗口内 IDF 加权</text>
+            <text x="310" y="227" fill="var(--faint)">−0.011 · 反而惩罚了买家自己说的词</text>
 
             <path d="M150 322 L300 322" stroke="var(--reject)" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#tip)" fill="none" color="var(--reject)"/>
-            <text x="310" y="319" fill="var(--reject)">ONNX cross-encoder</text>
-            <text x="310" y="334" fill="var(--faint)">−0.007 · confounded, not settled</text>
+            <text x="310" y="318" fill="var(--reject)">ONNX 交叉编码器</text>
+            <text x="310" y="335" fill="var(--faint)">−0.007 · 含混淆变量,未定论</text>
 
             <path d="M150 430 L300 430" stroke="var(--reject)" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#tip)" fill="none" color="var(--reject)"/>
-            <text x="310" y="427" fill="var(--reject)">constraint-count signal</text>
-            <text x="310" y="442" fill="var(--faint)">−0.015 · measured the parser, not the shopper</text>
+            <text x="310" y="426" fill="var(--reject)">约束计数信号</text>
+            <text x="310" y="443" fill="var(--faint)">−0.015 · 量的是解析器,不是买家</text>
 
             <path d="M150 538 L300 538" stroke="var(--reject)" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#tip)" fill="none" color="var(--reject)"/>
-            <text x="310" y="535" fill="var(--reject)">relax on stall</text>
-            <text x="310" y="550" fill="var(--faint)">−0.010 · conditioned on the wrong thing</text>
+            <text x="310" y="534" fill="var(--reject)">卡住就放宽约束</text>
+            <text x="310" y="551" fill="var(--faint)">−0.010 · 条件挂在了错的东西上</text>
 
             <path d="M150 646 L300 646" stroke="var(--reject)" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#tip)" fill="none" color="var(--reject)"/>
-            <text x="310" y="643" fill="var(--reject)">grouped model prompt</text>
-            <text x="310" y="658" fill="var(--faint)">−0.003 · a label said the opposite of the shopper</text>
+            <text x="310" y="642" fill="var(--reject)">分组式 prompt</text>
+            <text x="310" y="659" fill="var(--faint)">−0.003 · 有个标签说反了买家的意思</text>
 
             <path d="M150 690 L300 690" stroke="var(--reject)" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#tip)" fill="none" color="var(--reject)"/>
-            <text x="310" y="687" fill="var(--reject)">state-selected prompt</text>
-            <text x="310" y="702" fill="var(--faint)">+0.0002 · the gains did not compose</text>
+            <text x="310" y="686" fill="var(--reject)">按状态选 prompt</text>
+            <text x="310" y="703" fill="var(--faint)">+0.0002 · 各自的收益不叠加</text>
           </g>
 
-          <!-- rail label -->
-          <g font-family="IBM Plex Mono, monospace" font-size="10" fill="var(--faint)">
-            <text x="20" y="24" letter-spacing="1.5">ACCEPTED ↓</text>
-            <text x="310" y="24" letter-spacing="1.5">REJECTED, MEASURED →</text>
+          <!-- 轨道标签 -->
+          <g font-family="'IBM Plex Sans SC', sans-serif" font-size="10.5" fill="var(--faint)" letter-spacing="1">
+            <text x="20" y="24">采纳 ↓</text>
+            <text x="310" y="24">否决(均已实测)→</text>
           </g>
         </svg>
-        <figcaption>Each node is one accepted change and the score it produced. Branches leave the
-          spine at the point the experiment was run and terminate: they were measured against the
-          node they branch from, not argued about. The dashed tail is the model-backed path, which
-          scores higher but cannot authenticate in the scoring environment.</figcaption>
+        <figcaption>每个节点是一项被采纳的改动和它跑出来的分数。分支从实验发生的那个位置离开主干后即终止 &mdash;
+          它们都是拿来和自己分叉出去的那个节点实测对比的,不是靠讨论定下来的。虚线尾巴是接模型的路径,
+          分数更高,但在评测环境里没法完成鉴权。</figcaption>
       </figure>
     </div>
   </section>
 
   <section>
-    <h2>What each accepted step did</h2>
+    <h2>每一步各自做了什么</h2>
     <div class="steps">
       <div class="step">
         <span class="score">0.761209</span>
         <div class="body">
-          <h3>Starting point, and one measurement before any code</h3>
-          <p>An oracle probe recorded where the target sat at every pipeline stage across 691 turns.
-            The target was in the candidate pool in 99% of sessions and at rank 1 in 32%. Retrieval
-            was not the bottleneck; ordering was. No work went into recall after that.</p>
+          <h3>起点,以及写任何代码之前的那次测量</h3>
+          <p>先做了一个 oracle 探针,记录目标商品在 691 轮对话、每个流水线阶段所处的位置。目标商品在 99% 的会话里
+            都进了候选池,但只有 32% 排在第一位。<strong>瓶颈不在召回,在排序。</strong>此后没有一分钟花在提高召回上。</p>
         </div>
         <span class="delta"></span>
       </div>
       <div class="step">
         <span class="score">0.771831</span>
         <div class="body">
-          <h3>Phrase adjacency</h3>
-          <p>Fusion and constraint scoring both work at term level, so a requirement stated as a
-            contiguous phrase scored no better against a product whose title contains it exactly.
-            The rerank stage supplies that one missing signal.</p>
+          <h3>短语邻接</h3>
+          <p>融合和约束打分都工作在词级别,所以一条以连续短语表述的需求,对标题里恰好含有这个短语的商品
+            并不会比对把这几个词散落各处的商品得分更高。重排层补的就是这一个缺失信号。</p>
         </div>
         <span class="delta">+0.0106</span>
       </div>
       <div class="step">
         <span class="score">0.783514</span>
         <div class="body">
-          <h3>Run it on Browsing only</h3>
-          <p>The same stage measured <span class="m">+0.038</span> Browsing HitRate and
-            <span class="m">−0.025</span> Buying. A Buying turn already carries hard constraints, so
-            the ranker is well informed and reordering destroys good work. Turning it off on one
-            route beat every weight and window sweep combined.</p>
+          <h3>只在 Browsing 路由上跑</h3>
+          <p>同一个阶段实测下来:Browsing 命中率 <span class="m">+0.038</span>,Buying
+            <span class="m">−0.025</span>。Buying 轮次本身已经带着明确的硬约束,排序器信息充分,
+            这时候再重排就是在破坏已有的正确结果。<strong>在一条路由上把它关掉,收益超过所有权重和窗口调参的总和。</strong></p>
         </div>
         <span class="delta">+0.0117</span>
       </div>
       <div class="step">
         <span class="score">0.800849</span>
         <div class="body">
-          <h3>Question priors that check themselves</h3>
-          <p>The response-likelihood table was hand-written and never validated. Treating it as a
-            prior and updating from whether questions were actually answered corrected the two
-            entries we had backwards — <span class="m">feature</span> from 0.70 to 0.973,
-            <span class="m">budget</span> from 0.90 to 0.000.</p>
+          <h3>会自我校验的问题先验</h3>
+          <p>回答意愿表是手写的,从来没人验证过。把它当作先验,再根据"问出去的问题到底有没有被回答"更新后验,
+            纠正了我们原本填反的两项 &mdash; <span class="m">feature</span> 从 0.70 修到 0.973,
+            <span class="m">budget</span> 从 0.90 修到 0.000。</p>
         </div>
         <span class="delta">+0.0173</span>
       </div>
       <div class="step">
         <span class="score">0.804724</span>
         <div class="body">
-          <h3>Condition the memory on route too</h3>
-          <p><span class="m">use_case</span> is answered 44% of the time on Buying and never on
-            Browsing. A shopper still exploring has not yet formed a view on what the item is for.
-            Nothing in the code encoded that; it came out of 303 observations.</p>
+          <h3>记忆也按路由分开</h3>
+          <p><span class="m">use_case</span> 在 Buying 上有 44% 的回答率,在 Browsing 上一次都没有。
+            还在逛的买家尚未想清楚这东西是拿来干嘛的。代码里没有任何地方编码过这件事,它是从 303 次观测里自己长出来的。</p>
         </div>
         <span class="delta">+0.0039</span>
       </div>
       <div class="step shipped">
         <span class="score">0.822490</span>
         <div class="body">
-          <h3>Spend the turns that were being wasted</h3>
-          <p>When the question policy has nothing worth asking, the turn is spent for nothing — the
-            shopper replies "ask me about one specific attribute" and discloses zero. An open
-            question instead fires eleven times in 536 turns and is worth most of this.</p>
+          <h3>把原本浪费掉的轮次用起来</h3>
+          <p>当提问策略没有任何值得问的问题时,这一轮就白花了 &mdash; 买家回一句"你问我某个具体属性吧",
+            信息量为零。改成问一个开放性问题,在 536 轮里只触发十一次,却贡献了这一项的绝大部分收益。</p>
         </div>
         <span class="delta">+0.0178</span>
       </div>
       <div class="step optional">
         <span class="score">0.826831</span>
         <div class="body">
-          <h3>LLM rerank — measured, not shipped</h3>
-          <p>Worth <span class="m">+0.0043</span> for 362,330 prompt tokens and a 4.3× slower run.
-            Not the default: <span class="m">submission_rules.md</span> forbids shipping API keys
-            and says official scoring may disable network access, so the offline path is what the
-            organizer will actually run. Both numbers are reported.</p>
+          <h3>LLM 重排 &mdash; 实测了,但没设为默认</h3>
+          <p>值 <span class="m">+0.0043</span>,代价是 362,330 个 prompt token 和 4.3 倍的运行时间。
+            不设为默认的原因:<span class="m">submission_rules.md</span> 禁止在提交里附带 API key,
+            并说明官方评测可能关闭网络访问,所以主办方实际会跑的是离线路径。两个数字都如实报告。</p>
         </div>
         <span class="delta">+0.0043</span>
       </div>
@@ -425,75 +415,71 @@
   </section>
 
   <section>
-    <h2>Three conclusions that were wrong first</h2>
-    <p>Each of these stood for hours and would have gone into the report. The controls that caught
-      them cost about ninety seconds each.</p>
+    <h2>三个一开始搞错了的结论</h2>
+    <p>这三个结论都成立了好几个小时,差点就写进报告。而抓住它们的对照实验,每个大约只要九十秒。</p>
     <div class="tablescroll">
       <table>
         <thead>
-          <tr><th>Claim</th><th>What was actually true</th><th style="text-align:right">Correction</th></tr>
+          <tr><th>当时的说法</th><th>实际情况</th><th style="text-align:right">修正</th></tr>
         </thead>
         <tbody>
           <tr>
-            <td>The LLM reranker costs score</td>
-            <td>The experiment changed the rerank window <em>and</em> the backend. The window alone
-              cost <span class="m">−0.0095</span>, charged to the model.</td>
+            <td>LLM 重排会掉分</td>
+            <td>那次实验同时改了重排窗口<em>和</em>后端。单是窗口就值
+              <span class="m">−0.0095</span>,却全算在了模型头上。</td>
             <td class="num pos">−0.0013 → +0.0043</td>
           </tr>
           <tr>
-            <td>Boundary suffered because it routes as Buying and met the model</td>
-            <td>Route counts show Boundary is routed Browsing on all thirty of its turns. The model
-              never ran on it.</td>
-            <td class="num">retracted</td>
+            <td>Boundary 场景变差是因为它走 Buying 路由、撞上了模型</td>
+            <td>路由计数显示 Boundary 的三十轮<em>全部</em>走的是 Browsing。模型根本没在它上面跑过。</td>
+            <td class="num">已撤回</td>
           </tr>
           <tr>
-            <td>Grouping the ledger by role must beat a token bag</td>
-            <td><span class="m">is_hard=False</span> means <em>this text cannot safely become a
-              filter</em>, not <em>the shopper is indifferent</em>. The prompt called an override's
-              new requirement optional.</td>
-            <td class="num pos">+0.0025 recovered</td>
+            <td>把约束按角色分组一定强过词袋</td>
+            <td><span class="m">is_hard=False</span> 的含义是<em>这段自由文本不能安全地变成检索过滤器</em>,
+              不是<em>买家不在乎</em>。结果 prompt 把 override 里新提出的需求标成了"可选"。</td>
+            <td class="num pos">找回 +0.0025</td>
           </tr>
         </tbody>
       </table>
     </div>
-    <p class="note">The cross-encoder's <span class="m">−0.007</span> carries the same window
-      confound and has not been re-measured. It is reported as measured, not as settled.</p>
+    <p class="note">交叉编码器那个 <span class="m">−0.007</span> 带着同样的窗口混淆,并且没有重测过。
+      它是按"实测到的数字"报告的,不是按"已经定论"报告的。</p>
   </section>
 
   <section>
-    <h2>Does any of it generalise?</h2>
-    <p>Every number above was read off the same 200 sessions the changes were tuned on. So one fold
-      of 40 was <strong>sealed at the start of the round</strong> and opened once, at the end, after
-      the configuration was frozen.</p>
+    <h2>这些东西能推广吗?</h2>
+    <p>上面每一个数字,都是在同一批用来调参的 200 个会话上读出来的。所以有一折 40 个会话
+      <strong>在这一轮开始时就被封存</strong>,直到最后配置冻结之后才开封,只跑一次。</p>
 
     <figure>
       <div class="figscroll">
-        <svg viewBox="0 0 700 215" role="img" style="max-width:100%;height:auto" aria-label="Four tuning folds spread from 0.769 to 0.837 around a mean of 0.812. The sealed fold 5 scores 0.835, above that mean and above the all-200 score of 0.822. With the learning layer disabled the fold mean drops to 0.793.">
-          <g font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="11.5" fill="currentColor">
+        <svg viewBox="0 0 700 215" role="img" style="max-width:100%;height:auto" aria-label="四个调参折从 0.769 分布到 0.837,均值 0.812。密封的第五折得分 0.835,高于该均值,也高于全量 200 会话的 0.822。关掉学习层后,同样四折的均值降到 0.793。">
+          <g font-family="'IBM Plex Sans SC', 'IBM Plex Sans', sans-serif" font-size="11.5" fill="currentColor">
 
-            <text x="152" y="49" text-anchor="end" font-weight="600">Tuning folds 1&ndash;4</text>
+            <text x="152" y="49" text-anchor="end" font-weight="600">调参折 1&ndash;4</text>
             <line x1="220.9" y1="45" x2="622.3" y2="45" stroke="currentColor" stroke-width="1" opacity=".28"/>
             <circle cx="220.9" cy="45" r="4.5" fill="var(--ground)" stroke="currentColor" stroke-width="1.5" opacity=".65"/>
             <circle cx="506.4" cy="45" r="4.5" fill="var(--ground)" stroke="currentColor" stroke-width="1.5" opacity=".65"/>
             <circle cx="551.2" cy="45" r="4.5" fill="var(--ground)" stroke="currentColor" stroke-width="1.5" opacity=".65"/>
             <circle cx="622.3" cy="45" r="4.5" fill="var(--ground)" stroke="currentColor" stroke-width="1.5" opacity=".65"/>
             <line x1="475.2" y1="34" x2="475.2" y2="56" stroke="currentColor" stroke-width="2"/>
-            <text x="475.2" y="27" text-anchor="middle" font-size="10.5" opacity=".75">mean 0.812</text>
+            <text x="475.2" y="26" text-anchor="middle" font-size="10.5" opacity=".75">均值 0.812</text>
 
-            <text x="152" y="94" text-anchor="end" opacity=".7">Same folds, learning off</text>
+            <text x="152" y="94" text-anchor="end" opacity=".7">同样四折,关学习层</text>
             <circle cx="359.5" cy="90" r="4.5" fill="var(--reject)"/>
-            <text x="359.5" y="109" text-anchor="middle" font-size="10.5" fill="var(--reject)">0.793</text>
+            <text x="359.5" y="110" text-anchor="middle" font-size="10.5" font-family="'IBM Plex Mono', monospace" fill="var(--reject)">0.793</text>
 
-            <text x="152" y="139" text-anchor="end" opacity=".7">All 200 sessions</text>
+            <text x="152" y="139" text-anchor="end" opacity=".7">全量 200 会话</text>
             <circle cx="536.3" cy="135" r="4.5" fill="currentColor" opacity=".55"/>
-            <text x="536.3" y="154" text-anchor="middle" font-size="10.5" opacity=".7">0.822</text>
+            <text x="536.3" y="155" text-anchor="middle" font-size="10.5" font-family="'IBM Plex Mono', monospace" opacity=".7">0.822</text>
 
-            <text x="152" y="184" text-anchor="end" font-weight="600" fill="var(--accept)">Fold 5 &mdash; sealed</text>
+            <text x="152" y="184" text-anchor="end" font-weight="600" fill="var(--accept)">第 5 折 &mdash; 密封</text>
             <circle cx="610.6" cy="180" r="7" fill="var(--accept)"/>
-            <text x="610.6" y="167" text-anchor="middle" font-size="11.5" font-weight="600" fill="var(--accept)">0.834997</text>
+            <text x="610.6" y="166" text-anchor="middle" font-size="11.5" font-weight="600" font-family="'IBM Plex Mono', monospace" fill="var(--accept)">0.834997</text>
 
             <line x1="165" y1="203" x2="680" y2="203" stroke="currentColor" stroke-width="1" opacity=".3"/>
-            <g font-size="10" opacity=".6" text-anchor="middle">
+            <g font-size="10" opacity=".6" text-anchor="middle" font-family="'IBM Plex Mono', monospace">
               <line x1="224.4" y1="203" x2="224.4" y2="207" stroke="currentColor"/><text x="224.4" y="217">0.77</text>
               <line x1="343.2" y1="203" x2="343.2" y2="207" stroke="currentColor"/><text x="343.2" y="217">0.79</text>
               <line x1="462.1" y1="203" x2="462.1" y2="207" stroke="currentColor"/><text x="462.1" y="217">0.81</text>
@@ -502,99 +488,96 @@
           </g>
         </svg>
       </div>
-      <figcaption>The sealed fold lands above the mean of the folds the work was tuned on, and above
-        the all-200 score. Disabling the learning layer under the same four folds drops the mean by
-        <span class="m">0.019</span>, so the memory works on 40 sessions rather than living off an
-        accumulated 200.</figcaption>
+      <figcaption>密封折落在调参折均值之上,也在全量 200 会话的分数之上。在同样这四折上关掉学习层,
+        均值会掉 <span class="m">0.019</span> &mdash; 说明记忆层在 40 个会话上就已经起作用,
+        并不是靠攒满 200 个会话吃老本。</figcaption>
     </figure>
 
-    <p class="note">Neither result certifies a <span class="m">+0.004</span> decision &mdash; the
-      tuning folds alone span 0.769 to 0.837, a spread wider than most individual changes in this
-      round. They certify that the <span class="m">+0.0613</span> of accepted change did not come
-      from memorising the public set. The learning layer is also a net win in three folds of four,
-      not four of four.</p>
+    <p class="note">这两个结果都不足以为一个 <span class="m">+0.004</span> 的决策背书 &mdash;
+      光是调参折自己就从 0.769 跨到 0.837,这个跨度比本轮大多数单项改动都大。它们能证明的是:
+      被采纳的这 <span class="m">+0.0613</span> 不是把公开集背下来的结果。另外,学习层是四折里赢三折,
+      不是四折全赢。</p>
   </section>
 
   <section>
-    <h2>The pipeline today</h2>
-    <p>Seven stages per turn. Each is wrapped so a failure degrades rather than breaks the turn.
-      Stages in colour were added this round.</p>
+    <h2>现在的流水线</h2>
+    <p>每一轮对话走七个阶段。每个阶段都做了包裹,出错时降级而不是让整轮失败。带颜色的是本轮新增的。</p>
     <div class="pipeline">
-      <div class="stage"><span class="i">1</span><span class="who">SessionStore</span><span class="what">Parse the turn into a versioned constraint ledger. An override supersedes rather than appends.</span></div>
-      <div class="stage new"><span class="i">2</span><span class="who">PolicyMemory</span><span class="what">Observe whether the previous question was answered. This is where cross-session learning happens.</span></div>
-      <div class="stage"><span class="i">3</span><span class="who">RoutePlanner</span><span class="what">Buying or Browsing, from constraint specificity, plus the fusion weights.</span></div>
-      <div class="stage"><span class="i">4</span><span class="who">HybridRetriever</span><span class="what">Lexical, attribute, profile and dense sources fused by weighted reciprocal rank. ~500 candidates.</span></div>
-      <div class="stage"><span class="i">5</span><span class="who">ConstraintRanker</span><span class="what">Hard-constraint coverage and quality; exact candidates stay ahead of disclosed relaxations.</span></div>
-      <div class="stage new"><span class="i">6</span><span class="who">RerankStage</span><span class="what">Rescore the head of the list per route. Browsing: phrase adjacency. Buying: off by default.</span></div>
-      <div class="stage new"><span class="i">7</span><span class="who">StrategySelector</span><span class="what">Decide what to do with a turn the question policy declined — open question, or stop asking.</span></div>
+      <div class="stage"><span class="i">1</span><span class="who">SessionStore</span><span class="what">把这一轮解析进带版本的约束账本。override 是覆盖,不是追加。</span></div>
+      <div class="stage new"><span class="i">2</span><span class="who">PolicyMemory</span><span class="what">观察上一个问题有没有被回答。跨会话学习发生在这里。</span></div>
+      <div class="stage"><span class="i">3</span><span class="who">RoutePlanner</span><span class="what">依据约束的具体程度判定 Buying 还是 Browsing,并给出融合权重。</span></div>
+      <div class="stage"><span class="i">4</span><span class="who">HybridRetriever</span><span class="what">词法、属性、画像、稠密四路召回,按加权倒数排名融合,约 500 个候选。</span></div>
+      <div class="stage"><span class="i">5</span><span class="who">ConstraintRanker</span><span class="what">硬约束覆盖度与质量打分;精确匹配始终排在"已声明的放宽项"前面。</span></div>
+      <div class="stage new"><span class="i">6</span><span class="who">RerankStage</span><span class="what">按路由重排列表头部。Browsing 用短语邻接;Buying 默认不跑。</span></div>
+      <div class="stage new"><span class="i">7</span><span class="who">StrategySelector</span><span class="what">决定提问策略弃权的那一轮怎么用 &mdash; 问开放问题,还是干脆不问。</span></div>
     </div>
   </section>
 
   <section>
-    <h2>Switches worth knowing</h2>
-    <p>Turning all three new layers off reproduces <span class="m">0.761209</span> exactly, which is
-      how each one's contribution was isolated.</p>
+    <h2>值得知道的开关</h2>
+    <p>把三个新层全部关掉,分数会精确回到 <span class="m">0.761209</span>,
+      这也正是每一层各自贡献被隔离出来的方式。</p>
     <div class="tablescroll">
       <table>
         <thead>
-          <tr><th>Setting</th><th>Default</th><th>What it does</th></tr>
+          <tr><th>配置项</th><th>默认值</th><th>作用</th></tr>
         </thead>
         <tbody>
-          <tr><td><code>rerank_buying_weight</code></td><td class="num">0.0</td><td>Zero on purpose — the rerank stage does not run on Buying</td></tr>
-          <tr><td><code>rerank_window</code></td><td class="num">50</td><td>Candidates reordered on Browsing; <code>rerank_buying_window</code> sets Buying separately</td></tr>
-          <tr><td><code>rerank_backend</code></td><td><code>"phrase"</code></td><td><code>phrase</code>, <code>cross_encoder</code> or <code>llm</code>; per route</td></tr>
-          <tr><td><code>rerank_prompt_style</code></td><td><code>"flat"</code></td><td><code>flat</code>, <code>structured</code> or <code>adaptive</code></td></tr>
-          <tr><td><code>evolution_enabled</code></td><td><code>True</code></td><td>Policy memory; <code>False</code> returns the hand-written prior</td></tr>
-          <tr><td><code>strategy_enabled</code></td><td><code>True</code></td><td>Per-turn strategy selection</td></tr>
-          <tr><td><code>COMPASSCART_DISABLE_DENSE</code></td><td>unset</td><td>Lexical only — scores identically and uses 156 MiB less</td></tr>
+          <tr><td><code>rerank_buying_weight</code></td><td class="num">0.0</td><td>故意设为零 &mdash; 重排层在 Buying 路由上不运行</td></tr>
+          <tr><td><code>rerank_window</code></td><td class="num">50</td><td>Browsing 上参与重排的候选数;Buying 由 <code>rerank_buying_window</code> 单独设定</td></tr>
+          <tr><td><code>rerank_backend</code></td><td><code>"phrase"</code></td><td>可选 <code>phrase</code>、<code>cross_encoder</code>、<code>llm</code>,按路由分别配置</td></tr>
+          <tr><td><code>rerank_prompt_style</code></td><td><code>"flat"</code></td><td>可选 <code>flat</code>、<code>structured</code>、<code>adaptive</code></td></tr>
+          <tr><td><code>evolution_enabled</code></td><td><code>True</code></td><td>策略记忆;设为 <code>False</code> 则退回手写先验</td></tr>
+          <tr><td><code>strategy_enabled</code></td><td><code>True</code></td><td>每轮策略选择</td></tr>
+          <tr><td><code>COMPASSCART_DISABLE_DENSE</code></td><td>未设置</td><td>只用词法召回 &mdash; 分数完全一致,内存少占 156 MiB</td></tr>
         </tbody>
       </table>
     </div>
   </section>
 
   <section>
-    <h2>What generalises past this project</h2>
+    <h2>能带出这个项目的经验</h2>
     <div class="lessons">
       <div class="lesson">
-        <h3>Measure the ceiling first</h3>
-        <p>The oracle probe took thirty minutes and decided three days of work. Without it the
-          obvious move was to improve recall, which was already at 99%.</p>
+        <h3>先测天花板</h3>
+        <p>那个 oracle 探针花了三十分钟,决定了后面三天的工作方向。没有它,最顺手的动作就是去提高召回
+          &mdash; 而召回已经是 99% 了。</p>
       </div>
       <div class="lesson">
-        <h3>Isolate one variable</h3>
-        <p>Violating this produced a confidently wrong conclusion that survived several hours. The
-          control that caught it was a single ninety-second run.</p>
+        <h3>一次只动一个变量</h3>
+        <p>违反这一条,直接产出了一个自信但错误的结论,并且存活了好几个小时。抓住它的对照实验,
+          只是一次九十秒的运行。</p>
       </div>
       <div class="lesson">
-        <h3>Adaptation needs real structure</h3>
-        <p>Conditioning on route paid twice, about <span class="m">+0.02</span> each. Conditioning on
-          "did the last turn fail" lost score in four configurations out of four.</p>
+        <h3>自适应需要挂在真实结构上</h3>
+        <p>按路由做条件,两次各值约 <span class="m">+0.02</span>。按"上一轮是不是失败了"做条件,
+          四种配置全部掉分。</p>
       </div>
       <div class="lesson">
-        <h3>A field's meaning doesn't travel</h3>
-        <p><span class="m">is_hard</span> means "safe to filter on" in the retrieval path. Read as
-          "important to the shopper" in a new path, it inverted the prompt.</p>
+        <h3>字段的含义不会跟着名字走</h3>
+        <p><span class="m">is_hard</span> 在检索路径里的意思是"能安全用作过滤条件"。
+          在新路径里被读成"买家看重这个",就把 prompt 的意思整个说反了。</p>
       </div>
       <div class="lesson">
-        <h3>Mislabelled structure beats no structure — downward</h3>
-        <p>A flat query is uninformative. A structured one with the wrong labels is confidently
-          wrong, and cost <span class="m">0.105</span> Override MRR.</p>
+        <h3>标错的结构比没有结构更糟</h3>
+        <p>扁平查询只是信息量不足;而标签标错的结构化查询是<em>自信地说错</em>,
+          代价是 Override 场景 <span class="m">0.105</span> 的 MRR。</p>
       </div>
       <div class="lesson">
-        <h3>Layers couple through shared state</h3>
-        <p>Reordering Buying candidates changed what the memory learned, which moved Boundary — a
-          scenario the change never touched. Local optima did not compose.</p>
+        <h3>各层通过共享状态耦合在一起</h3>
+        <p>重排 Buying 的候选,会改变记忆层学到的东西,进而影响 Boundary &mdash;
+          一个这项改动根本没碰过的场景。局部最优不能简单相加。</p>
       </div>
     </div>
   </section>
 
   <footer>
-    <p>Full experiment records live in the repository:
-      <span class="m">reports/final/rerank-results.md</span> for every rerank experiment including
-      the rejections, <span class="m">reports/final/evolution-results.md</span> for the policy
-      memory and strategy selector, <span class="m">reports/final/architecture-guide.md</span> for
-      the working guide, and <span class="m">reports/final/approach-evolution.md</span> for this
-      record in prose.</p>
+    <p>完整的实验记录都在仓库里:<span class="m">reports/final/rerank-results.md</span>
+      是全部重排实验(含被否决的那些),<span class="m">reports/final/evolution-results.md</span>
+      是策略记忆与策略选择器,<span class="m">reports/final/architecture-guide.md</span>
+      是给队友的工作手册,<span class="m">reports/final/validation-evidence.md</span>
+      是每条结论配复现命令的证据清单,<span class="m">reports/final/approach-evolution.md</span>
+      是本页内容的文字版。</p>
   </footer>
 
 </div>
