@@ -162,3 +162,63 @@ across `src`, `tests`, and `tools`.
 The sealed audit fold, the three-trial release benchmark, and the frozen-input
 and delivery-contract checks recorded at `c0d444fa` were **not** re-run for
 this runtime.
+
+## Rejected: hosted LLM listwise reranking
+
+`LlmRerankBackend` sends the rerank window to an OpenAI-compatible endpoint and
+asks for a full ordering. Measured with `deepseek-chat`, applied to the Buying
+route while Browsing kept the phrase backend:
+
+| Configuration | TechnicalScore | Hit@10 | MRR | MTTC | Prompt tokens | Completion | Wall |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| **Phrase, Browsing only** | **0.822490** | **0.9650** | 0.580968 | 2.715 | 0 | 0 | 73 s |
+| LLM on Buying, weight 0.8 | 0.821224 | 0.9600 | 0.582079 | 2.670 | 359,732 | 16,827 | 349 s |
+| LLM on Buying, weight 0.3 | 0.814371 | 0.9500 | 0.585236 | 2.810 | 387,959 | 18,162 | 367 s |
+
+Both weights lose, and the lighter blend loses more. A single evaluation costs
+about 360,000 prompt tokens and runs 4.8 times slower.
+
+*Caveat: the LLM configurations use `rerank_window=20` rather than the default
+`50`, because a 50-candidate window is roughly 3,000 prompt tokens per call.
+The Browsing arm is therefore not strictly comparable. The policy memory also
+couples the routes - changing Buying's candidate order changes which questions
+are asked, which changes what the memory learns, which reaches Browsing.*
+
+### Where it went wrong
+
+Per scenario, against the phrase-only default:
+
+| Scenario | Hit@10 | MRR | MTTC |
+| --- | ---: | ---: | ---: |
+| Buying | 0.9625 → 0.9750 | 0.506 → 0.461 | 2.050 → 1.762 |
+| Browsing | 0.9750 → 0.9625 | 0.635 → 0.690 | 2.650 → 2.712 |
+| Intent Override | 0.9333 → 0.9333 | 0.661 → 0.693 | 4.567 → 4.600 |
+| **Boundary** | **1.0000 → 0.9000** | 0.505 → 0.349 | 3.000 → 3.800 |
+
+On Buying itself the model helps coarse relevance and hurts fine ordering: it
+puts the target inside the top ten more often and half a turn earlier, while
+placing it worse within that ten. Asking for a permutation of twenty items
+scrambles an ordering that was already good.
+
+The losses concentrate in Boundary, which falls from ten hits out of ten to
+nine. Boundary sessions route as Buying on specificity, so the model ran on
+them - and a shopper saying "I don't have a preference for colour, use your
+judgment" is precisely the case where a ranking model has no evidence to act
+on and reorders anyway.
+
+### Why the lexical backend keeps winning
+
+This is the second model-based reranker to lose to phrase matching here, after
+the ONNX cross-encoder at `-0.007`. Both fail for the same structural reason,
+which the organizer confirmed in the Track 4 Q&A: private intent cards are
+derived from the same catalog metadata records exposed to participants. The
+simulated shopper quotes the target product's own text. Exact phrase
+containment is not a proxy for the signal - it *is* the signal, and a model
+whose strength is generalizing past surface form generalizes past it.
+
+The backend is kept, disabled by default. It needs no dependency beyond the
+standard library, reads credentials only from the environment, validates that a
+reply is a true permutation of the window before trusting it, and falls back to
+the lexical backend on a timeout, a refusal, an unparseable reply, or absent
+credentials - which is the expected case under `submission_rules.md`, since
+official scoring may disable network access and forbids shipping keys.
