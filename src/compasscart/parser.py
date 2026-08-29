@@ -31,6 +31,10 @@ _PREFERENCE_RESET_RE = re.compile(
     r"i have changed my mind|what i need is)\b",
     re.IGNORECASE,
 )
+_OVERRIDE_PAYLOAD_RE = re.compile(
+    r"\bwhat i need is\s*:?[\s-]*(?P<value>[^.!?]{2,160})",
+    re.IGNORECASE,
+)
 _CONTINUATION_RE = re.compile(
     r"\b(?:show me more|more options|different choices)\b", re.IGNORECASE
 )
@@ -304,6 +308,8 @@ class MessageParser:
         )
         extracted.extend(known)
         extracted.extend(categories)
+        if is_override and replace_preferences:
+            extracted.extend(self._extract_override_payload(text, extracted))
         if (
             expected_attribute
             and not any(
@@ -330,6 +336,29 @@ class MessageParser:
             is_continuation=is_continuation,
             replace_preferences=replace_preferences,
         )
+
+    @staticmethod
+    def _extract_override_payload(
+        text: str, extracted: list[ParsedConstraint]
+    ) -> list[ParsedConstraint]:
+        """Retain an explicit replacement requirement as soft text evidence."""
+        match = _OVERRIDE_PAYLOAD_RE.search(text)
+        if match is None:
+            return []
+        value = normalize_value(match.group("value"))
+        if not value:
+            return []
+        payload_terms = {token for token in terms(value) if not token.isdigit()}
+        represented_terms = {
+            token
+            for item in extracted
+            for raw_value in (*item.alternatives, item.value, item.upper_value or "")
+            for token in terms(raw_value)
+            if not token.isdigit()
+        }
+        if payload_terms and payload_terms.issubset(represented_terms):
+            return []
+        return [ParsedConstraint("feature", value, 0.6, False, "clarification")]
 
     def _has_unrecognized_expected_text(
         self,
@@ -553,6 +582,19 @@ class MessageParser:
             start,
             end,
         )
+        # A material followed by a component role describes that component,
+        # not necessarily the whole product. During broad clarification keep
+        # the complete phrase as soft text evidence instead of replacing the
+        # user's primary material constraint.
+        scoped_material = re.match(
+            r"\s+(?:sole|upper|outer|inner|lining)\b", text[end:]
+        )
+        if (
+            attribute == "material"
+            and scoped_material is not None
+            and expected in {"feature", "other"}
+        ):
+            return False
         # Catalog-derived style labels often come from free-form product text.
         # During a style clarification they are query evidence, not a safe
         # structured filter. Returning False lets `_extract_expected` retain

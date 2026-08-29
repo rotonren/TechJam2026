@@ -9,14 +9,15 @@ from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from collections.abc import Set as AbstractSet
 from pathlib import Path
-from types import MappingProxyType
 
+from .attribute_schema import AttributeSchema
 from .constraints import hard_constraint_violations, matches_constraint
 from .models import Candidate, Constraint, RetrievalPlan
 from .normalization import (
-    GENERIC_CATEGORIES,
     category_term_set,
     extract_attributes,
+    extract_layered_attributes,
+    infer_category_scope,
     normalize_value,
     searchable_fields,
     terms,
@@ -100,6 +101,13 @@ class CatalogIndex:
         self.attribute_inverted: dict[str, dict[str, set[str]]] = defaultdict(
             lambda: defaultdict(set)
         )
+        self.layer_inverted: dict[
+            str, dict[str, dict[str, set[str]]]
+        ] = {
+            layer: defaultdict(lambda: defaultdict(set))
+            for layer in ("global", "category", "dynamic")
+        }
+        self.attribute_category_scopes: dict[str, set[str]] = defaultdict(set)
         self.field_terms: dict[str, tuple[set[str], ...]] = {}
         self.field_masks: dict[str, bytes] = {}
         self.quality: dict[str, float] = {}
@@ -107,6 +115,11 @@ class CatalogIndex:
         self._fts_enabled = False
         self._fts_failures = 0
         self._load(enable_fts=enable_fts)
+        self.attribute_schema = AttributeSchema.from_layers(
+            self.layer_inverted,
+            product_count=len(self.valid_ids),
+            category_scopes=self.attribute_category_scopes,
+        )
 
     def _load(self, *, enable_fts: bool) -> None:
         cursor = self.connection.cursor()
@@ -130,6 +143,10 @@ class CatalogIndex:
                 parent_asin = str(product["parent_asin"])
                 fields = searchable_fields(product)
                 attributes = extract_attributes(product)
+                layered_attributes = extract_layered_attributes(
+                    product, core_attributes=attributes
+                )
+                category_scope = infer_category_scope(product)
                 category_terms = category_term_set(attributes.get("category", ()))
                 searchable_terms, field_masks = _compact_searchable_terms(
                     fields, self._search_term_ids, self._search_terms
@@ -146,6 +163,16 @@ class CatalogIndex:
                 for attribute, values in attributes.items():
                     for value in values:
                         self.attribute_inverted[attribute][value].add(parent_asin)
+                for layer, layer_attributes in layered_attributes.items():
+                    for attribute, values in layer_attributes.items():
+                        for value in values:
+                            self.layer_inverted[layer][attribute][value].add(
+                                parent_asin
+                            )
+                        if layer == "category":
+                            self.attribute_category_scopes[attribute].add(
+                                category_scope
+                            )
                 if self._fts_enabled:
                     fts_batch.append((parent_asin, *fields))
                     if len(fts_batch) >= 1_000:
@@ -229,18 +256,7 @@ class CatalogIndex:
         )
 
     def parser_vocabulary(self) -> Mapping[str, tuple[str, ...]]:
-        attributes = ("brand", "size", "category", "material", "style", "feature", "use_case")
-        vocabulary: dict[str, tuple[str, ...]] = {}
-        for attribute in attributes:
-            values = {
-                normalize_value(value)
-                for value in self.attribute_inverted.get(attribute, {})
-                if normalize_value(value)
-            }
-            if attribute == "category":
-                values.difference_update(GENERIC_CATEGORIES)
-            vocabulary[attribute] = tuple(sorted(values))
-        return MappingProxyType(vocabulary)
+        return self.attribute_schema.parser_vocabulary()
 
     def product(self, parent_asin: str) -> dict[str, object]:
         return self.products[parent_asin]

@@ -71,6 +71,43 @@ def test_override_is_not_parsed_as_previous_question_answer():
     ]
 
 
+def test_override_keeps_unknown_replacement_as_soft_text_evidence():
+    result = MessageParser().parse(
+        "Actually, ignore my earlier preference. What I need is: Water Resistant.",
+        turn=3,
+    )
+
+    assert ("feature", "water resistant", False, "clarification") in {
+        (item.attribute, item.value, item.is_hard, item.source)
+        for item in result.constraints
+    }
+
+
+@pytest.mark.parametrize(
+    ("text", "expected_attribute", "material", "soft_value"),
+    (
+        ("Rubber sole", "other", "rubber", "rubber sole"),
+        ("Synthetic sole", "feature", "synthetic", "synthetic sole"),
+    ),
+)
+def test_component_material_clarification_stays_soft(
+    text, expected_attribute, material, soft_value
+):
+    result = MessageParser().parse(
+        f"For that, what matters is: {text}.",
+        turn=4,
+        expected_attribute=expected_attribute,
+    )
+
+    assert all(
+        not (item.attribute == "material" and item.value == material)
+        for item in result.constraints
+    )
+    assert [(item.attribute, item.value, item.is_hard) for item in result.constraints] == [
+        (expected_attribute, soft_value, False)
+    ]
+
+
 def test_attribute_correction_does_not_replace_unmentioned_preferences():
     result = MessageParser().parse("Actually, make it blue.", turn=2)
 

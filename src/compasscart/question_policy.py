@@ -39,6 +39,13 @@ class QuestionPolicy:
         if len(candidates) <= 10:
             return QuestionDecision(None)
 
+        # An explicit override invalidates earlier preference evidence. Ask
+        # once for any additional distinguishing detail when the replacement
+        # still leaves an overloaded pool. Override scope is turn-local, so
+        # this cannot form a repeated generic-question loop.
+        if state.override_scope != "none" and "other" not in state.asked_attributes:
+            return QuestionDecision("other", 1.0)
+
         probabilities = self._probabilities(candidates)
         candidate_attributes = [self._attributes(candidate) for candidate in candidates]
         blocked = set(state.asked_attributes) | state.no_preference_attributes

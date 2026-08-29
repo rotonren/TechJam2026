@@ -148,6 +148,16 @@ def test_policy_does_not_invent_an_other_question_for_undifferentiated_results()
     assert decision.ask_attribute is None
 
 
+def test_policy_asks_for_distinguishing_detail_immediately_after_override():
+    candidates = [_candidate(f"P{index:03d}", 300.0 - index) for index in range(250)]
+    state = SessionState("s1", turn=3, override_scope="attribute")
+
+    decision = QuestionPolicy().choose(candidates, state)
+
+    assert decision.ask_attribute == "other"
+    assert decision.utility == 1.0
+
+
 def test_policy_does_not_ask_a_follow_up_when_more_results_are_requested():
     candidates = [
         _candidate(

@@ -2,20 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Collection, Iterable
 
+from .attribute_schema import ALLOWED_ASK_ATTRIBUTES
 from .models import Candidate, QuestionDecision
 
-ALLOWED_ATTRIBUTES = {
-    "category",
-    "material",
-    "color",
-    "size",
-    "style",
-    "brand",
-    "budget",
-    "feature",
-    "use_case",
-    "other",
-}
+ALLOWED_ATTRIBUTES = set(ALLOWED_ASK_ATTRIBUTES)
 _QUESTIONS = {
     "category": "What type of product are you looking for?",
     "material": "Do you have a material preference?",
