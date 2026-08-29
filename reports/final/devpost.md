@@ -71,7 +71,7 @@ On the unchanged 200-session official public evaluator:
 Scenario HitRate@10 is `0.9000` Boundary, `0.9625` Browsing, `0.9375` Buying,
 and `0.9333` Intent Override. Initialization is `19.6 s` and a 200-session run
 takes `89.9 s`. Reported token usage is zero, so the estimated API cost for the
-800-session private set is USD 0.00. The automated suite passes 1027 tests.
+800-session private set is USD 0.00. The automated suite passes 1039 tests.
 
 A hosted LLM reranker on the Buying route is worth `+0.004341` when
 credentials are present - HitRate `0.9650` to `0.9700`, MTTC `2.715` to

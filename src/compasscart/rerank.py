@@ -28,10 +28,11 @@ import sys
 import time
 from collections import OrderedDict
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from .models import Candidate, SessionState
+from .models import Candidate, Constraint, SessionState
 from .normalization import TOKEN_RE, flatten_text, searchable_fields
 
 # Function words carry no retrieval signal and would otherwise inflate the
@@ -60,6 +61,114 @@ _EVIDENCE_WEIGHTS = {
 Evidence = tuple[tuple[tuple[str, ...], float], ...]
 
 
+@dataclass(frozen=True)
+class RerankContext:
+    """The dialog state grouped by the role each requirement plays.
+
+    `Evidence` is deliberately lossy: it flattens the ledger into deduplicated
+    tokens, which is what a lexical scorer wants and is exactly what a model
+    cannot use. Which requirements bind, which are merely preferred, what the
+    shopper ruled out, and what only came from a profile all disappear - a
+    budget of `80.00` even survives flattening as the two tokens `80` and `00`.
+    Backends that can reason about structure take this instead.
+    """
+
+    hard: tuple[str, ...] = ()
+    stated: tuple[str, ...] = ()
+    excluded: tuple[str, ...] = ()
+    inferred: tuple[str, ...] = ()
+    messages: tuple[str, ...] = ()
+
+    def is_empty(self) -> bool:
+        return not (self.hard or self.stated or self.excluded or self.messages)
+
+
+def describe_constraint(item: Constraint) -> str:
+    """Render one ledger entry the way a shopper would have stated it."""
+    money = item.attribute == "budget"
+
+    def amount(value: str) -> str:
+        return f"${value}" if money else value
+
+    values = item.values()
+    if item.operator == "lte":
+        detail = f"at most {amount(item.value)}"
+    elif item.operator == "gte":
+        detail = f"at least {amount(item.value)}"
+    elif item.operator == "between" and item.upper_value:
+        detail = f"between {amount(item.value)} and {amount(item.upper_value)}"
+    elif len(values) > 1:
+        detail = "one of " + ", ".join(values)
+    else:
+        detail = amount(item.value)
+    return f"{item.attribute}: {detail}"
+
+
+def session_context(state: SessionState) -> RerankContext:
+    """Group the active ledger so a model can tell the roles apart.
+
+    Grouping by `is_hard` alone conflates two different things: a preference
+    the agent inferred weakly, and a requirement the shopper stated in words
+    the parser could not turn into a filter. The second is not optional. It is
+    what an override turn produces - the replacement requirement arrives as
+    free text and is stored soft so it cannot over-filter retrieval - so
+    grouping it as "helpful, not required" tells the model the opposite of what
+    the shopper just said.
+    """
+    grouped: dict[str, list[str]] = {
+        "hard": [],
+        "stated": [],
+        "excluded": [],
+        "inferred": [],
+    }
+    for item in state.active_constraints():
+        if item.operator == "not_in":
+            role = "excluded"
+        elif item.source in {"profile", "inferred"}:
+            role = "inferred"
+        elif item.is_hard:
+            role = "hard"
+        else:
+            role = "stated"
+        grouped[role].append(describe_constraint(item))
+    return RerankContext(
+        hard=tuple(dict.fromkeys(grouped["hard"])),
+        stated=tuple(dict.fromkeys(grouped["stated"])),
+        excluded=tuple(dict.fromkeys(grouped["excluded"])),
+        inferred=tuple(dict.fromkeys(grouped["inferred"])),
+        messages=tuple(
+            message.strip() for message in state.query_history[-3:] if message.strip()
+        ),
+    )
+
+
+def render_requirements(context: RerankContext, query: str) -> str:
+    """Format the context as the requirements half of a model prompt."""
+    if context.is_empty():
+        return f"Requirements: {query}"
+    blocks = (
+        ("Hard requirements (a product must satisfy all):", context.hard, "- {}"),
+        ("Must NOT have:", context.excluded, "- {}"),
+        (
+            "Also stated by the shopper, phrased loosely but still wanted:",
+            context.stated,
+            "- {}",
+        ),
+        ("What the shopper said, most recent last:", context.messages, '- "{}"'),
+        (
+            "Weak signal inferred, not stated by the shopper:",
+            context.inferred,
+            "- {}",
+        ),
+    )
+    sections = [
+        heading + "\n" + "\n".join(bullet.format(item) for item in items)
+        for heading, items, bullet in blocks
+        if items
+    ]
+    return "\n\n".join(sections)
+
+
 class RerankBackend(Protocol):
     @property
     def available(self) -> bool: ...
@@ -68,7 +177,11 @@ class RerankBackend(Protocol):
     def status(self) -> str: ...
 
     def scores(
-        self, evidence: Evidence, candidates: Sequence[Candidate]
+        self,
+        evidence: Evidence,
+        candidates: Sequence[Candidate],
+        *,
+        context: RerankContext | None = None,
     ) -> list[float]: ...
 
 
@@ -79,9 +192,13 @@ class NullRerankBackend:
         self.status = status
 
     def scores(
-        self, evidence: Evidence, candidates: Sequence[Candidate]
+        self,
+        evidence: Evidence,
+        candidates: Sequence[Candidate],
+        *,
+        context: RerankContext | None = None,
     ) -> list[float]:
-        del evidence
+        del evidence, context
         return [0.0] * len(candidates)
 
 
@@ -138,8 +255,13 @@ class PhraseMatchBackend:
         self._tokens: OrderedDict[str, tuple[str, ...]] = OrderedDict()
 
     def scores(
-        self, evidence: Evidence, candidates: Sequence[Candidate]
+        self,
+        evidence: Evidence,
+        candidates: Sequence[Candidate],
+        *,
+        context: RerankContext | None = None,
     ) -> list[float]:
+        del context  # A lexical scorer wants the tokens, not the roles.
         if not evidence or not candidates:
             return [0.0] * len(candidates)
         total_weight = sum(weight for _, weight in evidence)
@@ -264,8 +386,13 @@ class CrossEncoderBackend:
         return self._available
 
     def scores(
-        self, evidence: Evidence, candidates: Sequence[Candidate]
+        self,
+        evidence: Evidence,
+        candidates: Sequence[Candidate],
+        *,
+        context: RerankContext | None = None,
     ) -> list[float]:
+        del context  # The cross-encoder scores a flat query against text.
         if not self._available or not evidence or not candidates:
             return [0.0] * len(candidates)
         query = evidence_query(evidence, self.query_tokens)
@@ -334,6 +461,7 @@ class LlmRerankBackend:
         query_tokens: int = 48,
         failure_limit: int = 3,
         cache_size: int = 2048,
+        structured_prompt: bool = False,
     ) -> None:
         if not base_url or not api_key or not model:
             raise ValueError("base_url, api_key and model are all required")
@@ -349,6 +477,11 @@ class LlmRerankBackend:
         self._failures = 0
         self._available = True
         self.status = "llm"
+        # Measured: the grouped prompt is better on ordinary Buying turns
+        # (MRR 0.477 -> 0.522) and worse on Intent Override (HitRate 0.9333 ->
+        # 0.9000), and worse overall - 0.823744 against 0.826831. The flat
+        # query therefore stays the default until that split is understood.
+        self.structured_prompt = structured_prompt
         self.last_usage: dict[str, int] = {}
         self._cache: OrderedDict[tuple[str, tuple[str, ...]], list[float]] = (
             OrderedDict()
@@ -360,23 +493,32 @@ class LlmRerankBackend:
         return self._available
 
     def scores(
-        self, evidence: Evidence, candidates: Sequence[Candidate]
+        self,
+        evidence: Evidence,
+        candidates: Sequence[Candidate],
+        *,
+        context: RerankContext | None = None,
     ) -> list[float]:
         self.last_usage = {}
-        if not self._available or not evidence or not candidates:
+        if not self._available or not candidates:
             return [0.0] * len(candidates)
         query = evidence_query(evidence, self.query_tokens)
-        if not query:
+        requirements = (
+            render_requirements(context or RerankContext(), query)
+            if self.structured_prompt
+            else f"Requirements: {query}"
+        )
+        if not requirements.strip():
             return [0.0] * len(candidates)
 
-        key = (query, tuple(item.parent_asin for item in candidates))
+        key = (requirements, tuple(item.parent_asin for item in candidates))
         cached = self._cache.get(key)
         if cached is not None:
             self._cache.move_to_end(key)
             return list(cached)
 
         try:
-            ranking, usage = self._request(query, candidates)
+            ranking, usage = self._request(requirements, candidates)
         except Exception:  # noqa: BLE001 - the offline backend is the guarantee.
             self._failures += 1
             if self._failures >= self._failure_limit:
@@ -397,7 +539,7 @@ class LlmRerankBackend:
         return scores
 
     def _request(
-        self, query: str, candidates: Sequence[Candidate]
+        self, requirements: str, candidates: Sequence[Candidate]
     ) -> tuple[list[int], dict[str, int]]:
         import json
         import urllib.request
@@ -414,7 +556,7 @@ class LlmRerankBackend:
                     {
                         "role": "user",
                         "content": (
-                            f"Requirements: {query}\n\n"
+                            f"{requirements}\n\n"
                             f"Candidates ({len(candidates)} total):\n{listing}"
                         ),
                     },
@@ -449,7 +591,7 @@ class LlmRerankBackend:
         return [int(index) for index in ranking], usage
 
 
-def load_llm_backend() -> RerankBackend:
+def load_llm_backend(*, structured_prompt: bool = False) -> RerankBackend:
     """Build the hosted backend from the environment, or report why not."""
     base_url = os.environ.get("COMPASSCART_LLM_BASE_URL", "").strip()
     api_key = os.environ.get("COMPASSCART_LLM_API_KEY", "").strip()
@@ -457,7 +599,12 @@ def load_llm_backend() -> RerankBackend:
     if not base_url or not api_key or not model:
         return NullRerankBackend("llm_credentials_missing")
     try:
-        return LlmRerankBackend(base_url=base_url, api_key=api_key, model=model)
+        return LlmRerankBackend(
+            base_url=base_url,
+            api_key=api_key,
+            model=model,
+            structured_prompt=structured_prompt,
+        )
     except Exception:  # noqa: BLE001 - optional by construction.
         return NullRerankBackend("llm_construction_failed")
 
@@ -523,6 +670,7 @@ def load_rerank_backend(
     backend: str = "phrase",
     asset_dir: Path | None = None,
     max_length: int = 128,
+    structured_prompt: bool = False,
 ) -> RerankBackend:
     """Select the rerank backend, honoring the ablation environment switch."""
     if os.environ.get("COMPASSCART_DISABLE_RERANK") == "1":
@@ -531,7 +679,7 @@ def load_rerank_backend(
         return NullRerankBackend("disabled_by_config")
     try:
         if backend == "llm":
-            loaded = load_llm_backend()
+            loaded = load_llm_backend(structured_prompt=structured_prompt)
             # No credentials in the scoring environment is the expected case,
             # not an error; the lexical backend is what must always work.
             return loaded if loaded.available else PhraseMatchBackend()
@@ -560,6 +708,7 @@ class RerankStage:
         buying_weight: float | None = None,
         buying_backend: RerankBackend | None = None,
         buying_window: int | None = None,
+        buying_requires_override: bool = False,
     ) -> None:
         if window < 2:
             raise ValueError("window must be at least 2")
@@ -587,12 +736,24 @@ class RerankStage:
         # different budgets: a lexical scorer is happy with fifty candidates,
         # while a hosted model pays prompt tokens for every one of them.
         self.buying_window = window if buying_window is None else buying_window
+        # Measured: the model's gain concentrates on Intent Override
+        # (+0.0060 weighted) while ordinary Buying turns are flat (-0.0006),
+        # so spending a call on every Buying turn buys mostly nothing.
+        self.buying_requires_override = buying_requires_override
 
     def backend_for(self, state: SessionState) -> RerankBackend:
         return self.buying_backend if state.route == "buying" else self.backend
 
     def window_for(self, state: SessionState) -> int:
         return self.buying_window if state.route == "buying" else self.window
+
+    def runs_for(self, state: SessionState) -> bool:
+        """Whether this turn is worth spending the Buying backend on."""
+        if state.route != "buying" or not self.buying_requires_override:
+            return True
+        # An override persists for the rest of the session through the intent
+        # version; `override_scope` only marks the turn it arrived on.
+        return state.intent_version > 1 or state.override_scope != "none"
 
     @property
     def available(self) -> bool:
@@ -623,6 +784,8 @@ class RerankStage:
         backend = self.backend_for(state)
         if weight <= 0.0 or not getattr(backend, "available", False):
             return candidates
+        if not self.runs_for(state):
+            return candidates
         if deadline is not None and time.perf_counter() >= deadline:
             if diagnostics is not None and "rerank_budget" not in diagnostics:
                 diagnostics.append("rerank_budget")
@@ -634,7 +797,7 @@ class RerankStage:
         window = self.window_for(state)
         head = candidates[:window]
         tail = candidates[window:]
-        scores = backend.scores(evidence, head)
+        scores = backend.scores(evidence, head, context=session_context(state))
         if usage is not None:
             # A backend that calls a model reports what the turn cost; the
             # offline backends report nothing and leave the totals at zero.

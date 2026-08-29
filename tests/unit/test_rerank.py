@@ -10,13 +10,17 @@ from compasscart.rerank import (
     LlmRerankBackend,
     NullRerankBackend,
     PhraseMatchBackend,
+    RerankContext,
     RerankStage,
     compact_document,
+    describe_constraint,
     evidence_query,
     load_cross_encoder_backend,
     load_llm_backend,
     load_rerank_backend,
     longest_contiguous_run,
+    render_requirements,
+    session_context,
     session_evidence,
     token_sequence,
 )
@@ -241,8 +245,8 @@ def test_mismatched_backend_score_count_is_rejected():
         available = True
         status = "broken"
 
-        def scores(self, evidence, candidates):
-            del evidence, candidates
+        def scores(self, evidence, candidates, *, context=None):
+            del evidence, candidates, context
             return [1.0]
 
     state = _state(Constraint("feature", "water", 1.0, True, "message", 1, 1))
@@ -603,3 +607,125 @@ def test_each_route_reorders_only_its_own_window():
 
     # C sits outside the two-candidate Buying window, so it stays put.
     assert reranked[2].parent_asin == "C"
+
+
+def _constraint(attribute, value, **kwargs):
+    fields = {"confidence": 1.0, "is_hard": True, "source": "message",
+              "created_turn": 1, "intent_version": 1}
+    fields.update(kwargs)
+    return Constraint(attribute, value, **fields)
+
+
+def test_context_groups_the_ledger_by_role():
+    state = _state(
+        _constraint("material", "leather"),
+        _constraint("color", "navy", is_hard=False),
+        _constraint("style", "flashy", operator="not_in", alternatives=("flashy",)),
+        _constraint("feature", "comfortable", is_hard=False, source="profile"),
+        messages=("I want boots.",),
+    )
+
+    context = session_context(state)
+
+    assert context.hard == ("material: leather",)
+    assert context.stated == ("color: navy",)
+    assert context.excluded == ("style: flashy",)
+    assert context.inferred == ("feature: comfortable",)
+    assert context.messages == ("I want boots.",)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    (
+        ({"attribute": "budget", "value": "80.00", "operator": "lte"},
+         "budget: at most $80.00"),
+        ({"attribute": "budget", "value": "20.00", "operator": "gte"},
+         "budget: at least $20.00"),
+        ({"attribute": "budget", "value": "20.00", "operator": "between",
+          "upper_value": "80.00"}, "budget: between $20.00 and $80.00"),
+        ({"attribute": "color", "value": "black", "operator": "in",
+          "alternatives": ("black", "navy")}, "color: one of black, navy"),
+        ({"attribute": "material", "value": "leather"}, "material: leather"),
+    ),
+)
+def test_describe_constraint_states_the_operator(kwargs, expected):
+    # The flattened token bag turns a budget of 80.00 into "80" and "00".
+    assert describe_constraint(_constraint(**kwargs)) == expected
+
+
+def test_rendered_requirements_keep_a_negation_negative():
+    state = _state(
+        _constraint("material", "leather"),
+        _constraint("style", "flashy", operator="not_in", alternatives=("flashy",)),
+    )
+
+    rendered = render_requirements(session_context(state), "")
+
+    assert "Hard requirements" in rendered
+    assert "- material: leather" in rendered
+    assert "Must NOT have:\n- style: flashy" in rendered
+
+
+def test_rendered_requirements_fall_back_to_the_flat_query():
+    assert render_requirements(RerankContext(), "leather boot") == (
+        "Requirements: leather boot"
+    )
+
+
+def test_override_gate_skips_ordinary_buying_turns():
+    stage = RerankStage(
+        PhraseMatchBackend(), weight=0.8, buying_weight=0.8,
+        buying_requires_override=True,
+    )
+    state = _state()
+
+    state.route = "browsing"
+    assert stage.runs_for(state) is True          # the gate is Buying-only
+    state.route = "buying"
+    assert stage.runs_for(state) is False         # ordinary Buying turn
+    state.override_scope = "goal"
+    assert stage.runs_for(state) is True          # the turn the override lands
+    state.override_scope = "none"
+    state.intent_version = 2
+    assert stage.runs_for(state) is True          # and every turn after it
+
+
+def test_override_gate_is_off_by_default():
+    stage = RerankStage(PhraseMatchBackend(), weight=0.8, buying_weight=0.8)
+    state = _state()
+    state.route = "buying"
+
+    assert stage.runs_for(state) is True
+
+
+def test_a_gated_turn_returns_the_input_untouched():
+    state = _state(_constraint("feature", "water resistant"))
+    state.route = "buying"
+    candidates = [_candidate("A", "cotton tote"), _candidate("B", "water resistant")]
+    stage = RerankStage(
+        PhraseMatchBackend(), weight=1.0, buying_weight=1.0,
+        buying_requires_override=True,
+    )
+
+    assert stage.apply(candidates, state) is candidates
+
+
+def test_a_replacement_requirement_is_not_labelled_optional():
+    """An override stores its payload soft so it cannot over-filter retrieval.
+
+    Presenting it to a model as an optional preference states the opposite of
+    what the shopper just said, and measured `-0.105` Intent Override MRR.
+    """
+    state = _state(
+        _constraint("category", "boots"),
+        _constraint(
+            "feature", "water resistant", is_hard=False, source="clarification"
+        ),
+        _constraint("feature", "comfortable", is_hard=False, source="profile"),
+    )
+
+    rendered = render_requirements(session_context(state), "")
+
+    assert "still wanted:\n- feature: water resistant" in rendered
+    assert "not required" not in rendered
+    assert "Weak signal inferred, not stated by the shopper:\n- feature: comfortable" in rendered

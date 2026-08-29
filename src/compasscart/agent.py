@@ -67,6 +67,7 @@ class CompassCartAgent:
                 backend=name,
                 asset_dir=rerank_assets,
                 max_length=self.config.rerank_max_length,
+                structured_prompt=self.config.rerank_structured_prompt,
             )
 
         browsing_backend = rerank_backend(self.config.rerank_backend)
@@ -76,6 +77,7 @@ class CompassCartAgent:
             buying_window=self.config.rerank_buying_window,
             weight=self.config.rerank_weight,
             buying_weight=self.config.rerank_buying_weight,
+            buying_requires_override=self.config.rerank_buying_requires_override,
             buying_backend=(
                 rerank_backend(self.config.rerank_buying_backend)
                 if self.config.rerank_buying_backend

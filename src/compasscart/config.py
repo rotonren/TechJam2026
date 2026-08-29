@@ -46,6 +46,8 @@ class RuntimeConfig:
     rerank_buying_weight: float = 0.0
     rerank_backend: str = "phrase"
     rerank_buying_backend: str | None = None
+    rerank_buying_requires_override: bool = False
+    rerank_structured_prompt: bool = False
     evolution_enabled: bool = True
     strategy_enabled: bool = True
     rerank_max_length: int = 128
@@ -95,6 +97,10 @@ class RuntimeConfig:
             self.rerank_buying_weight,
             {0.0, 0.3, 0.45, 0.6, 0.8, 1.0},
         )
+        if not isinstance(self.rerank_structured_prompt, bool):
+            raise TypeError("rerank_structured_prompt must be a bool")
+        if not isinstance(self.rerank_buying_requires_override, bool):
+            raise TypeError("rerank_buying_requires_override must be a bool")
         allowed_backends = {"phrase", "cross_encoder", "llm"}
         if self.rerank_backend not in allowed_backends:
             raise ValueError(f"rerank_backend must be one of {sorted(allowed_backends)}")

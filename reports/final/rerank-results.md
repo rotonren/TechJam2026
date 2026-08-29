@@ -277,3 +277,70 @@ reply is a true permutation of the window before trusting it, and falls back to
 the lexical backend on a timeout, a refusal, an unparseable reply, or absent
 credentials - which is the expected case under `submission_rules.md`, since
 official scoring may disable network access and forbids shipping keys.
+
+## Prompt structure: measured, and not adopted
+
+The flat query the model receives is `evidence_query`, written for the
+cross-encoder and reused unchanged. It flattens the ledger into deduplicated
+tokens:
+
+```
+leather 80 00 flashy i am looking for boots a key requirement is
+water resistant rubber outsole black comfortable
+```
+
+Three things are lost. `leather` is a hard requirement and `black` a
+preference, indistinguishable here. A budget of `80.00` becomes the tokens
+`80` and `00`. Worst, `flashy` was a *negative* constraint - the shopper ruled
+it out - and reads identically to something they asked for, so the prompt
+states the opposite of what they said.
+
+`RerankContext` groups the ledger by role and renders it as headed sections.
+Measured on the Buying route against the flat query:
+
+| Prompt | TechnicalScore | Buying MRR | Override Hit@10 | Override MRR |
+| --- | ---: | ---: | ---: | ---: |
+| **Flat query** | **0.826831** | 0.477346 | **0.9333** | **0.691984** |
+| Grouped by role | 0.823744 | **0.521776** | 0.9000 | 0.626389 |
+| Grouped, override turns only | 0.821818 | n/a | 0.9333 | 0.645926 |
+
+The result splits: grouping is clearly better on ordinary Buying turns, worth
+`+0.044` MRR, and clearly worse on Intent Override. We do not have an
+explanation for the second half, and finding one costs more measurements than
+the path is worth, so the flat query stays the default and the grouped prompt
+ships behind `rerank_structured_prompt`.
+
+### A labelling bug worth `0.0025`
+
+The first grouped prompt scored `0.821236`, two and a half thousandths lower,
+because it presented an override's replacement requirement as
+`Preferences (helpful, not required)` on the very turn the shopper said it was
+what they needed.
+
+The cause was reading one field as if it answered a different question.
+`is_hard=False` on that constraint means *this free text cannot safely become a
+retrieval filter* - "Received APMA Seal of Acceptance" as a hard filter would
+empty the candidate pool - and the parser is right to set it. It does not mean
+the shopper is indifferent. The field that answers *did they say this* is
+`source`. Grouping by source instead of by hardness recovered `+0.0025`.
+
+The general shape is worth keeping: a field acquires a second meaning when a
+new consumer reads it with the old name in mind. Structure is only an
+improvement over a bag of words while its labels are right. A flat query is
+uninformative; a mislabelled structured one is confidently wrong, and cost
+`-0.105` Override MRR.
+
+## Where the LLM path stands
+
+| Configuration | TechnicalScore | Prompt tokens | Wall | Needs credentials |
+| --- | ---: | ---: | ---: | --- |
+| Offline default | 0.822490 | 0 | 73 s | no |
+| **LLM, flat prompt, Buying w20** | **0.826831** | 362,330 | 314 s | yes |
+| LLM, grouped prompt | 0.823744 | 391,194 | 383 s | yes |
+| LLM, grouped, override turns only | 0.821818 | 38,826 | 99 s | yes |
+
+The override gate works exactly as designed - it cuts prompt tokens tenfold and
+the run to 99 seconds, and Buying's per-scenario numbers match the offline run
+to six decimal places, confirming it does not fire on ordinary turns. It simply
+does not pay, because the gain it concentrates on is smaller than what the
+ungated configuration collects across all Buying turns.
