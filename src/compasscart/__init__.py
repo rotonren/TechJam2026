@@ -5,10 +5,10 @@ from .config import RuntimeConfig
 from .models import Candidate, Constraint, QuestionDecision, RetrievalPlan, SessionState
 
 __all__ = [
-    "Candidate",
-    "Constraint",
     "AttributeSchema",
     "AttributeSpec",
+    "Candidate",
+    "Constraint",
     "QuestionDecision",
     "RetrievalPlan",
     "RuntimeConfig",
