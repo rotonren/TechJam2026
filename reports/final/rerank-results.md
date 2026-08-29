@@ -163,7 +163,62 @@ The sealed audit fold, the three-trial release benchmark, and the frozen-input
 and delivery-contract checks recorded at `c0d444fa` were **not** re-run for
 this runtime.
 
-## Rejected: hosted LLM listwise reranking
+## Hosted LLM listwise reranking: measured, not shipped
+
+`LlmRerankBackend` sends the rerank window to an OpenAI-compatible endpoint and
+asks for a full ordering. Measured with `deepseek-chat` on the Buying route,
+with Browsing keeping the phrase backend:
+
+| Configuration | TechnicalScore | Hit@10 | MRR | MTTC | Prompt tokens | Wall |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Offline default | 0.822490 | 0.9650 | 0.580968 | 2.715 | 0 | 73 s |
+| **Browsing w50 phrase / Buying w20 LLM** | **0.826831** | **0.9700** | 0.581435 | **2.630** | 362,330 | 314 s |
+| Both routes w50, Buying LLM | 0.824349 | 0.9700 | 0.575163 | 2.660 | 382,946 | 243 s |
+
+The stage is worth `+0.004341`, driven by Hit@10 and efficiency rather than by
+MRR: on Buying it lifts HitRate from `0.9625` to `0.9750` and cuts MTTC from
+`2.050` to `1.788`. A twenty-candidate window beats a fifty-candidate one,
+which is consistent with listwise permutation becoming less reliable as the
+list grows.
+
+### A confounded first measurement, and the correction
+
+The first LLM experiment reported `-0.001266` and concluded the backend did not
+pay. That was an error in the experiment, not a result. The LLM configurations
+used `rerank_window=20` while the baseline used `50`, and the window is a
+stage-level parameter, so lowering it for the model also lowered it for the
+phrase backend on Browsing. An isolation run with no model at all measured
+window 20 at `0.812999` against window 50 at `0.822490`: the window change
+alone costs `-0.009491`, and that cost had been attributed to the model.
+
+The same run also disproved the explanation offered for it. Boundary was said
+to suffer because those sessions route as Buying and so met the model. Route
+counts show the opposite - Boundary is routed Browsing on all thirty of its
+turns, and the model never ran on it. Its apparent collapse from `1.0000` to
+`0.9000` was entirely the window change, reproduced exactly by the model-free
+control.
+
+Making the window per route, as the backend and weight already were, removes
+the confound and turns `-0.001266` into `+0.004341`.
+
+**The cross-encoder result above carries the same confound.** It was measured
+at window 20 against a window 50 baseline and has not been re-run per route, so
+`-0.007` overstates its cost by an unknown amount up to the window's `-0.0095`.
+It is reported here as measured, not as settled.
+
+### Why it is not the default
+
+`submission_rules.md` forbids shipping API keys and states that official
+scoring may disable network access, so the backend cannot authenticate in the
+scoring environment and the offline path is what will run. The two rows are
+therefore both reported: `0.822490` is the score the organizer will reproduce,
+and `0.826831` is what the same code achieves when credentials are present.
+
+Every failure mode returns the lexical backend rather than degrading a turn: a
+timeout, a refusal, an unparseable reply, a reply that is not a permutation of
+the window, or absent credentials.
+
+## Appendix: the confounded first LLM measurement
 
 `LlmRerankBackend` sends the rerank window to an OpenAI-compatible endpoint and
 asks for a full ordering. Measured with `deepseek-chat`, applied to the Buying

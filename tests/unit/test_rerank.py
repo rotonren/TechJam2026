@@ -565,3 +565,41 @@ def test_stage_is_available_when_only_the_buying_backend_is():
     )
 
     assert stage.available is True
+
+
+def test_stage_uses_a_different_window_per_route():
+    # A lexical scorer is happy with fifty candidates; a hosted model pays
+    # prompt tokens for every one of them, so the budgets differ by route.
+    stage = RerankStage(PhraseMatchBackend(), window=50, buying_window=20)
+    state = _state()
+
+    assert stage.window_for(state) == 50
+    state.route = "buying"
+    assert stage.window_for(state) == 20
+
+
+def test_buying_window_defaults_to_the_shared_window():
+    assert RerankStage(PhraseMatchBackend(), window=50).buying_window == 50
+
+
+def test_stage_rejects_an_invalid_buying_window():
+    with pytest.raises(ValueError):
+        RerankStage(PhraseMatchBackend(), window=50, buying_window=1)
+
+
+def test_each_route_reorders_only_its_own_window():
+    state = _state(Constraint("feature", "water resistant", 1.0, True, "message", 1, 1))
+    state.route = "buying"
+    candidates = [
+        _candidate("A", "cotton tote bag"),
+        _candidate("B", "wool scarf"),
+        _candidate("C", "water resistant hiking boot"),
+    ]
+    stage = RerankStage(
+        PhraseMatchBackend(), window=50, buying_window=2, weight=1.0, buying_weight=1.0
+    )
+
+    reranked = stage.apply(candidates, state)
+
+    # C sits outside the two-candidate Buying window, so it stays put.
+    assert reranked[2].parent_asin == "C"

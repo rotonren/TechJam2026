@@ -154,7 +154,14 @@ corrections it made to our hand-written question priors, and the strategy
 selector's rejected `relax` variant at `-0.010` are in
 `reports/final/evolution-results.md`.
 
-The full automated suite passes 1006 tests with 7 skipped, and Ruff lint passes
+An optional hosted-model rerank backend scores `0.826831` when credentials are
+present, `+0.004341` over the offline default, for 362,330 prompt tokens and a
+4.3x slower run. It is not the default: `docs/submission_rules.md` forbids
+shipping API keys and states that official scoring may disable network access,
+so the offline path is the one the organizer will reproduce. Both numbers are
+reported in `reports/final/rerank-results.md`.
+
+The full automated suite passes 1027 tests with 7 skipped, and Ruff lint passes
 across `src`, `tests`, and `tools`.
 
 Earlier stable evidence remains in `reports/final/final-results.json` and

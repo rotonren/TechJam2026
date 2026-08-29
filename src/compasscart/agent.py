@@ -73,6 +73,7 @@ class CompassCartAgent:
         self.reranker = RerankStage(
             browsing_backend,
             window=self.config.rerank_window,
+            buying_window=self.config.rerank_buying_window,
             weight=self.config.rerank_weight,
             buying_weight=self.config.rerank_buying_weight,
             buying_backend=(

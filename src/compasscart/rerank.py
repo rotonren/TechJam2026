@@ -559,9 +559,12 @@ class RerankStage:
         weight: float = 0.6,
         buying_weight: float | None = None,
         buying_backend: RerankBackend | None = None,
+        buying_window: int | None = None,
     ) -> None:
         if window < 2:
             raise ValueError("window must be at least 2")
+        if buying_window is not None and buying_window < 2:
+            raise ValueError("buying_window must be at least 2")
         if not 0.0 <= weight <= 1.0:
             raise ValueError("weight must be within [0, 1]")
         if buying_weight is not None and not 0.0 <= buying_weight <= 1.0:
@@ -580,9 +583,16 @@ class RerankStage:
         # suits verbatim quotation, and a model suits judging whether a hard
         # requirement is actually satisfied.
         self.buying_backend = buying_backend or self.backend
+        # The window is per route as well, because the two backends have
+        # different budgets: a lexical scorer is happy with fifty candidates,
+        # while a hosted model pays prompt tokens for every one of them.
+        self.buying_window = window if buying_window is None else buying_window
 
     def backend_for(self, state: SessionState) -> RerankBackend:
         return self.buying_backend if state.route == "buying" else self.backend
+
+    def window_for(self, state: SessionState) -> int:
+        return self.buying_window if state.route == "buying" else self.window
 
     @property
     def available(self) -> bool:
@@ -621,8 +631,9 @@ class RerankStage:
         if not evidence:
             return candidates
 
-        head = candidates[: self.window]
-        tail = candidates[self.window :]
+        window = self.window_for(state)
+        head = candidates[:window]
+        tail = candidates[window:]
         scores = backend.scores(evidence, head)
         if usage is not None:
             # A backend that calls a model reports what the turn cost; the

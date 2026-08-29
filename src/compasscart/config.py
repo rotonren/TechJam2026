@@ -39,6 +39,7 @@ class RuntimeConfig:
     dense_rescue_only: bool = True
     rerank_enabled: bool = True
     rerank_window: int = 50
+    rerank_buying_window: int | None = None
     rerank_weight: float = 0.8
     # Measured: the rerank stage is worth +0.038 Browsing HitRate and -0.025 on
     # Buying, where explicit hard constraints already inform the ranker.
@@ -80,6 +81,12 @@ class RuntimeConfig:
             raise TypeError("rerank_window must be an int")
         if self.rerank_window not in {20, 50, 100}:
             raise ValueError("rerank_window must be one of 20, 50, or 100")
+        if self.rerank_buying_window is not None and (
+            self.rerank_buying_window not in {20, 50, 100}
+        ):
+            raise ValueError(
+                "rerank_buying_window must be one of 20, 50, or 100"
+            )
         self._validate_choice(
             "rerank_weight", self.rerank_weight, {0.0, 0.3, 0.45, 0.6, 0.8, 1.0}
         )

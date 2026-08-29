@@ -71,14 +71,23 @@ On the unchanged 200-session official public evaluator:
 Scenario HitRate@10 is `0.9000` Boundary, `0.9625` Browsing, `0.9375` Buying,
 and `0.9333` Intent Override. Initialization is `19.6 s` and a 200-session run
 takes `89.9 s`. Reported token usage is zero, so the estimated API cost for the
-800-session private set is USD 0.00. The automated suite passes 1006 tests.
+800-session private set is USD 0.00. The automated suite passes 1027 tests.
 
-Two ideas were measured and thrown away rather than shipped. Weighting the
-rerank by window-local inverse document frequency cost `-0.011`, because the
-rerank window is selected by the query and so a local statistic penalizes the
-shopper's own terms. A quantized MS MARCO cross-encoder cost `-0.007`: it
-produced the best MRR we measured and the worst HitRate, and HitRate carries
-the larger weight. Both are written up in `reports/final/rerank-results.md`.
+A hosted LLM reranker on the Buying route is worth `+0.004341` when
+credentials are present - HitRate `0.9650` to `0.9700`, MTTC `2.715` to
+`2.630`, for 362,330 prompt tokens. It is not the default, because
+`submission_rules.md` forbids shipping API keys and may disable network access
+during official scoring, so the offline path is what actually runs there. Both
+numbers are reported rather than only the better one.
+
+Getting that number right took a second attempt. The first measurement said the
+model cost `-0.001266`, which we believed until an isolation run showed the
+loss belonged to a window size we had changed at the same time, worth `-0.0095`
+on its own. Making the rerank window per route, as the backend and weight
+already were, turned the result positive. Weighting the rerank by window-local
+inverse document frequency was a genuine loss at `-0.011`, for a structural
+reason: the window is selected by the query, so a local statistic penalizes the
+shopper's own terms. All of it is in `reports/final/rerank-results.md`.
 
 ## Challenges
 
