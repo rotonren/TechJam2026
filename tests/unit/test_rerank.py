@@ -729,3 +729,53 @@ def test_a_replacement_requirement_is_not_labelled_optional():
     assert "still wanted:\n- feature: water resistant" in rendered
     assert "not required" not in rendered
     assert "Weak signal inferred, not stated by the shopper:\n- feature: comfortable" in rendered
+
+
+def test_context_reports_whether_the_session_has_been_overridden():
+    state = _state()
+    assert session_context(state).is_override is False
+
+    state.override_scope = "goal"
+    assert session_context(state).is_override is True
+
+    state.override_scope = "none"
+    state.intent_version = 2
+    # The scope marks only the turn it arrived on; the version persists.
+    assert session_context(state).is_override is True
+
+
+@pytest.mark.parametrize(
+    ("style", "is_override", "structured"),
+    (
+        ("flat", False, False),
+        ("flat", True, False),
+        ("structured", False, True),
+        ("structured", True, True),
+        # Grouping measured better on ordinary Buying turns and worse on
+        # Intent Override, so adaptive takes each where it wins.
+        ("adaptive", False, True),
+        ("adaptive", True, False),
+    ),
+)
+def test_prompt_style_decides_which_form_is_sent(monkeypatch, style, is_override, structured):
+    sent: list[str] = []
+
+    def handler(request, *args, **kwargs):
+        sent.append(json.loads(request.data)["messages"][1]["content"])
+        return _StubResponse(_llm_payload([0]))
+
+    _patch_urlopen(monkeypatch, handler)
+    backend = _llm_backend(prompt_style=style)
+    context = RerankContext(
+        hard=("material: leather",), is_override=is_override
+    )
+
+    backend.scores(((("leather",), 1.0),), [_candidate("A", "a")], context=context)
+
+    assert ("Hard requirements" in sent[0]) is structured
+    assert sent[0].startswith("Requirements:") is not structured
+
+
+def test_backend_rejects_an_unknown_prompt_style():
+    with pytest.raises(ValueError):
+        _llm_backend(prompt_style="clever")

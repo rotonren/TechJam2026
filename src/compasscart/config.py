@@ -47,7 +47,7 @@ class RuntimeConfig:
     rerank_backend: str = "phrase"
     rerank_buying_backend: str | None = None
     rerank_buying_requires_override: bool = False
-    rerank_structured_prompt: bool = False
+    rerank_prompt_style: str = "flat"
     evolution_enabled: bool = True
     strategy_enabled: bool = True
     rerank_max_length: int = 128
@@ -97,8 +97,10 @@ class RuntimeConfig:
             self.rerank_buying_weight,
             {0.0, 0.3, 0.45, 0.6, 0.8, 1.0},
         )
-        if not isinstance(self.rerank_structured_prompt, bool):
-            raise TypeError("rerank_structured_prompt must be a bool")
+        if self.rerank_prompt_style not in {"flat", "structured", "adaptive"}:
+            raise ValueError(
+                'rerank_prompt_style must be "flat", "structured" or "adaptive"'
+            )
         if not isinstance(self.rerank_buying_requires_override, bool):
             raise TypeError("rerank_buying_requires_override must be a bool")
         allowed_backends = {"phrase", "cross_encoder", "llm"}

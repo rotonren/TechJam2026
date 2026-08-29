@@ -78,6 +78,7 @@ class RerankContext:
     excluded: tuple[str, ...] = ()
     inferred: tuple[str, ...] = ()
     messages: tuple[str, ...] = ()
+    is_override: bool = False
 
     def is_empty(self) -> bool:
         return not (self.hard or self.stated or self.excluded or self.messages)
@@ -139,6 +140,7 @@ def session_context(state: SessionState) -> RerankContext:
         messages=tuple(
             message.strip() for message in state.query_history[-3:] if message.strip()
         ),
+        is_override=state.intent_version > 1 or state.override_scope != "none",
     )
 
 
@@ -461,7 +463,7 @@ class LlmRerankBackend:
         query_tokens: int = 48,
         failure_limit: int = 3,
         cache_size: int = 2048,
-        structured_prompt: bool = False,
+        prompt_style: str = "flat",
     ) -> None:
         if not base_url or not api_key or not model:
             raise ValueError("base_url, api_key and model are all required")
@@ -477,11 +479,15 @@ class LlmRerankBackend:
         self._failures = 0
         self._available = True
         self.status = "llm"
-        # Measured: the grouped prompt is better on ordinary Buying turns
-        # (MRR 0.477 -> 0.522) and worse on Intent Override (HitRate 0.9333 ->
-        # 0.9000), and worse overall - 0.823744 against 0.826831. The flat
-        # query therefore stays the default until that split is understood.
-        self.structured_prompt = structured_prompt
+        # Measured: grouping the ledger by role is better on ordinary Buying
+        # turns (MRR 0.477 -> 0.522) and worse on Intent Override (HitRate
+        # 0.9333 -> 0.9000). `adaptive` takes each where it wins; `flat` and
+        # `structured` keep both single-style measurements reproducible.
+        if prompt_style not in {"flat", "structured", "adaptive"}:
+            raise ValueError(
+                'prompt_style must be "flat", "structured" or "adaptive"'
+            )
+        self.prompt_style = prompt_style
         self.last_usage: dict[str, int] = {}
         self._cache: OrderedDict[tuple[str, tuple[str, ...]], list[float]] = (
             OrderedDict()
@@ -503,9 +509,18 @@ class LlmRerankBackend:
         if not self._available or not candidates:
             return [0.0] * len(candidates)
         query = evidence_query(evidence, self.query_tokens)
+        grouped = context or RerankContext()
+        if self.prompt_style == "structured":
+            use_structure = True
+        elif self.prompt_style == "adaptive":
+            # A replacement requirement arrives as free text with almost no
+            # ledger behind it yet, and the grouped form measured worse there.
+            use_structure = not grouped.is_override
+        else:
+            use_structure = False
         requirements = (
-            render_requirements(context or RerankContext(), query)
-            if self.structured_prompt
+            render_requirements(grouped, query)
+            if use_structure
             else f"Requirements: {query}"
         )
         if not requirements.strip():
@@ -591,7 +606,7 @@ class LlmRerankBackend:
         return [int(index) for index in ranking], usage
 
 
-def load_llm_backend(*, structured_prompt: bool = False) -> RerankBackend:
+def load_llm_backend(*, prompt_style: str = "flat") -> RerankBackend:
     """Build the hosted backend from the environment, or report why not."""
     base_url = os.environ.get("COMPASSCART_LLM_BASE_URL", "").strip()
     api_key = os.environ.get("COMPASSCART_LLM_API_KEY", "").strip()
@@ -603,7 +618,7 @@ def load_llm_backend(*, structured_prompt: bool = False) -> RerankBackend:
             base_url=base_url,
             api_key=api_key,
             model=model,
-            structured_prompt=structured_prompt,
+            prompt_style=prompt_style,
         )
     except Exception:  # noqa: BLE001 - optional by construction.
         return NullRerankBackend("llm_construction_failed")
@@ -670,7 +685,7 @@ def load_rerank_backend(
     backend: str = "phrase",
     asset_dir: Path | None = None,
     max_length: int = 128,
-    structured_prompt: bool = False,
+    prompt_style: str = "flat",
 ) -> RerankBackend:
     """Select the rerank backend, honoring the ablation environment switch."""
     if os.environ.get("COMPASSCART_DISABLE_RERANK") == "1":
@@ -679,7 +694,7 @@ def load_rerank_backend(
         return NullRerankBackend("disabled_by_config")
     try:
         if backend == "llm":
-            loaded = load_llm_backend(structured_prompt=structured_prompt)
+            loaded = load_llm_backend(prompt_style=prompt_style)
             # No credentials in the scoring environment is the expected case,
             # not an error; the lexical backend is what must always work.
             return loaded if loaded.available else PhraseMatchBackend()

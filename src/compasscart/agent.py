@@ -67,7 +67,7 @@ class CompassCartAgent:
                 backend=name,
                 asset_dir=rerank_assets,
                 max_length=self.config.rerank_max_length,
-                structured_prompt=self.config.rerank_structured_prompt,
+                prompt_style=self.config.rerank_prompt_style,
             )
 
         browsing_backend = rerank_backend(self.config.rerank_backend)

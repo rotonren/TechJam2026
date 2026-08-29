@@ -344,3 +344,39 @@ the run to 99 seconds, and Buying's per-scenario numbers match the offline run
 to six decimal places, confirming it does not fire on ordinary turns. It simply
 does not pay, because the gain it concentrates on is smaller than what the
 ungated configuration collects across all Buying turns.
+
+### Choosing the prompt by state, and why the gains did not compose
+
+The two prompt forms win on different turns, so the obvious move is to take
+each where it wins: group the ledger on ordinary Buying turns, send the flat
+query on Intent Override. `prompt_style="adaptive"` does exactly that, keyed on
+`RerankContext.is_override`.
+
+| Prompt | TechnicalScore | Buying MRR | Override Hit@10 | Override MRR | Boundary MRR |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Flat | 0.826831 | 0.477346 | 0.9333 | 0.691984 | 0.571230 |
+| Grouped | 0.823744 | 0.521776 | 0.9000 | 0.626389 | 0.504563 |
+| **Adaptive** | **0.827009** | 0.509097 | 0.9333 | 0.668320 | 0.504563 |
+
+If the two halves composed this would have scored about `0.832`. It scored
+`0.827009`, `+0.000178` over the flat prompt - one part in five thousand across
+200 sessions, which is not a result.
+
+The composition failed for a specific, identifiable reason. Adaptive recovered
+Override's HitRate as intended, but took only part of the grouped prompt's
+Buying MRR, and **lost `0.067` of Boundary MRR - on a scenario the model never
+runs on at all.** Boundary and Browsing route Browsing and are served by the
+phrase backend; nothing about them changed.
+
+What changed is the cross-session policy memory. Reordering Buying candidates
+changes which clarification the question policy picks, which changes what the
+memory learns about attribute yield, which reaches every later session
+including the Browsing ones. The three layers are not independent, so a
+configuration that is locally optimal per route is not the sum of the per-route
+optima.
+
+That coupling is the real finding here, and it is worth more than the
+`0.000178`. It also explains several earlier surprises in this work where
+changing one route moved a scenario it had no direct contact with. Adaptive is
+kept as the measured option; flat remains the default, because a difference
+this size is not evidence for either.

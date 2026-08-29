@@ -161,7 +161,7 @@ shipping API keys and states that official scoring may disable network access,
 so the offline path is the one the organizer will reproduce. Both numbers are
 reported in `reports/final/rerank-results.md`.
 
-The full automated suite passes 1039 tests with 7 skipped, and Ruff lint passes
+The full automated suite passes 1047 tests with 7 skipped, and Ruff lint passes
 across `src`, `tests`, and `tools`.
 
 Earlier stable evidence remains in `reports/final/final-results.json` and
