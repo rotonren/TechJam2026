@@ -58,6 +58,44 @@ product text describes.
 
 Nothing in the code knows this. It came out of 303 observations.
 
+## What the pooled estimates found: the catalog is parent-level
+
+The two attributes the memory learned to almost never ask about are the two the
+catalog almost never records. Over a 20,000-product sample of the frozen
+catalog:
+
+| Attribute | No value in catalog | Learned yield |
+| --- | ---: | ---: |
+| size | 91.3% | 0.167 |
+| budget | 77.6% | 0.000 |
+| color | 61.4% | 0.564 |
+| use_case | 56.9% | 0.333 |
+| style | 56.1% | 0.235 |
+| material | 31.8% | 0.750 |
+| feature | 57.7% | **0.973** |
+
+A `parent_asin` is a parent product, not a colour or size SKU variant, so size
+is not a parent-level property at all and is absent from nine products in ten.
+A question about it cannot be answered however it is phrased. The agent was not
+told this; it inferred it from whether its own questions were answered.
+
+`feature` is the one attribute that breaks the pattern - 57.7% absent yet
+answered 97.3% of the time - and for a different reason. It is the fallback
+bucket of the evaluator's constraint classifier, so it absorbs every stated
+requirement that does not match another attribute's keywords. Two mechanisms
+are therefore visible in one table: catalogue sparsity sets the ceiling for
+most attributes, and classifier bucketing lifts one of them above it.
+
+## Why none of this is fitted to the public targets
+
+The memory stores eight attribute-level rates. It holds no product
+identifiers, no session identifiers and no labels, and the organizer has
+confirmed zero target-product overlap between the public and private splits, so
+there is nothing here that could be a memorized answer. The same is true of the
+rerank stage, which has no learned parameters at all, and of the strategy
+selector, which is a deterministic rule. What transfers is the mechanism, not
+the sample.
+
 ## Per-scenario effect
 
 | Scenario | Before | After | HitRate | MTTC |

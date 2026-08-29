@@ -54,6 +54,35 @@ $env:COMPASSCART_DISABLE_DENSE = "1"
 Asset corruption, optional dependency failure, or dense inference failure also
 switches to lexical retrieval automatically. Neither path performs network I/O.
 
+Dense retrieval is gated to semantic rescue: it runs only when the lexical,
+attribute and profile sources all return nothing. That never happened across
+the 536 turns of the public evaluation, so disabling it scores identically
+while using less memory. It is kept because the private split may exercise the
+rescue path, but the switch is a free low-memory mode:
+
+| Configuration | Peak process RSS | Agent alone | Init | TechnicalScore |
+| --- | ---: | ---: | ---: | ---: |
+| Default | 749.7 MiB | 409.6 MiB | 24418 ms | 0.822490 |
+| `COMPASSCART_DISABLE_DENSE=1` | 593.2 MiB | 353.7 MiB | 19653 ms | 0.822490 |
+
+Each figure comes from its own process. The peak includes the harness's own
+copy of the 50,000-product catalog, roughly 240 MiB, which any submission pays
+for; the agent's own footprint is the second column. If the scoring environment
+applies a memory ceiling below about 768 MiB, run with
+`COMPASSCART_DISABLE_DENSE=1`.
+
+## Network Requirements
+
+Per `docs/submission_rules.md`, submissions must state their network needs:
+
+- **This agent requires no network access.** It performs no HTTP, DNS, or
+  socket I/O on any code path, and reads no credentials or API keys.
+- **Offline fallback:** not applicable in the usual sense - the offline path is
+  the only path. Every optional component (dense retrieval, the ONNX assets,
+  FTS5) degrades to a pure-Python lexical path when unavailable.
+- **The agent does not require live credentials** and reports zero prompt and
+  completion tokens.
+
 The runtime resolves its bundled dense assets from the installed package rather
 than the process working directory. It can therefore be imported from an
 arbitrary CWD after extracting the submission ZIP; pass the catalog path

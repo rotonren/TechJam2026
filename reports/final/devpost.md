@@ -40,8 +40,14 @@ so "Actually, I need leather" cannot accidentally become a category answer.
   table was hand-written and unchecked, so the agent now treats it as a prior
   and corrects it from whether shoppers actually answered. It found our two
   worst guesses - `feature` was ranked second-lowest at `0.70` and is really
-  the most productive question at `0.964`; `budget` was ranked top tier at
-  `0.90` and produced nothing in 17 attempts.
+  the most productive question at `0.973`; `budget` was ranked top tier at
+  `0.90` and produced nothing in 16 attempts.
+- What it learned turned out to be a fact about the catalog. The two attributes
+  it stopped asking about, size and budget, are the two the catalog almost
+  never records at parent level - absent from 91.3% and 77.6% of products,
+  because a `parent_asin` is a parent product rather than a size or colour SKU
+  variant. Nobody told the agent that. It inferred it from which of its own
+  questions got answers.
 - Reranking that knows when to stay out of the way: the same stage is worth
   `+0.038` HitRate on Browsing and `-0.025` on Buying, where hard constraints
   already make the ranker well informed, so it runs on one route and not the
