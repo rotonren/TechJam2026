@@ -1,0 +1,583 @@
+<title>CompassCart 设计记录</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+SC:wght@400;500;600&family=IBM+Plex+Serif:ital,wght@0,500;0,600;1,400&family=Noto+Serif+SC:wght@600&display=swap">
+
+<style>
+  :root {
+    --ground: #f5f7f9;
+    --surface: #ffffff;
+    --sunk: #eef1f5;
+    --ink: #16202b;
+    --muted: #5a6b7c;
+    --faint: #8496a6;
+    --rule: #dae1e9;
+    --accept: #1c6b58;
+    --accept-soft: #e3efeb;
+    --reject: #9d5537;
+    --reject-soft: #f3e8e2;
+    --shadow: 0 1px 2px rgba(22, 32, 43, .06), 0 8px 24px -16px rgba(22, 32, 43, .3);
+
+    --sans: "IBM Plex Sans", "IBM Plex Sans SC", ui-sans-serif, system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+    --serif: "IBM Plex Serif", "Noto Serif SC", Georgia, "Songti SC", serif;
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #10171f;
+      --surface: #18212b;
+      --sunk: #131c25;
+      --ink: #e1e8ef;
+      --muted: #92a1b1;
+      --faint: #6d7f90;
+      --rule: #27323e;
+      --accept: #57af94;
+      --accept-soft: #17302a;
+      --reject: #cf8b6c;
+      --reject-soft: #2e211b;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -16px rgba(0, 0, 0, .8);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #10171f;
+    --surface: #18212b;
+    --sunk: #131c25;
+    --ink: #e1e8ef;
+    --muted: #92a1b1;
+    --faint: #6d7f90;
+    --rule: #27323e;
+    --accept: #57af94;
+    --accept-soft: #17302a;
+    --reject: #cf8b6c;
+    --reject-soft: #2e211b;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -16px rgba(0, 0, 0, .8);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.78;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 62rem;
+    margin: 0 auto;
+    padding: 3.5rem 1.5rem 6rem;
+    display: flex;
+    flex-direction: column;
+    gap: 3.5rem;
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: .72rem;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--faint);
+    margin: 0;
+  }
+
+  h1 {
+    font-family: var(--serif);
+    font-weight: 600;
+    font-size: clamp(1.9rem, 4.6vw, 2.7rem);
+    line-height: 1.3;
+    text-wrap: balance;
+    margin: .5rem 0 0;
+  }
+
+  h2 {
+    font-family: var(--serif);
+    font-weight: 600;
+    font-size: 1.45rem;
+    line-height: 1.5;
+    text-wrap: balance;
+    margin: 0;
+  }
+
+  h3 {
+    font-family: var(--sans);
+    font-weight: 600;
+    font-size: 1rem;
+    line-height: 1.6;
+    margin: 0;
+  }
+
+  p { margin: 0; max-width: 40em; }
+  .lede { font-size: 1.05rem; color: var(--muted); max-width: 36em; margin-top: 1rem; }
+
+  section { display: flex; flex-direction: column; gap: 1.25rem; }
+
+  .headline-figures {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2.5rem;
+    padding: 1.5rem 0 0;
+    border-top: 1px solid var(--rule);
+    margin-top: 2rem;
+  }
+  .fig { display: flex; flex-direction: column; gap: .15rem; }
+  .fig .n {
+    font-family: var(--mono);
+    font-size: 1.6rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -.02em;
+    line-height: 1.3;
+  }
+  .fig .n.up { color: var(--accept); }
+  .fig .k {
+    font-size: .74rem;
+    letter-spacing: .04em;
+    color: var(--faint);
+    line-height: 1.5;
+  }
+
+  figure { margin: 0; }
+  figure svg { display: block; width: 100%; max-width: 100%; height: auto; color: var(--ink); }
+  .figscroll { overflow-x: auto; background: var(--surface); border: 1px solid var(--rule); border-radius: 3px; padding: 1.5rem 1rem; box-shadow: var(--shadow); }
+  figcaption { font-size: .86rem; color: var(--muted); margin-top: .9rem; max-width: 38em; }
+
+  .steps { display: flex; flex-direction: column; gap: 0; border-top: 1px solid var(--rule); }
+  .step {
+    display: grid;
+    grid-template-columns: 7.5rem 1fr 6rem;
+    gap: 1.25rem;
+    padding: 1.15rem 0;
+    border-bottom: 1px solid var(--rule);
+    align-items: baseline;
+  }
+  .step .score {
+    font-family: var(--mono);
+    font-size: .95rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .step .delta {
+    font-family: var(--mono);
+    font-size: .82rem;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    color: var(--accept);
+  }
+  .step .body { display: flex; flex-direction: column; gap: .3rem; }
+  .step .body p { font-size: .92rem; color: var(--muted); }
+  .step.shipped .score { color: var(--accept); }
+  .step.shipped { background: var(--accept-soft); margin-inline: -1rem; padding-inline: 1rem; }
+  .step.optional .score, .step.optional .delta { color: var(--faint); }
+
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+  .tablescroll { overflow-x: auto; }
+  th, td { text-align: left; padding: .7rem .9rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th {
+    font-size: .76rem;
+    letter-spacing: .06em;
+    color: var(--faint);
+    font-weight: 500;
+    border-bottom-color: var(--ink);
+    white-space: nowrap;
+  }
+  td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  td.num.neg { color: var(--reject); }
+  td.num.pos { color: var(--accept); }
+  code, .m { font-family: var(--mono); font-size: .875em; background: var(--sunk); padding: .1em .35em; border-radius: 2px; }
+  td code, td .m { background: none; padding: 0; }
+
+  .pipeline { display: flex; flex-direction: column; gap: 0; }
+  .stage {
+    display: grid;
+    grid-template-columns: 2rem 11rem 1fr;
+    gap: 1rem;
+    padding: .85rem 0;
+    border-bottom: 1px solid var(--rule);
+    align-items: baseline;
+  }
+  .stage:first-child { border-top: 1px solid var(--ink); }
+  .stage .i { font-family: var(--mono); font-size: .8rem; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .stage .who { font-family: var(--mono); font-size: .84rem; font-weight: 500; }
+  .stage .what { font-size: .92rem; color: var(--muted); }
+  .stage.new .who { color: var(--accept); }
+
+  .lessons { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: 1.5rem; }
+  .lesson { display: flex; flex-direction: column; gap: .4rem; padding-top: 1rem; border-top: 2px solid var(--ink); }
+  .lesson h3 { font-family: var(--serif); font-size: 1.05rem; }
+  .lesson p { font-size: .9rem; color: var(--muted); }
+
+  .note {
+    border-left: 2px solid var(--reject);
+    padding: .1rem 0 .1rem 1.1rem;
+    font-size: .92rem;
+    color: var(--muted);
+  }
+
+  footer { border-top: 1px solid var(--rule); padding-top: 1.5rem; font-size: .86rem; color: var(--faint); }
+  footer p { max-width: 40em; }
+
+  @media (max-width: 44rem) {
+    .step { grid-template-columns: 6.5rem 1fr; }
+    .step .delta { grid-column: 1 / -1; text-align: left; }
+    .stage { grid-template-columns: 1.5rem 1fr; }
+    .stage .what { grid-column: 2; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">TikTok TechJam 2026 · Track 4 · 内部记录</p>
+    <h1>CompassCart 是怎么从 0.761 走到 0.822 的</h1>
+    <p class="lede">十九个提交,七项被采纳的改动,七项实测后被否决的方案,还有三个先得出错误结论、后来才纠正回来的判断。
+      这里每一个数字都来自未经修改的官方评测器,跑在冻结的 200 会话公开集上 &mdash;
+      另外加上一折 40 个会话,在这一切开始之前就被封存了。</p>
+
+    <div class="headline-figures">
+      <div class="fig"><span class="n up">0.822490</span><span class="k">发布版分数</span></div>
+      <div class="fig"><span class="n up">0.834997</span><span class="k">密封折,只开封一次</span></div>
+      <div class="fig"><span class="n">+0.0613</span><span class="k">净提升</span></div>
+      <div class="fig"><span class="n">1047</span><span class="k">测试全部通过</span></div>
+      <div class="fig"><span class="n">0</span><span class="k">默认路径 token 消耗</span></div>
+      <div class="fig"><span class="n">19.6<span style="font-size:.6em"> s</span></span><span class="k">初始化,原为 132 s</span></div>
+    </div>
+  </header>
+
+  <section>
+    <h2>脉络</h2>
+    <div class="figscroll">
+      <figure>
+        <svg viewBox="0 0 700 880" role="img" aria-label="一条竖向脉络,七项被采纳的改动把分数从 0.761209 抬到 0.822490,七项被否决的实验从主干分叉出去并终止。">
+          <defs>
+            <marker id="tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+            </marker>
+          </defs>
+
+          <!-- 主干 -->
+          <line x1="150" y1="52" x2="150" y2="700" stroke="var(--accept)" stroke-width="2"/>
+          <line x1="150" y1="700" x2="150" y2="800" stroke="var(--faint)" stroke-width="2" stroke-dasharray="5 4"/>
+
+          <!-- 采纳节点 -->
+          <g font-family="'IBM Plex Sans SC', 'IBM Plex Mono', sans-serif" font-size="12">
+            <circle cx="150" cy="52" r="5" fill="var(--ground)" stroke="var(--accept)" stroke-width="2"/>
+            <text x="132" y="49" text-anchor="end" font-size="13" font-weight="600" font-family="'IBM Plex Mono', monospace" fill="currentColor">0.761209</text>
+            <text x="132" y="67" text-anchor="end" fill="var(--muted)">起点</text>
+
+            <circle cx="150" cy="160" r="5" fill="var(--accept)"/>
+            <text x="132" y="157" text-anchor="end" font-size="13" font-weight="600" font-family="'IBM Plex Mono', monospace" fill="currentColor">0.771831</text>
+            <text x="132" y="175" text-anchor="end" fill="var(--muted)">短语邻接</text>
+            <text x="142" y="112" text-anchor="end" font-family="'IBM Plex Mono', monospace" fill="var(--accept)">+0.0106</text>
+
+            <circle cx="150" cy="268" r="5" fill="var(--accept)"/>
+            <text x="132" y="265" text-anchor="end" font-size="13" font-weight="600" font-family="'IBM Plex Mono', monospace" fill="currentColor">0.783514</text>
+            <text x="132" y="283" text-anchor="end" fill="var(--muted)">只在 Browsing 路由</text>
+            <text x="142" y="220" text-anchor="end" font-family="'IBM Plex Mono', monospace" fill="var(--accept)">+0.0117</text>
+
+            <circle cx="150" cy="376" r="5" fill="var(--accept)"/>
+            <text x="132" y="373" text-anchor="end" font-size="13" font-weight="600" font-family="'IBM Plex Mono', monospace" fill="currentColor">0.800849</text>
+            <text x="132" y="391" text-anchor="end" fill="var(--muted)">问题先验记忆</text>
+            <text x="142" y="328" text-anchor="end" font-family="'IBM Plex Mono', monospace" fill="var(--accept)">+0.0173</text>
+
+            <circle cx="150" cy="484" r="5" fill="var(--accept)"/>
+            <text x="132" y="481" text-anchor="end" font-size="13" font-weight="600" font-family="'IBM Plex Mono', monospace" fill="currentColor">0.804724</text>
+            <text x="132" y="499" text-anchor="end" fill="var(--muted)">记忆按路由分开</text>
+            <text x="142" y="436" text-anchor="end" font-family="'IBM Plex Mono', monospace" fill="var(--accept)">+0.0039</text>
+
+            <circle cx="150" cy="592" r="7" fill="var(--accept)"/>
+            <text x="132" y="589" text-anchor="end" font-size="13" font-weight="600" font-family="'IBM Plex Mono', monospace" fill="var(--accept)">0.822490</text>
+            <text x="132" y="607" text-anchor="end" fill="var(--muted)">每轮策略选择</text>
+            <text x="142" y="544" text-anchor="end" font-family="'IBM Plex Mono', monospace" fill="var(--accept)">+0.0178</text>
+            <text x="168" y="598" font-size="11.5" font-weight="600" fill="var(--accept)">默认发布配置</text>
+
+            <circle cx="150" cy="800" r="5" fill="var(--ground)" stroke="var(--faint)" stroke-width="2" stroke-dasharray="3 2"/>
+            <text x="132" y="797" text-anchor="end" font-size="13" font-family="'IBM Plex Mono', monospace" fill="var(--faint)">0.826831</text>
+            <text x="132" y="815" text-anchor="end" fill="var(--faint)">LLM 重排</text>
+            <text x="168" y="752" fill="var(--faint)">+0.0043 · 需要凭据,</text>
+            <text x="168" y="770" fill="var(--faint)">官方评测跑不到这条路径</text>
+          </g>
+
+          <!-- 否决分支 -->
+          <g font-family="'IBM Plex Sans SC', sans-serif" font-size="11.5" stroke-linecap="round">
+            <path d="M150 214 L300 214" stroke="var(--reject)" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#tip)" fill="none" color="var(--reject)"/>
+            <text x="310" y="210" fill="var(--reject)">窗口内 IDF 加权</text>
+            <text x="310" y="227" fill="var(--faint)">−0.011 · 反而惩罚了买家自己说的词</text>
+
+            <path d="M150 322 L300 322" stroke="var(--reject)" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#tip)" fill="none" color="var(--reject)"/>
+            <text x="310" y="318" fill="var(--reject)">ONNX 交叉编码器</text>
+            <text x="310" y="335" fill="var(--faint)">−0.007 · 含混淆变量,未定论</text>
+
+            <path d="M150 430 L300 430" stroke="var(--reject)" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#tip)" fill="none" color="var(--reject)"/>
+            <text x="310" y="426" fill="var(--reject)">约束计数信号</text>
+            <text x="310" y="443" fill="var(--faint)">−0.015 · 量的是解析器,不是买家</text>
+
+            <path d="M150 538 L300 538" stroke="var(--reject)" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#tip)" fill="none" color="var(--reject)"/>
+            <text x="310" y="534" fill="var(--reject)">卡住就放宽约束</text>
+            <text x="310" y="551" fill="var(--faint)">−0.010 · 条件挂在了错的东西上</text>
+
+            <path d="M150 646 L300 646" stroke="var(--reject)" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#tip)" fill="none" color="var(--reject)"/>
+            <text x="310" y="642" fill="var(--reject)">分组式 prompt</text>
+            <text x="310" y="659" fill="var(--faint)">−0.003 · 有个标签说反了买家的意思</text>
+
+            <path d="M150 690 L300 690" stroke="var(--reject)" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#tip)" fill="none" color="var(--reject)"/>
+            <text x="310" y="686" fill="var(--reject)">按状态选 prompt</text>
+            <text x="310" y="703" fill="var(--faint)">+0.0002 · 各自的收益不叠加</text>
+          </g>
+
+          <!-- 轨道标签 -->
+          <g font-family="'IBM Plex Sans SC', sans-serif" font-size="10.5" fill="var(--faint)" letter-spacing="1">
+            <text x="20" y="24">采纳 ↓</text>
+            <text x="310" y="24">否决(均已实测)→</text>
+          </g>
+        </svg>
+        <figcaption>每个节点是一项被采纳的改动和它跑出来的分数。分支从实验发生的那个位置离开主干后即终止 &mdash;
+          它们都是拿来和自己分叉出去的那个节点实测对比的,不是靠讨论定下来的。虚线尾巴是接模型的路径,
+          分数更高,但在评测环境里没法完成鉴权。</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section>
+    <h2>每一步各自做了什么</h2>
+    <div class="steps">
+      <div class="step">
+        <span class="score">0.761209</span>
+        <div class="body">
+          <h3>起点,以及写任何代码之前的那次测量</h3>
+          <p>先做了一个 oracle 探针,记录目标商品在 691 轮对话、每个流水线阶段所处的位置。目标商品在 99% 的会话里
+            都进了候选池,但只有 32% 排在第一位。<strong>瓶颈不在召回,在排序。</strong>此后没有一分钟花在提高召回上。</p>
+        </div>
+        <span class="delta"></span>
+      </div>
+      <div class="step">
+        <span class="score">0.771831</span>
+        <div class="body">
+          <h3>短语邻接</h3>
+          <p>融合和约束打分都工作在词级别,所以一条以连续短语表述的需求,对标题里恰好含有这个短语的商品
+            并不会比对把这几个词散落各处的商品得分更高。重排层补的就是这一个缺失信号。</p>
+        </div>
+        <span class="delta">+0.0106</span>
+      </div>
+      <div class="step">
+        <span class="score">0.783514</span>
+        <div class="body">
+          <h3>只在 Browsing 路由上跑</h3>
+          <p>同一个阶段实测下来:Browsing 命中率 <span class="m">+0.038</span>,Buying
+            <span class="m">−0.025</span>。Buying 轮次本身已经带着明确的硬约束,排序器信息充分,
+            这时候再重排就是在破坏已有的正确结果。<strong>在一条路由上把它关掉,收益超过所有权重和窗口调参的总和。</strong></p>
+        </div>
+        <span class="delta">+0.0117</span>
+      </div>
+      <div class="step">
+        <span class="score">0.800849</span>
+        <div class="body">
+          <h3>会自我校验的问题先验</h3>
+          <p>回答意愿表是手写的,从来没人验证过。把它当作先验,再根据"问出去的问题到底有没有被回答"更新后验,
+            纠正了我们原本填反的两项 &mdash; <span class="m">feature</span> 从 0.70 修到 0.973,
+            <span class="m">budget</span> 从 0.90 修到 0.000。</p>
+        </div>
+        <span class="delta">+0.0173</span>
+      </div>
+      <div class="step">
+        <span class="score">0.804724</span>
+        <div class="body">
+          <h3>记忆也按路由分开</h3>
+          <p><span class="m">use_case</span> 在 Buying 上有 44% 的回答率,在 Browsing 上一次都没有。
+            还在逛的买家尚未想清楚这东西是拿来干嘛的。代码里没有任何地方编码过这件事,它是从 303 次观测里自己长出来的。</p>
+        </div>
+        <span class="delta">+0.0039</span>
+      </div>
+      <div class="step shipped">
+        <span class="score">0.822490</span>
+        <div class="body">
+          <h3>把原本浪费掉的轮次用起来</h3>
+          <p>当提问策略没有任何值得问的问题时,这一轮就白花了 &mdash; 买家回一句"你问我某个具体属性吧",
+            信息量为零。改成问一个开放性问题,在 536 轮里只触发十一次,却贡献了这一项的绝大部分收益。</p>
+        </div>
+        <span class="delta">+0.0178</span>
+      </div>
+      <div class="step optional">
+        <span class="score">0.826831</span>
+        <div class="body">
+          <h3>LLM 重排 &mdash; 实测了,但没设为默认</h3>
+          <p>值 <span class="m">+0.0043</span>,代价是 362,330 个 prompt token 和 4.3 倍的运行时间。
+            不设为默认的原因:<span class="m">submission_rules.md</span> 禁止在提交里附带 API key,
+            并说明官方评测可能关闭网络访问,所以主办方实际会跑的是离线路径。两个数字都如实报告。</p>
+        </div>
+        <span class="delta">+0.0043</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>三个一开始搞错了的结论</h2>
+    <p>这三个结论都成立了好几个小时,差点就写进报告。而抓住它们的对照实验,每个大约只要九十秒。</p>
+    <div class="tablescroll">
+      <table>
+        <thead>
+          <tr><th>当时的说法</th><th>实际情况</th><th style="text-align:right">修正</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>LLM 重排会掉分</td>
+            <td>那次实验同时改了重排窗口<em>和</em>后端。单是窗口就值
+              <span class="m">−0.0095</span>,却全算在了模型头上。</td>
+            <td class="num pos">−0.0013 → +0.0043</td>
+          </tr>
+          <tr>
+            <td>Boundary 场景变差是因为它走 Buying 路由、撞上了模型</td>
+            <td>路由计数显示 Boundary 的三十轮<em>全部</em>走的是 Browsing。模型根本没在它上面跑过。</td>
+            <td class="num">已撤回</td>
+          </tr>
+          <tr>
+            <td>把约束按角色分组一定强过词袋</td>
+            <td><span class="m">is_hard=False</span> 的含义是<em>这段自由文本不能安全地变成检索过滤器</em>,
+              不是<em>买家不在乎</em>。结果 prompt 把 override 里新提出的需求标成了"可选"。</td>
+            <td class="num pos">找回 +0.0025</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">交叉编码器那个 <span class="m">−0.007</span> 带着同样的窗口混淆,并且没有重测过。
+      它是按"实测到的数字"报告的,不是按"已经定论"报告的。</p>
+  </section>
+
+  <section>
+    <h2>这些东西能推广吗?</h2>
+    <p>上面每一个数字,都是在同一批用来调参的 200 个会话上读出来的。所以有一折 40 个会话
+      <strong>在这一轮开始时就被封存</strong>,直到最后配置冻结之后才开封,只跑一次。</p>
+
+    <figure>
+      <div class="figscroll">
+        <svg viewBox="0 0 700 215" role="img" style="max-width:100%;height:auto" aria-label="四个调参折从 0.769 分布到 0.837,均值 0.812。密封的第五折得分 0.835,高于该均值,也高于全量 200 会话的 0.822。关掉学习层后,同样四折的均值降到 0.793。">
+          <g font-family="'IBM Plex Sans SC', 'IBM Plex Sans', sans-serif" font-size="11.5" fill="currentColor">
+
+            <text x="152" y="49" text-anchor="end" font-weight="600">调参折 1&ndash;4</text>
+            <line x1="220.9" y1="45" x2="622.3" y2="45" stroke="currentColor" stroke-width="1" opacity=".28"/>
+            <circle cx="220.9" cy="45" r="4.5" fill="var(--ground)" stroke="currentColor" stroke-width="1.5" opacity=".65"/>
+            <circle cx="506.4" cy="45" r="4.5" fill="var(--ground)" stroke="currentColor" stroke-width="1.5" opacity=".65"/>
+            <circle cx="551.2" cy="45" r="4.5" fill="var(--ground)" stroke="currentColor" stroke-width="1.5" opacity=".65"/>
+            <circle cx="622.3" cy="45" r="4.5" fill="var(--ground)" stroke="currentColor" stroke-width="1.5" opacity=".65"/>
+            <line x1="475.2" y1="34" x2="475.2" y2="56" stroke="currentColor" stroke-width="2"/>
+            <text x="475.2" y="26" text-anchor="middle" font-size="10.5" opacity=".75">均值 0.812</text>
+
+            <text x="152" y="94" text-anchor="end" opacity=".7">同样四折,关学习层</text>
+            <circle cx="359.5" cy="90" r="4.5" fill="var(--reject)"/>
+            <text x="359.5" y="110" text-anchor="middle" font-size="10.5" font-family="'IBM Plex Mono', monospace" fill="var(--reject)">0.793</text>
+
+            <text x="152" y="139" text-anchor="end" opacity=".7">全量 200 会话</text>
+            <circle cx="536.3" cy="135" r="4.5" fill="currentColor" opacity=".55"/>
+            <text x="536.3" y="155" text-anchor="middle" font-size="10.5" font-family="'IBM Plex Mono', monospace" opacity=".7">0.822</text>
+
+            <text x="152" y="184" text-anchor="end" font-weight="600" fill="var(--accept)">第 5 折 &mdash; 密封</text>
+            <circle cx="610.6" cy="180" r="7" fill="var(--accept)"/>
+            <text x="610.6" y="166" text-anchor="middle" font-size="11.5" font-weight="600" font-family="'IBM Plex Mono', monospace" fill="var(--accept)">0.834997</text>
+
+            <line x1="165" y1="203" x2="680" y2="203" stroke="currentColor" stroke-width="1" opacity=".3"/>
+            <g font-size="10" opacity=".6" text-anchor="middle" font-family="'IBM Plex Mono', monospace">
+              <line x1="224.4" y1="203" x2="224.4" y2="207" stroke="currentColor"/><text x="224.4" y="217">0.77</text>
+              <line x1="343.2" y1="203" x2="343.2" y2="207" stroke="currentColor"/><text x="343.2" y="217">0.79</text>
+              <line x1="462.1" y1="203" x2="462.1" y2="207" stroke="currentColor"/><text x="462.1" y="217">0.81</text>
+              <line x1="580.9" y1="203" x2="580.9" y2="207" stroke="currentColor"/><text x="580.9" y="217">0.83</text>
+            </g>
+          </g>
+        </svg>
+      </div>
+      <figcaption>密封折落在调参折均值之上,也在全量 200 会话的分数之上。在同样这四折上关掉学习层,
+        均值会掉 <span class="m">0.019</span> &mdash; 说明记忆层在 40 个会话上就已经起作用,
+        并不是靠攒满 200 个会话吃老本。</figcaption>
+    </figure>
+
+    <p class="note">这两个结果都不足以为一个 <span class="m">+0.004</span> 的决策背书 &mdash;
+      光是调参折自己就从 0.769 跨到 0.837,这个跨度比本轮大多数单项改动都大。它们能证明的是:
+      被采纳的这 <span class="m">+0.0613</span> 不是把公开集背下来的结果。另外,学习层是四折里赢三折,
+      不是四折全赢。</p>
+  </section>
+
+  <section>
+    <h2>现在的流水线</h2>
+    <p>每一轮对话走七个阶段。每个阶段都做了包裹,出错时降级而不是让整轮失败。带颜色的是本轮新增的。</p>
+    <div class="pipeline">
+      <div class="stage"><span class="i">1</span><span class="who">SessionStore</span><span class="what">把这一轮解析进带版本的约束账本。override 是覆盖,不是追加。</span></div>
+      <div class="stage new"><span class="i">2</span><span class="who">PolicyMemory</span><span class="what">观察上一个问题有没有被回答。跨会话学习发生在这里。</span></div>
+      <div class="stage"><span class="i">3</span><span class="who">RoutePlanner</span><span class="what">依据约束的具体程度判定 Buying 还是 Browsing,并给出融合权重。</span></div>
+      <div class="stage"><span class="i">4</span><span class="who">HybridRetriever</span><span class="what">词法、属性、画像、稠密四路召回,按加权倒数排名融合,约 500 个候选。</span></div>
+      <div class="stage"><span class="i">5</span><span class="who">ConstraintRanker</span><span class="what">硬约束覆盖度与质量打分;精确匹配始终排在"已声明的放宽项"前面。</span></div>
+      <div class="stage new"><span class="i">6</span><span class="who">RerankStage</span><span class="what">按路由重排列表头部。Browsing 用短语邻接;Buying 默认不跑。</span></div>
+      <div class="stage new"><span class="i">7</span><span class="who">StrategySelector</span><span class="what">决定提问策略弃权的那一轮怎么用 &mdash; 问开放问题,还是干脆不问。</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>值得知道的开关</h2>
+    <p>把三个新层全部关掉,分数会精确回到 <span class="m">0.761209</span>,
+      这也正是每一层各自贡献被隔离出来的方式。</p>
+    <div class="tablescroll">
+      <table>
+        <thead>
+          <tr><th>配置项</th><th>默认值</th><th>作用</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>rerank_buying_weight</code></td><td class="num">0.0</td><td>故意设为零 &mdash; 重排层在 Buying 路由上不运行</td></tr>
+          <tr><td><code>rerank_window</code></td><td class="num">50</td><td>Browsing 上参与重排的候选数;Buying 由 <code>rerank_buying_window</code> 单独设定</td></tr>
+          <tr><td><code>rerank_backend</code></td><td><code>"phrase"</code></td><td>可选 <code>phrase</code>、<code>cross_encoder</code>、<code>llm</code>,按路由分别配置</td></tr>
+          <tr><td><code>rerank_prompt_style</code></td><td><code>"flat"</code></td><td>可选 <code>flat</code>、<code>structured</code>、<code>adaptive</code></td></tr>
+          <tr><td><code>evolution_enabled</code></td><td><code>True</code></td><td>策略记忆;设为 <code>False</code> 则退回手写先验</td></tr>
+          <tr><td><code>strategy_enabled</code></td><td><code>True</code></td><td>每轮策略选择</td></tr>
+          <tr><td><code>COMPASSCART_DISABLE_DENSE</code></td><td>未设置</td><td>只用词法召回 &mdash; 分数完全一致,内存少占 156 MiB</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>能带出这个项目的经验</h2>
+    <div class="lessons">
+      <div class="lesson">
+        <h3>先测天花板</h3>
+        <p>那个 oracle 探针花了三十分钟,决定了后面三天的工作方向。没有它,最顺手的动作就是去提高召回
+          &mdash; 而召回已经是 99% 了。</p>
+      </div>
+      <div class="lesson">
+        <h3>一次只动一个变量</h3>
+        <p>违反这一条,直接产出了一个自信但错误的结论,并且存活了好几个小时。抓住它的对照实验,
+          只是一次九十秒的运行。</p>
+      </div>
+      <div class="lesson">
+        <h3>自适应需要挂在真实结构上</h3>
+        <p>按路由做条件,两次各值约 <span class="m">+0.02</span>。按"上一轮是不是失败了"做条件,
+          四种配置全部掉分。</p>
+      </div>
+      <div class="lesson">
+        <h3>字段的含义不会跟着名字走</h3>
+        <p><span class="m">is_hard</span> 在检索路径里的意思是"能安全用作过滤条件"。
+          在新路径里被读成"买家看重这个",就把 prompt 的意思整个说反了。</p>
+      </div>
+      <div class="lesson">
+        <h3>标错的结构比没有结构更糟</h3>
+        <p>扁平查询只是信息量不足;而标签标错的结构化查询是<em>自信地说错</em>,
+          代价是 Override 场景 <span class="m">0.105</span> 的 MRR。</p>
+      </div>
+      <div class="lesson">
+        <h3>各层通过共享状态耦合在一起</h3>
+        <p>重排 Buying 的候选,会改变记忆层学到的东西,进而影响 Boundary &mdash;
+          一个这项改动根本没碰过的场景。局部最优不能简单相加。</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <p>完整的实验记录都在仓库里:<span class="m">reports/final/rerank-results.md</span>
+      是全部重排实验(含被否决的那些),<span class="m">reports/final/evolution-results.md</span>
+      是策略记忆与策略选择器,<span class="m">reports/final/architecture-guide.md</span>
+      是给队友的工作手册,<span class="m">reports/final/validation-evidence.md</span>
+      是每条结论配复现命令的证据清单,<span class="m">reports/final/approach-evolution.md</span>
+      是本页内容的文字版。</p>
+  </footer>
+
+</div>

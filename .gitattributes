@@ -2,3 +2,10 @@ assets/model/model.int8.onnx binary
 assets/model/tokenizer.json binary
 assets/product_vectors/*.npy binary
 docs/*.docx binary
+
+# Frozen organizer inputs: never convert line endings. Git's autocrlf
+# rewrote these on Windows checkout, so the recorded hashes certified the
+# converted bytes and the check failed on Linux.
+evaluator/local_evaluator.py -text
+data/public_set.jsonl -text
+assets/SHA256SUMS -text

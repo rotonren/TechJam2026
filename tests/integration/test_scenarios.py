@@ -133,3 +133,117 @@ def test_agent_wires_bounded_rank_calibration_without_changing_response_contract
     assert agent.ranker.boundary_bonus == 0.025
     assert agent.ranker.fusion_weight == 0.15
     assert agent.ranker.adaptive_browsing_mmr is True
+
+
+def _ask(agent, session: str, attribute: str) -> None:
+    """Mark that the agent asked about `attribute` on the turn just finished.
+
+    The fixture catalog holds four products, so the question policy never fires
+    on its own here; setting the pending attribute reproduces the state a real
+    clarification leaves behind and keeps the assertions on the observation
+    loop rather than on question selection.
+    """
+    agent.sessions.get(session).pending_attribute = attribute
+
+
+def test_an_unproductive_question_is_recorded_as_negative_evidence(
+    fixture_catalog_path,
+):
+    agent = Agent(fixture_catalog_path)
+    agent.reset("learn", {"preference_tags": ["fit", "comfort"]})
+    agent.respond("learn", "I'm looking for shoes, but I'm still exploring.", 1, 10)
+    _ask(agent, "learn", "material")
+
+    agent.respond("learn", "I don't have an additional preference for material.", 2, 10)
+
+    entry = agent.memory.snapshot()["attributes"]["material"]
+    assert (entry["asked"], entry["disclosed"]) == (1, 0)
+    assert entry["posterior"] < entry["prior"]
+    state = agent.sessions.get("learn")
+    assert "material" in state.unproductive_attributes
+    assert state.stall_count >= 1
+
+
+def test_a_productive_question_raises_the_estimate(fixture_catalog_path):
+    agent = Agent(fixture_catalog_path)
+    agent.reset("learn", {"preference_tags": []})
+    agent.respond("learn", "I'm looking for shoes, but I'm still exploring.", 1, 10)
+    _ask(agent, "learn", "material")
+
+    agent.respond("learn", "For that, what matters is: leather.", 2, 10)
+
+    entry = agent.memory.snapshot()["attributes"]["material"]
+    assert (entry["asked"], entry["disclosed"]) == (1, 1)
+    assert entry["posterior"] > entry["prior"]
+    assert "material" not in agent.sessions.get("learn").unproductive_attributes
+
+
+def test_learning_accumulates_across_sessions_while_state_does_not(
+    fixture_catalog_path,
+):
+    agent = Agent(fixture_catalog_path)
+
+    for index in range(3):
+        session = f"session-{index}"
+        agent.reset(session, {"preference_tags": ["fit"]})
+        agent.respond(session, "I'm looking for shoes, but I'm still exploring.", 1, 10)
+        _ask(agent, session, "material")
+        agent.respond(
+            session, "I don't have an additional preference for material.", 2, 10
+        )
+
+    assert agent.memory.snapshot()["attributes"]["material"]["asked"] == 3
+    # Negative evidence is session-scoped; it must not follow the next shopper.
+    assert agent.sessions.get("session-0").unproductive_attributes == {"material"}
+    assert agent.sessions.get("session-2").unproductive_attributes == {"material"}
+
+
+def test_disabled_evolution_records_nothing(fixture_catalog_path):
+    agent = Agent(fixture_catalog_path, config=RuntimeConfig(evolution_enabled=False))
+    agent.reset("frozen", {"preference_tags": []})
+    agent.respond("frozen", "I'm looking for shoes, but I'm still exploring.", 1, 10)
+    _ask(agent, "frozen", "material")
+
+    agent.respond("frozen", "I don't have an additional preference for material.", 2, 10)
+
+    assert agent.memory.enabled is False
+    assert agent.memory.snapshot()["observations"] == 0
+
+
+def test_an_open_question_replaces_a_turn_that_would_ask_nothing(
+    fixture_catalog_path,
+):
+    """The strategy layer's whole value is turns that would collect nothing."""
+    agent = Agent(fixture_catalog_path)
+    agent.reset("open", {"preference_tags": []})
+    agent.respond("open", "I'm looking for shoes, but I'm still exploring.", 1, 10)
+
+    # A large pool with no structured question worth asking is the trigger.
+    state = agent.sessions.get("open")
+    state.candidate_count = 500
+    decision = agent.strategy.select(state, structured_question=None)
+
+    assert decision.name == "open_probe"
+    assert decision.open_question is True
+
+
+def test_the_strategy_layer_can_be_switched_off(fixture_catalog_path):
+    agent = Agent(fixture_catalog_path, config=RuntimeConfig(strategy_enabled=False))
+    agent.reset("plain", {"preference_tags": []})
+    agent.respond("plain", "I'm looking for shoes, but I'm still exploring.", 1, 10)
+    agent.sessions.get("plain").candidate_count = 500
+
+    agent.respond("plain", "Those options are not quite right yet.", 2, 10)
+
+    assert agent.traces.records[-1]["strategy"] == "probe"
+
+
+def test_every_turn_records_which_strategy_ran(fixture_catalog_path):
+    agent = Agent(fixture_catalog_path)
+    agent.reset("traced", {"preference_tags": []})
+
+    agent.respond("traced", "I'm looking for shoes, but I'm still exploring.", 1, 10)
+
+    trace = agent.traces.records[-1]
+    assert trace["strategy"] in {"probe", "open_probe", "exploit"}
+    assert isinstance(trace["strategy_reason"], str)

@@ -45,6 +45,13 @@ class SessionState:
     continuation_requested: bool = False
     override_scope: OverrideScope = "none"
     route_hint: Route | None = None
+    # Distilled negative evidence.  The ledger records what the shopper wants;
+    # these record what has already been tried and failed, which is what lets a
+    # later turn change approach instead of repeating one.
+    profile_segment: str = ""
+    unproductive_attributes: set[str] = field(default_factory=set)
+    stall_count: int = 0
+    disclosure_count: int = 0
 
     def active_constraints(self) -> list[Constraint]:
         return [

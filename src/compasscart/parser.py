@@ -31,6 +31,23 @@ _PREFERENCE_RESET_RE = re.compile(
     r"i have changed my mind|what i need is)\b",
     re.IGNORECASE,
 )
+# Lead-ins that announce the *replacement* requirement.  Phrases such as
+# "instead of" or "rather than" are deliberately absent: they introduce the
+# value being discarded, not the new one.
+_OVERRIDE_PAYLOAD_ANCHOR_RE = re.compile(
+    r"\b(?:what i (?:need|want|really want|am looking for)(?: is)?|"
+    r"i (?:need|want|really need|really want|would like|am looking for)|"
+    r"my new requirement is|"
+    r"(?:please )?(?:switch|change) (?:it |that )?to|"
+    r"make it|"
+    r"show me)\b",
+    re.IGNORECASE,
+)
+_SENTENCE_SPLIT_RE = re.compile(r"[.!?]+")
+# Spelling variants a shopper may use for a canonical catalog value.
+_SPELLING_VARIANTS = {"gray": ("grey",)}
+_PAYLOAD_TRIM = " :;,-.\t"
+_PAYLOAD_LIMIT = 160
 _CONTINUATION_RE = re.compile(
     r"\b(?:show me more|more options|different choices)\b", re.IGNORECASE
 )
@@ -304,6 +321,8 @@ class MessageParser:
         )
         extracted.extend(known)
         extracted.extend(categories)
+        if is_override and replace_preferences:
+            extracted.extend(self._extract_override_payload(text, extracted))
         if (
             expected_attribute
             and not any(
@@ -330,6 +349,50 @@ class MessageParser:
             is_continuation=is_continuation,
             replace_preferences=replace_preferences,
         )
+
+    @staticmethod
+    def _override_payload_text(text: str) -> str:
+        """Return the replacement requirement stated in an override message.
+
+        The anchor family is intentionally wider than the reset markers that
+        gate this path.  An override turn carries the single strongest signal
+        about the new goal, so losing its payload to an unrecognized lead-in
+        costs the whole turn.  When no anchor matches, the requirement is in
+        practice stated in the final sentence, after any reset marker.
+        """
+        anchors = list(_OVERRIDE_PAYLOAD_ANCHOR_RE.finditer(text))
+        if anchors:
+            return text[anchors[-1].end() :]
+        sentences = [part.strip() for part in _SENTENCE_SPLIT_RE.split(text)]
+        tail = next((part for part in reversed(sentences) if part), "")
+        markers = [
+            *_OVERRIDE_RE.finditer(tail),
+            *_PREFERENCE_RESET_RE.finditer(tail),
+        ]
+        if markers:
+            return tail[max(item.end() for item in markers) :]
+        return tail
+
+    @staticmethod
+    def _extract_override_payload(
+        text: str, extracted: list[ParsedConstraint]
+    ) -> list[ParsedConstraint]:
+        """Retain an explicit replacement requirement as soft text evidence."""
+        payload = MessageParser._override_payload_text(text)
+        value = normalize_value(payload.strip(_PAYLOAD_TRIM)[:_PAYLOAD_LIMIT])
+        if len(value) < 2:
+            return []
+        payload_terms = {token for token in terms(value) if not token.isdigit()}
+        represented_terms = {
+            token
+            for item in extracted
+            for raw_value in (*item.alternatives, item.value, item.upper_value or "")
+            for token in terms(raw_value)
+            if not token.isdigit()
+        }
+        if payload_terms and payload_terms.issubset(represented_terms):
+            return []
+        return [ParsedConstraint("feature", value, 0.6, False, "clarification")]
 
     def _has_unrecognized_expected_text(
         self,
@@ -553,6 +616,19 @@ class MessageParser:
             start,
             end,
         )
+        # A material followed by a component role describes that component,
+        # not necessarily the whole product. During broad clarification keep
+        # the complete phrase as soft text evidence instead of replacing the
+        # user's primary material constraint.
+        scoped_material = re.match(
+            r"\s+(?:sole|upper|outer|inner|lining)\b", text[end:]
+        )
+        if (
+            attribute == "material"
+            and scoped_material is not None
+            and expected in {"feature", "other"}
+        ):
+            return False
         # Catalog-derived style labels often come from free-form product text.
         # During a style clarification they are query evidence, not a safe
         # structured filter. Returning False lets `_extract_expected` retain
@@ -711,6 +787,11 @@ class MessageParser:
             return ()
         last = value_terms[-1]
         variants = {last}
+        # `extract_attributes` canonicalizes the catalog side to the American
+        # spelling, so a shopper who writes the British one must still reach the
+        # canonical value rather than matching nothing. 2,017 of the 50,000
+        # catalog products spell it "grey".
+        variants.update(_SPELLING_VARIANTS.get(last, ()))
         if attribute == "category":
             variants.add(normalize_category_value(last))
         # Match ordinary singular/plural user phrasing for all catalog values,

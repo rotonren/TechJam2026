@@ -71,6 +71,96 @@ def test_override_is_not_parsed_as_previous_question_answer():
     ]
 
 
+def test_override_keeps_unknown_replacement_as_soft_text_evidence():
+    result = MessageParser().parse(
+        "Actually, ignore my earlier preference. What I need is: Water Resistant.",
+        turn=3,
+    )
+
+    assert ("feature", "water resistant", False, "clarification") in {
+        (item.attribute, item.value, item.is_hard, item.source)
+        for item in result.constraints
+    }
+
+
+@pytest.mark.parametrize(
+    ("message", "soft_value"),
+    (
+        # The reference lead-in must keep working unchanged.
+        (
+            "Actually, ignore my earlier preference. What I need is: Water Resistant.",
+            "water resistant",
+        ),
+        # A paraphrased override must not lose its payload just because the
+        # lead-in differs from the reference wording.
+        (
+            "I have changed my mind - show me Water Resistant.",
+            "water resistant",
+        ),
+        (
+            "Ignore my earlier preferences; my new requirement is Water Resistant.",
+            "water resistant",
+        ),
+        (
+            "Actually, ignore my earlier preference. Please switch it to Water Resistant.",
+            "water resistant",
+        ),
+        # No recognized lead-in at all: the final sentence carries the payload.
+        (
+            "I have changed my mind. Water Resistant.",
+            "water resistant",
+        ),
+    ),
+)
+def test_override_payload_survives_paraphrased_lead_ins(message, soft_value):
+    result = MessageParser().parse(message, turn=3)
+
+    assert (soft_value, False, "clarification") in {
+        (item.value, item.is_hard, item.source) for item in result.constraints
+    }
+
+
+def test_override_payload_keeps_text_after_an_interior_period():
+    result = MessageParser().parse(
+        "Actually, ignore my earlier preference. What I need is: 3.5 inch shaft.",
+        turn=3,
+    )
+
+    assert "3.5 inch shaft" in {item.value for item in result.constraints}
+
+
+def test_non_override_message_produces_no_payload_constraint():
+    result = MessageParser().parse("For that, what matters is: Water Resistant.", turn=2)
+
+    assert result.is_override is False
+    assert all(item.source != "clarification" for item in result.constraints)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected_attribute", "material", "soft_value"),
+    (
+        ("Rubber sole", "other", "rubber", "rubber sole"),
+        ("Synthetic sole", "feature", "synthetic", "synthetic sole"),
+    ),
+)
+def test_component_material_clarification_stays_soft(
+    text, expected_attribute, material, soft_value
+):
+    result = MessageParser().parse(
+        f"For that, what matters is: {text}.",
+        turn=4,
+        expected_attribute=expected_attribute,
+    )
+
+    assert all(
+        not (item.attribute == "material" and item.value == material)
+        for item in result.constraints
+    )
+    assert [(item.attribute, item.value, item.is_hard) for item in result.constraints] == [
+        (expected_attribute, soft_value, False)
+    ]
+
+
 def test_attribute_correction_does_not_replace_unmentioned_preferences():
     result = MessageParser().parse("Actually, make it blue.", turn=2)
 
@@ -534,3 +624,19 @@ def test_amazon_root_taxonomy_variants_are_not_hard_categories(taxonomy):
         item.attribute == "category" and item.is_hard
         for item in result.constraints
     )
+
+
+@pytest.mark.parametrize("spelling", ("grey", "gray"))
+def test_both_colour_spellings_reach_the_canonical_value(spelling):
+    # `extract_attributes` canonicalizes the catalog side to "gray", so a
+    # shopper writing "grey" must resolve to the same value rather than to
+    # nothing. 2,017 of the 50,000 catalog products spell it "grey".
+    result = MessageParser().parse(
+        f"For that, what matters is: color: {spelling}.",
+        turn=2,
+        expected_attribute="color",
+    )
+
+    assert ("color", "gray") in {
+        (item.attribute, item.value) for item in result.constraints
+    }

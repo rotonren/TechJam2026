@@ -10,10 +10,13 @@ from .catalog import CatalogIndex
 from .config import RuntimeConfig
 from .constraints import hard_constraint_violations
 from .dense import NullDenseBackend, load_dense_backend
+from .evolution import PolicyMemory, profile_segment
 from .models import Candidate, QuestionDecision, RetrievalPlan, SessionState
+from .orchestration import StrategyDecision, StrategySelector
 from .parser import MessageParser
 from .question_policy import QuestionPolicy
 from .ranker import ConstraintRanker
+from .rerank import RerankStage, load_rerank_backend
 from .response import ResponseBuilder
 from .retrieval import HybridRetriever
 from .router import RoutePlanner
@@ -56,7 +59,34 @@ class CompassCartAgent:
             mmr_lambda=self.config.mmr_lambda,
             adaptive_browsing_mmr=self.config.adaptive_browsing_mmr,
         )
-        self.question_policy = QuestionPolicy(self.catalog.attributes)
+        rerank_assets = self.config.resolve_rerank_asset_dir(SUBMISSION_ROOT)
+
+        def rerank_backend(name: str):
+            return load_rerank_backend(
+                enabled=self.config.rerank_enabled,
+                backend=name,
+                asset_dir=rerank_assets,
+                max_length=self.config.rerank_max_length,
+                prompt_style=self.config.rerank_prompt_style,
+            )
+
+        browsing_backend = rerank_backend(self.config.rerank_backend)
+        self.reranker = RerankStage(
+            browsing_backend,
+            window=self.config.rerank_window,
+            buying_window=self.config.rerank_buying_window,
+            weight=self.config.rerank_weight,
+            buying_weight=self.config.rerank_buying_weight,
+            buying_requires_override=self.config.rerank_buying_requires_override,
+            buying_backend=(
+                rerank_backend(self.config.rerank_buying_backend)
+                if self.config.rerank_buying_backend
+                else browsing_backend
+            ),
+        )
+        self.memory = PolicyMemory(enabled=self.config.evolution_enabled)
+        self.strategy = StrategySelector(enabled=self.config.strategy_enabled)
+        self.question_policy = QuestionPolicy(self.catalog.attributes, self.memory)
         self.response_builder = ResponseBuilder(
             self.catalog.valid_ids,
             self.catalog.popular_ids(self.config.max_recommendations),
@@ -69,7 +99,8 @@ class CompassCartAgent:
         self._profiles.move_to_end(session_id)
         while len(self._profiles) > 1_000:
             self._profiles.popitem(last=False)
-        self.sessions.reset(session_id, user_profile)
+        state = self.sessions.reset(session_id, user_profile)
+        state.profile_segment = profile_segment(user_profile)
 
     def respond(
         self,
@@ -84,6 +115,7 @@ class CompassCartAgent:
             if profile is None:
                 raise RuntimeError("reset must be called before respond")
             state = self.sessions.reset(session_id, profile)
+            state.profile_segment = profile_segment(profile)
         if not 1 <= turn <= 10:
             raise ValueError("turn must be between 1 and 10")
 
@@ -91,9 +123,11 @@ class CompassCartAgent:
         deadline = started + max(self.config.component_timeout_ms, 0) / 1_000.0
         fallbacks: list[str] = []
         budget_skips: list[str] = []
+        usage: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0}
         old_version = state.intent_version
         expected_attribute = state.pending_attribute
         previous_recommendations = set(state.previous_recommendations)
+        refusals_before = set(state.no_preference_attributes)
         state.pending_attribute = None
         try:
             state = self.sessions.update(
@@ -106,11 +140,13 @@ class CompassCartAgent:
             fallbacks.append("parser")
             state.turn = turn
 
+        self._observe_question_outcome(state, expected_attribute, refusals_before)
         continuation_requested = state.continuation_requested
         excluded_ids = previous_recommendations if continuation_requested else set()
 
         query_text = self._query_text(user_message, state)
         is_override = state.intent_version > old_version or state.override_scope != "none"
+        strategy = StrategyDecision()
         try:
             plan = self.router.build_plan(state, query_text, is_override=is_override)
             state.route = plan.route
@@ -153,6 +189,17 @@ class CompassCartAgent:
             fallbacks.append("ranker")
             ranked = candidates
 
+        try:
+            ranked = self.reranker.apply(
+                ranked,
+                state,
+                deadline=deadline,
+                diagnostics=budget_skips,
+                usage=usage,
+            )
+        except Exception:  # noqa: BLE001 - keep the constraint ranker's order.
+            fallbacks.append("reranker")
+
         if not user_message.strip():
             question = QuestionDecision("category")
         else:
@@ -161,6 +208,14 @@ class CompassCartAgent:
             except Exception:  # noqa: BLE001 - recommendations do not require a question.
                 fallbacks.append("question")
                 question = QuestionDecision(None)
+            try:
+                strategy = self.strategy.select(
+                    state, structured_question=question.ask_attribute
+                )
+                if strategy.open_question:
+                    question = QuestionDecision("other", 1.0)
+            except Exception:  # noqa: BLE001 - keep the structured decision.
+                fallbacks.append("strategy")
         if (
             question.ask_attribute
             and question.ask_attribute not in state.asked_attributes
@@ -172,7 +227,7 @@ class CompassCartAgent:
         ]
 
         response = self.response_builder.build(
-            ranked, question, top_k=top_k, excluded_ids=excluded_ids
+            ranked, question, top_k=top_k, excluded_ids=excluded_ids, usage=usage
         )
         # A continuation marker belongs only to this turn.  Clearing it after
         # response construction prevents a later refinement from inheriting the
@@ -205,12 +260,68 @@ class CompassCartAgent:
                 ),
                 "ask_attribute": question.ask_attribute,
                 "dense_status": dense_status,
+                "rerank_status": getattr(
+                    self.reranker.backend_for(state), "status", "unknown"
+                ),
+                "strategy": strategy.name,
+                "strategy_reason": strategy.reason,
+                "usage": dict(usage),
+                "stall_count": state.stall_count,
+                "unproductive_attributes": sorted(state.unproductive_attributes),
                 "fallbacks": fallbacks,
                 "budget_skips": budget_skips,
                 "elapsed_ms": elapsed_ms,
             }
         )
         return response
+
+    def _observe_question_outcome(
+        self,
+        state: SessionState,
+        asked_attribute: str | None,
+        refusals_before: set[str],
+    ) -> None:
+        """Score the previous turn's question against what the reply carried.
+
+        The reply to a clarification either states a requirement or refuses the
+        attribute, and that is exactly the quantity the response-likelihood
+        table estimates. Recording it here is what lets the memory correct a
+        prior we guessed.
+
+        Refusal is the signal, not whether a structured constraint came out of
+        it. A requirement stated as free text often parses to nothing yet still
+        reaches retrieval and the rerank stage as query evidence, so counting
+        parsed constraints would measure the parser rather than the shopper.
+        """
+        refused = bool(
+            asked_attribute
+            and asked_attribute in state.no_preference_attributes - refusals_before
+        )
+        disclosed = bool(asked_attribute) and not refused
+        # A stall is the shopper pushing back or having nothing to add; a turn
+        # where no question was pending is simply not evidence either way.
+        if refused or state.continuation_requested:
+            state.stall_count += 1
+        elif disclosed:
+            state.stall_count = 0
+            state.disclosure_count += 1
+        if not asked_attribute:
+            return
+        if not disclosed:
+            # Distilled negative evidence: this attribute had nothing to give in
+            # this session, so a later turn should spend its question elsewhere.
+            state.unproductive_attributes.add(asked_attribute)
+        try:
+            self.memory.observe(
+                asked_attribute,
+                disclosed,
+                context=state.route,
+                segment=state.profile_segment,
+            )
+        except Exception:  # noqa: BLE001 - learning must never break a turn.
+            # Stop learning rather than risk a partially updated estimate; the
+            # policy falls back to the hand-written prior from here on.
+            self.memory.enabled = False
 
     @staticmethod
     def _supported_keywords(callable_: object, names: tuple[str, ...]) -> set[str]:

@@ -33,6 +33,10 @@ def test_snapshot_state_preserves_all_fields_as_strict_json() -> None:
         no_preference_attributes={"material", "brand"},
         previous_recommendations=["A", "B"],
         candidate_count=12,
+        profile_segment="comfort|fit",
+        unproductive_attributes={"style", "budget"},
+        stall_count=2,
+        disclosure_count=1,
     )
 
     snapshot = snapshot_state(state)
@@ -79,6 +83,10 @@ def test_snapshot_state_preserves_all_fields_as_strict_json() -> None:
         "previous_recommendations": ["A", "B"],
         "candidate_count": 12,
         "route_hint": None,
+        "profile_segment": "comfort|fit",
+        "unproductive_attributes": ["budget", "style"],
+        "stall_count": 2,
+        "disclosure_count": 1,
     }
     json.dumps(snapshot, allow_nan=False)
 

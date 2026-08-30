@@ -12,8 +12,9 @@ useful questions, and recover immediately when intent changes.
 CompassCart turns each conversation into a bounded, versioned constraint ledger.
 It routes precise purchases, broad browsing, and intent overrides differently;
 fuses lexical, attribute, profile, and local semantic retrieval; reranks against
-hard constraints; and asks only answerable questions with positive expected
-conversion gain. Every response is sanitized to ten unique catalog-valid IDs.
+hard constraints and then for phrase adjacency where that helps; and asks only
+answerable questions with positive expected conversion gain. Every response is
+sanitized to ten unique catalog-valid IDs.
 
 ## How We Built It
 
@@ -35,6 +36,22 @@ so "Actually, I need leather" cannot accidentally become a category answer.
 - Real override semantics: obsolete constraints and free text are superseded,
   not merely down-weighted.
 - Conversion-aware questions: the agent values the next turn, not question count.
+- Questions that get better from experience: the policy's response-likelihood
+  table was hand-written and unchecked, so the agent now treats it as a prior
+  and corrects it from whether shoppers actually answered. It found our two
+  worst guesses - `feature` was ranked second-lowest at `0.70` and is really
+  the most productive question at `0.973`; `budget` was ranked top tier at
+  `0.90` and produced nothing in 16 attempts.
+- What it learned turned out to be a fact about the catalog. The two attributes
+  it stopped asking about, size and budget, are the two the catalog almost
+  never records at parent level - absent from 91.3% and 77.6% of products,
+  because a `parent_asin` is a parent product rather than a size or colour SKU
+  variant. Nobody told the agent that. It inferred it from which of its own
+  questions got answers.
+- Reranking that knows when to stay out of the way: the same stage is worth
+  `+0.038` HitRate on Browsing and `-0.025` on Buying, where hard constraints
+  already make the ranker well informed, so it runs on one route and not the
+  other.
 - Layered failure containment: advanced components can fail without invalidating
   the Agent contract.
 - Auditable evaluation: four development folds select one tagged candidate;
@@ -42,23 +59,35 @@ so "Actually, I need leather" cannot accidentally become a category answer.
 
 ## Results
 
-On the unchanged 200-session official public evaluator, the `compasscart-v2`
-candidate achieved:
+On the unchanged 200-session official public evaluator:
 
 | Metric | Starter | CompassCart |
 | --- | ---: | ---: |
-| TechnicalScore | 0.106710 | 0.518309 |
-| HitRate@10 | 0.125 | 0.625 |
-| MRR | 0.068034 | 0.321365 |
-| MTTC | 9.81 | 5.53 |
+| TechnicalScore | 0.106710 | **0.822490** |
+| HitRate@10 | 0.125 | 0.9650 |
+| MRR | 0.068034 | 0.580968 |
+| MTTC | 9.81 | 2.715 |
 
-Development folds 1-4 averaged `0.519195 +/- 0.036878` (selection score
-`0.500756`), with fold scores `0.479726`, `0.568101`, `0.541363`, and
-`0.487589`. The tagged candidate's once-only sealed fold 5 scored `0.514768`
-with zero runtime fallback and P95 latency `370.616 ms`. The final public
-metrics are recorded in `final-results.json`. Estimated API cost for the
-800-session private set is USD 0.00. Scenario HitRate@10 was `0.60` Boundary,
-`0.65` Browsing, `0.625` Buying, and `0.566667` Intent Override.
+Scenario HitRate@10 is `0.9000` Boundary, `0.9625` Browsing, `0.9375` Buying,
+and `0.9333` Intent Override. Initialization is `19.6 s` and a 200-session run
+takes `89.9 s`. Reported token usage is zero, so the estimated API cost for the
+800-session private set is USD 0.00. The automated suite passes 1047 tests.
+
+A hosted LLM reranker on the Buying route is worth `+0.004341` when
+credentials are present - HitRate `0.9650` to `0.9700`, MTTC `2.715` to
+`2.630`, for 362,330 prompt tokens. It is not the default, because
+`submission_rules.md` forbids shipping API keys and may disable network access
+during official scoring, so the offline path is what actually runs there. Both
+numbers are reported rather than only the better one.
+
+Getting that number right took a second attempt. The first measurement said the
+model cost `-0.001266`, which we believed until an isolation run showed the
+loss belonged to a window size we had changed at the same time, worth `-0.0095`
+on its own. Making the rerank window per route, as the backend and weight
+already were, turned the result positive. Weighting the rerank by window-local
+inverse document frequency was a genuine loss at `-0.011`, for a structural
+reason: the window is selected by the query, so a local statistic penalizes the
+shopper's own terms. All of it is in `reports/final/rerank-results.md`.
 
 ## Challenges
 
@@ -69,9 +98,20 @@ subtle: an Intent Override could be parsed as the answer to a question from the
 old intent. A one-turn pending attribute plus override-first parsing fixed the
 state transition and became a regression test.
 
-Intent Override remains the hardest scenario. Terse replacement messages may
-reveal only one attribute, so future work should improve local query expansion
-without adding a network dependency or leaking old-intent evidence.
+The policy memory's first version scored a question by whether the reply grew
+the constraint ledger, which measured our parser rather than the shopper: a
+requirement stated as free text often parses to nothing yet still reaches
+retrieval as query evidence. Under that signal three attributes recorded a
+literal zero disclosure rate and the ablation came out at `-0.015`. Scoring the
+refusal marker instead - the distinction the simulator actually makes - turned
+it into `+0.017`.
+
+The memory also had to learn per route, not in aggregate. Pooling both routes
+cost a session; conditioning on the retrieval route recovered it, because the
+same question is not the same question on both. `use_case` is answered 44% of
+the time on the Buying route and never on Browsing - a shopper still exploring
+has not yet formed a view on what the item is for. Nothing in the code knows
+that; it came out of 303 observations.
 
 ## Team Contributions
 

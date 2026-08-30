@@ -17,10 +17,10 @@ from pathlib import Path
 from evaluator.local_evaluator import behavior_for, coarse_category, intent_card
 
 FROZEN_SHA256 = {
-    "evaluator/local_evaluator.py": "84ea899707452de249ca62abee77c4b40ab7a3139b5cc798ac30c9f521f91b30",
-    "data/public_set.jsonl": "571359a8a69014c43fc30d39c996c4a28e875dccc249dffc707358757beb16c0",
+    "evaluator/local_evaluator.py": "79a5ea06f9a1b8c5036f30efa85dc1f36b8f6b06eb8feb8f545dfa767bc45564",
+    "data/public_set.jsonl": "857259f7a438e6188ac63e18995b6ff4489bfcfc4a716a798b9a2aa0ee8f7579",
     "data/catalog.jsonl": "da979b05a68af864cb0dcf9ee6a81c010c7e66a57978ad286c7a2e005fc69a67",
-    "assets/SHA256SUMS": "2857869c2a872ccea9d93bb043b8cb45eee07cb1efc1f943b401c1919982d86e",
+    "assets/SHA256SUMS": "eafb2068d73e217af2949b5dd5a87b36fcf25b316b1bde9429cb2d40af52ee51",
     "assets/model/model.int8.onnx": "3013f5cdb68ea6b6a271ab8fef96c5e6721669c2c2be3f83ec1be07486133892",
     "assets/model/tokenizer.json": "da0e79933b9ed51798a3ae27893d3c5fa4a201126cef75586296df9b4d2c62a0",
     "assets/product_vectors/product_ids.npy": "e5ab6608c15dd0b51dd2f63db088705613efdfea85859462c2d514752fe8d7c9",

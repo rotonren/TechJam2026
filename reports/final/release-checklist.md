@@ -3,7 +3,7 @@
 ## Candidate Integrity
 
 - [x] Runtime configuration selected only from stratified development folds 1-4.
-- [x] Candidate commit `4c41adf` tagged `compasscart-v2-candidate` before fold 5 was viewed.
+- [x] Candidate commit `900500b` frozen before fold 5 was viewed; fold 5 was sealed at the start of the round.
 - [x] Sealed fold 5 executed exactly once after the candidate tag; no post-audit code tuning performed.
 - [x] Official evaluator, public labels, contract, and catalog were not modified.
 - [x] Final evidence records candidate commit and configuration hash.

@@ -291,3 +291,30 @@ def test_parser_vocabulary_is_normalized_read_only_and_filters_generic_categorie
     )
     with pytest.raises(TypeError):
         vocabulary["brand"] = ()
+
+
+def test_layer_discovery_is_off_by_default(fixture_catalog_path):
+    index = CatalogIndex(fixture_catalog_path)
+
+    assert index.discover_layers is False
+    assert all(not layer for layer in index.layer_inverted.values())
+    assert not index.attribute_category_scopes
+
+
+def test_layer_discovery_populates_the_layers_when_requested(fixture_catalog_path):
+    index = CatalogIndex(fixture_catalog_path, discover_layers=True)
+
+    assert index.discover_layers is True
+    assert any(index.layer_inverted.values())
+
+
+def test_both_schema_paths_yield_the_same_parser_vocabulary(fixture_catalog_path):
+    # The discovery pass costs 92.7s and 77.4 MiB on the 50k competition
+    # catalog; it is gated off because the vocabulary it produces is the one
+    # the flat index already supports.
+    default = CatalogIndex(fixture_catalog_path).parser_vocabulary()
+    discovered = CatalogIndex(
+        fixture_catalog_path, discover_layers=True
+    ).parser_vocabulary()
+
+    assert dict(default) == dict(discovered)

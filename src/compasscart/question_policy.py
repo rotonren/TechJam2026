@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+from .evolution import DEFAULT_RESPONSE_LIKELIHOOD, PolicyMemory
 from .models import Candidate, QuestionDecision, SessionState
 from .normalization import extract_attributes
 
@@ -14,22 +15,15 @@ _ATTRIBUTES = (
     "feature",
     "use_case",
 )
-_RESPONSE_LIKELIHOOD = {
-    "category": 0.95,
-    "material": 0.90,
-    "color": 0.90,
-    "size": 0.85,
-    "style": 0.80,
-    "brand": 0.65,
-    "budget": 0.90,
-    "feature": 0.70,
-    "use_case": 0.85,
-}
+_RESPONSE_LIKELIHOOD = DEFAULT_RESPONSE_LIKELIHOOD
 
 
 class QuestionPolicy:
-    def __init__(self, attribute_lookup=None) -> None:
+    def __init__(self, attribute_lookup=None, memory: PolicyMemory | None = None) -> None:
         self.attribute_lookup = attribute_lookup
+        # Without a memory the policy uses the hand-written table unchanged,
+        # which is the behaviour every prior release measured.
+        self.memory = memory or PolicyMemory(enabled=False)
 
     def choose(
         self, candidates: list[Candidate], state: SessionState
@@ -39,9 +33,20 @@ class QuestionPolicy:
         if len(candidates) <= 10:
             return QuestionDecision(None)
 
+        # An explicit override invalidates earlier preference evidence. Ask
+        # once for any additional distinguishing detail when the replacement
+        # still leaves an overloaded pool. Override scope is turn-local, so
+        # this cannot form a repeated generic-question loop.
+        if state.override_scope != "none" and "other" not in state.asked_attributes:
+            return QuestionDecision("other", 1.0)
+
         probabilities = self._probabilities(candidates)
         candidate_attributes = [self._attributes(candidate) for candidate in candidates]
-        blocked = set(state.asked_attributes) | state.no_preference_attributes
+        blocked = (
+            set(state.asked_attributes)
+            | state.no_preference_attributes
+            | state.unproductive_attributes
+        )
         # An attribute explicitly constrained by the user is already answered;
         # asking for it again would contradict the turn's hard semantics (for
         # example, asking for material after "black leather belt").
@@ -52,7 +57,12 @@ class QuestionPolicy:
         )
         utilities = {
             attribute: self._utility(
-                attribute, candidate_attributes, probabilities, state.turn
+                attribute,
+                candidate_attributes,
+                probabilities,
+                state.turn,
+                state.route,
+                state.profile_segment,
             )
             for attribute in _ATTRIBUTES
             if attribute not in blocked
@@ -82,6 +92,8 @@ class QuestionPolicy:
         candidate_attributes: list[dict[str, tuple[str, ...]]],
         probabilities: list[float],
         turn: int,
+        context: str = "",
+        segment: str = "",
     ) -> float:
         partitions: dict[str, list[int]] = defaultdict(list)
         for index, attributes in enumerate(candidate_attributes):
@@ -109,12 +121,12 @@ class QuestionPolicy:
         post_conditional = min(post_answer_mass / coverage_mass, 1.0)
         gain = max(post_conditional - current_conditional, 0.0)
         remaining_turn_factor = max((11 - max(turn, 1)) / 10.0, 0.1)
-        return (
-            gain
-            * coverage_mass
-            * _RESPONSE_LIKELIHOOD[attribute]
-            * remaining_turn_factor
+        # The response likelihood is the estimate the memory refines: it starts
+        # at the hand-written prior and moves only with observed evidence.
+        likelihood = self.memory.likelihood(
+            attribute, context=context, segment=segment
         )
+        return gain * coverage_mass * likelihood * remaining_turn_factor
 
     @staticmethod
     def _probabilities(candidates: list[Candidate]) -> list[float]:

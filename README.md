@@ -54,6 +54,35 @@ $env:COMPASSCART_DISABLE_DENSE = "1"
 Asset corruption, optional dependency failure, or dense inference failure also
 switches to lexical retrieval automatically. Neither path performs network I/O.
 
+Dense retrieval is gated to semantic rescue: it runs only when the lexical,
+attribute and profile sources all return nothing. That never happened across
+the 536 turns of the public evaluation, so disabling it scores identically
+while using less memory. It is kept because the private split may exercise the
+rescue path, but the switch is a free low-memory mode:
+
+| Configuration | Peak process RSS | Agent alone | Init | TechnicalScore |
+| --- | ---: | ---: | ---: | ---: |
+| Default | 749.7 MiB | 409.6 MiB | 24418 ms | 0.822490 |
+| `COMPASSCART_DISABLE_DENSE=1` | 593.2 MiB | 353.7 MiB | 19653 ms | 0.822490 |
+
+Each figure comes from its own process. The peak includes the harness's own
+copy of the 50,000-product catalog, roughly 240 MiB, which any submission pays
+for; the agent's own footprint is the second column. If the scoring environment
+applies a memory ceiling below about 768 MiB, run with
+`COMPASSCART_DISABLE_DENSE=1`.
+
+## Network Requirements
+
+Per `docs/submission_rules.md`, submissions must state their network needs:
+
+- **This agent requires no network access.** It performs no HTTP, DNS, or
+  socket I/O on any code path, and reads no credentials or API keys.
+- **Offline fallback:** not applicable in the usual sense - the offline path is
+  the only path. Every optional component (dense retrieval, the ONNX assets,
+  FTS5) degrades to a pure-Python lexical path when unavailable.
+- **The agent does not require live credentials** and reports zero prompt and
+  completion tokens.
+
 The runtime resolves its bundled dense assets from the installed package rather
 than the process working directory. It can therefore be imported from an
 arbitrary CWD after extracting the submission ZIP; pass the catalog path
@@ -82,34 +111,66 @@ ledger and resets obsolete evidence on intent override. `RoutePlanner` selects
 Buying, Browsing, or Override weights; `HybridRetriever` fuses lexical,
 attribute, profile, and ONNX dense candidates with weighted reciprocal-rank
 fusion. `ConstraintRanker` applies hard constraints and final-list diversity.
-`QuestionPolicy` asks only when expected conversion gain is positive.
-`ResponseBuilder` deduplicates and validates all identifiers.
+`RerankStage` then rescores the head of that list for phrase adjacency, which
+term-level scoring cannot see, and applies it on the Browsing route only.
+`QuestionPolicy` asks only when expected conversion gain is positive, and
+weights each candidate question by a `PolicyMemory` estimate that starts at our
+hand-written prior and is corrected by whether the shopper answered previous
+questions. `StrategySelector` then decides what to do with a turn the question
+policy declined: an open question rather than none, or no question at all once
+the pool is small. `ResponseBuilder` deduplicates and validates all
+identifiers.
 
-Additional rationale is in `reports/final/architecture.md`.
+Additional rationale is in `reports/final/architecture.md`; the rerank
+experiments, including the two that were measured and rejected, are in
+`reports/final/rerank-results.md`.
 
 ## Measured Results
 
 All measurements use the unchanged official evaluator and frozen public data.
-The starter baseline scored `0.106710`. The final stable runtime candidate is
-commit `c0d444fa`. Its official 200-sample public evaluation scored `0.660411`
-(HitRate@10 `0.84`, MRR `0.376036`, MTTC `4.62`, efficiency `0.638`). Scenario
-HitRate@10 was `0.90` Boundary, `0.85` Browsing, `0.8625` Buying, and `0.733333`
-Intent Override. The result exactly matches the previous stable measurement at
-`b641ff97`, so the final hardening delta is `0.000000`.
+The starter baseline scored `0.106710`. The current runtime scores `0.822490`
+on the official 200-sample public evaluation (HitRate@10 `0.9650`, MRR
+`0.580968`, MTTC `2.715`, efficiency `0.8285`).
 
-The one sealed audit scored `0.500563` on 394 representative samples with zero
-fallback and zero invalid responses. The final three-trial resource benchmark
-also passed with Dense available and zero fallback: P95 was `183.692 ms`,
-maximum latency was `529.531 ms`, initialization was `13219.807 ms`, and peak
-working set was `557.008 MiB`. P95 improved `58.070%` against the compatible R0
-benchmark. S1 through S4 were rejected by their development gates and reverted;
-S5 was deferred for accelerated stable delivery. Full aggregate evidence is in
-`reports/final/final-results.json` and
-`reports/final/score-results-c0d444fa-2026-08-27.json`.
+| Stage | TechnicalScore | Change |
+| --- | ---: | ---: |
+| Team result before this round | 0.761209 | — |
+| Phrase rerank, one weight for every route | 0.771831 | +0.010622 |
+| Phrase rerank, Browsing route only | 0.783514 | +0.022305 |
+| Cross-session policy memory | 0.800849 | +0.039640 |
+| Memory conditioned on route | 0.804724 | +0.043515 |
+| Per-turn strategy selection | 0.822490 | +0.061281 |
 
-The full automated suite passed 891 tests with 7 skipped. All 9 frozen-input
-checks and all 51 delivery-contract checks passed, and Ruff lint passed. macOS
-verification is pending.
+Each stage has an ablation switch, and disabling all three reproduces
+`0.761209` exactly.
+
+Initialization is `19580.5 ms`, down from roughly `132 s`, because catalog
+layer discovery is now opt-in; see `docs/attribute_schema.md`. Two rerank
+variants were measured and rejected rather than kept: window-local IDF
+weighting at `-0.011`, and an ONNX cross-encoder backend at `-0.007`. Both,
+with their per-scenario numbers, are recorded in
+`reports/final/rerank-results.md`. The policy memory's ablation, the
+corrections it made to our hand-written question priors, and the strategy
+selector's rejected `relax` variant at `-0.010` are in
+`reports/final/evolution-results.md`.
+
+An optional hosted-model rerank backend scores `0.826831` when credentials are
+present, `+0.004341` over the offline default, for 362,330 prompt tokens and a
+4.3x slower run. It is not the default: `docs/submission_rules.md` forbids
+shipping API keys and states that official scoring may disable network access,
+so the offline path is the one the organizer will reproduce. Both numbers are
+reported in `reports/final/rerank-results.md`.
+
+The full automated suite passes 1047 tests with 7 skipped, and Ruff lint passes
+across `src`, `tests`, and `tools`.
+
+`reports/final/final-results.json` is recorded at the current commit. The
+sealed audit fold, the three-trial resource benchmark, and the frozen-input
+checks were all re-run for this runtime: fold 5 scores `0.834997`, and
+`tools.verify_frozen_inputs` passes 9/9 byte-for-byte against the organizer's
+originals. `reports/final/score-results-c0d444fa-2026-08-27.json` is retained as
+the earlier record at commit `c0d444fa`, when the public score was `0.660411`.
+macOS and Linux verification are pending.
 
 The agent reports zero prompt and completion tokens. Official runtime API cost
 is USD 0.00 per session and USD 0.00 for the full 800-session private set.
@@ -118,8 +179,21 @@ a one-time CPU process.
 
 ## Limitations
 
-- Intent Override remains the least stable scenario because terse replacement
-  messages may expose only one attribute.
+- Intent Override is the one scenario this round makes worse, `0.9667` to
+  `0.9333` HitRate@10 - one session. Every other scenario improves: Boundary
+  `0.9000` to `1.0000`, Browsing `0.9125` to `0.9750`, Buying `0.9375` to
+  `0.9625`. Override sessions route as Buying and so share its learned question
+  priors, even though their question sequence restarts mid-conversation;
+  conditioning the memory on override state as well as route is the next
+  refinement and is not done.
+- Boundary reaching `1.0000` is measured on ten public sessions and should not
+  be read as a reliable rate.
+- The rerank stage is disabled on the Buying route, which is where its phrase
+  evidence measured net harmful. Intent Override sessions route as Buying, so
+  they do not benefit from it either.
+- Override payload extraction recognizes a family of replacement lead-ins and
+  otherwise falls back to the message's final sentence. A paraphrase that
+  states the new requirement somewhere else would still be missed.
 - Dense quality depends on text metadata; images are intentionally out of scope.
 - First initialization loads the catalog and ONNX assets, so cold-start memory
   and latency are higher than steady-state response latency. A full-catalog
