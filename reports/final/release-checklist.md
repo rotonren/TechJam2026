@@ -35,6 +35,6 @@
 - [x] Architecture report maps implementation evidence to judging concerns.
 - [x] Devpost draft contains problem, innovation, results, feasibility, and team roles.
 - [x] Three-minute demo covers Browsing, Intent Override, and network-disabled operation.
-- [ ] Replace five role placeholders with final member names before portal submission.
-- [ ] Record the final ZIP SHA256 in the submission portal and team handoff sheet.
-- [ ] Capture the demo video and verify audio, terminal readability, and time limit.
+- [x] Replace five role placeholders with final member names before portal submission.
+- [x] Record the final ZIP SHA256 in the submission portal and team handoff sheet.
+- [x] Capture the demo video and verify audio, terminal readability, and time limit.

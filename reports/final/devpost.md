@@ -115,12 +115,10 @@ that; it came out of 303 observations.
 
 ## Team Contributions
 
-1. Product lead: judging strategy, narrative, submission, and demo ownership.
-2. Retrieval engineer: catalog index, dense assets, and hybrid fusion.
-3. Conversation engineer: parser, ledger, routing, and clarification policy.
-4. Quality engineer: evaluator, cross-validation, failure analysis, and tests.
-5. Release engineer: offline environment, packaging, checksums, and operations.
+1. Ren Hao — Retrieval & evaluation engineer: catalog index, dense assets, hybrid fusion, evaluator, cross-validation discipline, and failure analysis.
+2. Lin Jialiang — Conversation engineer: parser, versioned constraint ledger, routing, and the clarification policy.
+3. Zhang Tong — Rerank engineer: route-aware phrase rerank, per-route window and weight tuning, the optional hosted-LLM rerank backend, and the ablation that separated real gains from confounded measurements.
+4. Qin Kunlin — Rank calibration engineer: tuned the retrieval-fusion weight from 0.10 to 0.25  and extended the configuration validation allowlist.
+5. Hu Yuxin — Demo & presentation: the three-minute showcase video and live demo.
 
-Replace these role labels with member names and final contribution details in
-the portal. The repository contains the exact commands, reports, and release
-checklist used to reproduce the result.
+
