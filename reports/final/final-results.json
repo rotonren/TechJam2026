@@ -125,7 +125,7 @@
     "ruff": "passed",
     "verified_from_clean_github_clone": true,
     "linux": "pending",
-    "macos": "pending"
+    "macos": "passed"
   },
   "usage_and_cost": {
     "prompt_tokens": 0,

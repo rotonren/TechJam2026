@@ -170,7 +170,7 @@ checks were all re-run for this runtime: fold 5 scores `0.834997`, and
 `tools.verify_frozen_inputs` passes 9/9 byte-for-byte against the organizer's
 originals. `reports/final/score-results-c0d444fa-2026-08-27.json` is retained as
 the earlier record at commit `c0d444fa`, when the public score was `0.660411`.
-macOS and Linux verification are pending.
+macOS platform verification passed (0.822490 matches Windows); Linux pending.
 
 The agent reports zero prompt and completion tokens. Official runtime API cost
 is USD 0.00 per session and USD 0.00 for the full 800-session private set.
@@ -204,13 +204,11 @@ a one-time CPU process.
 
 ## Team Responsibilities
 
-The five-person team can map names to these release roles before submission:
-
-1. Product lead: judging alignment, scope, Devpost narrative, and final demo.
-2. Retrieval engineer: catalog indexing, dense assets, and hybrid fusion.
-3. Conversation engineer: parser, state ledger, routing, and clarification.
-4. Quality engineer: evaluator, CV discipline, failure analysis, and tests.
-5. Release engineer: offline deployment, packaging, checksums, and operations.
+1. Ren Hao — Retrieval & evaluation engineer: catalog index, dense assets, hybrid fusion, evaluator, cross-validation discipline, and failure analysis.
+2. Lin Jialiang — Conversation engineer: parser, versioned constraint ledger, routing, and the clarification policy.
+3. Zhang Tong — Rerank engineer: route-aware phrase rerank, per-route window and weight tuning, the optional hosted-LLM rerank backend, and the ablation that separated real gains from confounded measurements.
+4. Qin Kunlin — Rank calibration engineer: tuned the retrieval-fusion weight from 0.10 to 0.25  and extended the configuration validation allowlist.
+5. Hu Yuxin — Demo & presentation: the three-minute showcase video and live demo.
 
 ## Attribution
 
